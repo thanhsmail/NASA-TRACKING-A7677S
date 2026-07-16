@@ -25,6 +25,7 @@ void Backup_Push(const BackupRecord_t *rec);
 int  Backup_Pop(BackupRecord_t *out);      /* lấy bản ghi cũ nhất chưa gửi */
 int  Backup_Count(void);
 void Backup_Clear(void);
+void Backup_Flush(void);
 
 /** Lưu định kỳ snapshot (mỗi 10s) khi tracking */
 void Backup_OnTick(const BackupRecord_t *rec, uint32_t nowTick);

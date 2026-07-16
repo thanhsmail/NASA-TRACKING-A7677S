@@ -100,43 +100,46 @@ void CFG_Init(void)
 void CFG_Load(void)
 {
     SCFILE *fp = sAPI_fopen(NASA_CFG_FILE, "rb");
-    char line[160];
-    int n;
-
     if (!fp) {
         sAPI_Debug("[CFG] No config file, using defaults");
         return;
     }
 
-    memset(line, 0, sizeof(line));
-    n = 0;
-    for (;;) {
-        char ch = 0;
-        int r = sAPI_fread(&ch, 1, 1, fp);
-        if (r <= 0) break;
-        if (ch == '\n' || n >= (int)sizeof(line) - 1) {
-            line[n] = '\0';
-            TrimInPlace(line);
-            if (line[0] && line[0] != '#') {
-                char *eq = strchr(line, '=');
-                if (eq) {
-                    *eq = '\0';
-                    TrimInPlace(line);
-                    TrimInPlace(eq + 1);
-                    ApplyKeyValue(line, eq + 1);
-                }
-            }
-            n = 0;
-            memset(line, 0, sizeof(line));
-            if (ch != '\n') {
-                /* overflow: skip rest of line */
-            }
-        } else if (ch != '\r') {
-            line[n++] = ch;
-        }
+    static char fileBuf[1024];
+    int bytesRead = sAPI_fread(fileBuf, 1, sizeof(fileBuf) - 1, fp);
+    sAPI_fclose(fp);
+
+    if (bytesRead <= 0) {
+        sAPI_Debug("[CFG] Empty config file or read error");
+        return;
     }
-    if (n > 0) {
-        line[n] = '\0';
+    fileBuf[bytesRead] = '\0';
+
+    char *lineStart = fileBuf;
+    char *next = NULL;
+    char line[160];
+
+    while (lineStart && *lineStart) {
+        char *lineEnd = strchr(lineStart, '\n');
+        if (lineEnd) {
+            next = lineEnd + 1;
+            *lineEnd = '\0';
+        } else {
+            next = NULL;
+        }
+
+        size_t len = strlen(lineStart);
+        if (len > 0 && lineStart[len - 1] == '\r') {
+            lineStart[len - 1] = '\0';
+        }
+
+        if (strlen(lineStart) < sizeof(line)) {
+            strcpy(line, lineStart);
+        } else {
+            strncpy(line, lineStart, sizeof(line) - 1);
+            line[sizeof(line) - 1] = '\0';
+        }
+
         TrimInPlace(line);
         if (line[0] && line[0] != '#') {
             char *eq = strchr(line, '=');
@@ -147,8 +150,9 @@ void CFG_Load(void)
                 ApplyKeyValue(line, eq + 1);
             }
         }
+
+        lineStart = next;
     }
-    sAPI_fclose(fp);
     sAPI_Debug("[CFG] Loaded host=%s port=%d plate=%s", s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate);
 }
 

@@ -16,6 +16,7 @@ typedef struct {
 static BackupHdr_t s_hdr;
 static uint32_t    s_lastStoreTick = 0;
 static int         s_inited = 0;
+static int         s_hdrDirty = 0;
 
 static int Backup_LoadHdr(void)
 {
@@ -33,23 +34,35 @@ static int Backup_LoadHdr(void)
         s_hdr.head = s_hdr.tail = s_hdr.count = 0;
     }
     sAPI_fclose(fp);
+    s_hdrDirty = 0;
     return 0;
 }
 
-static int Backup_SaveHdr(void)
+static int Backup_SaveHdr(int force)
 {
+    if (!s_hdrDirty && !force) return 0;
+
     SCFILE *fp = sAPI_fopen(NASA_BACKUP_FILE, "rb+");
     if (!fp) {
         fp = sAPI_fopen(NASA_BACKUP_FILE, "wb");
         if (!fp) return -1;
         sAPI_fwrite(&s_hdr, sizeof(s_hdr), 1, fp);
         sAPI_fclose(fp);
+        s_hdrDirty = 0;
         return 0;
     }
     sAPI_fseek(fp, 0, FS_SEEK_BEGIN);
     sAPI_fwrite(&s_hdr, sizeof(s_hdr), 1, fp);
     sAPI_fclose(fp);
+    s_hdrDirty = 0;
     return 0;
+}
+
+void Backup_Flush(void)
+{
+    if (s_hdrDirty) {
+        Backup_SaveHdr(1);
+    }
 }
 
 void Backup_Init(void)
@@ -92,7 +105,8 @@ void Backup_Push(const BackupRecord_t *rec)
 
     s_hdr.head = (s_hdr.head + 1) % NASA_BACKUP_MAX_RECORDS;
     s_hdr.count++;
-    Backup_SaveHdr();
+    s_hdrDirty = 1;
+    Backup_SaveHdr(1); /* Ghi đè tức thời khi push để bảo toàn dữ liệu */
 }
 
 int Backup_Pop(BackupRecord_t *out)
@@ -119,7 +133,8 @@ int Backup_Pop(BackupRecord_t *out)
     *out = tmp;
     s_hdr.tail = (s_hdr.tail + 1) % NASA_BACKUP_MAX_RECORDS;
     s_hdr.count--;
-    Backup_SaveHdr();
+    s_hdrDirty = 1;
+    /* Không ghi header xuống đĩa tức thời ở đây để tối ưu hóa trong vòng lặp Replay Burst */
     return 1;
 }
 
@@ -134,7 +149,7 @@ void Backup_Clear(void)
     s_hdr.magic = BACKUP_HDR_MAGIC;
     s_hdr.head = s_hdr.tail = s_hdr.count = 0;
     sAPI_remove(NASA_BACKUP_FILE);
-    Backup_SaveHdr();
+    Backup_SaveHdr(1);
     sAPI_Debug("[Backup] cleared");
 }
 

@@ -241,22 +241,12 @@ ${CMAKE_DIR}:
 endif
 
 ifneq (,${CMAKE_DIR})
-${CMAKE_DIR}:${TOOL_DIR}/${PLATFORM}/${CMAKE_PACKAGE_NAME}
-ifeq (win32,${PLATFORM})
-	$(word 1,$(subst :, ,$@)): && cd $(dir $@) && $(GZIP) $(GZIPARG) $<
-	$(word 1,$(subst :, ,$@)): && cd $@ && $(MKDIR) $(MKDIRARG) fuck_windows && $(RMDIR) $(RMDIRARG) fuck_windows
-else
-	cd $(dir $@) && $(GZIP) $(GZIPARG) $<
-endif
+${CMAKE_DIR}:
+	@echo "CMAKE_DIR exists"
 endif
 
-${CROSS_TOOL_DIR}:${TOOL_DIR}/${PLATFORM}/${GCC_ARM_TOOLCHAIN_PACKAGE}
-ifeq (win32,${PLATFORM})
-	$(word 1,$(subst :, ,$@)): && cd $(dir $@) && $(GZIP) $(GZIPARG) $<
-	$(word 1,$(subst :, ,$@)): && cd $@ && $(MKDIR) $(MKDIRARG) fuck_windows && $(RMDIR) $(RMDIRARG) fuck_windows
-else
-	cd $(dir $@) && $(GZIP) $(GZIPARG) $<
-endif
+${CROSS_TOOL_DIR}:
+	@echo "CROSS_TOOL_DIR exists"
 # tools process end
 
 ################################

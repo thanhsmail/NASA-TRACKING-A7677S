@@ -288,10 +288,9 @@ static int SendTrackOrBackup(int msgCode, const char *dateTime, UINT8 csq)
     AppendChecksumAndEnd(frame, sizeof(frame), payload, 0);
 
     FillBackupFromGps(&bak, &gps, dateTime, csq, status, voltage);
-    /* Luôn ghi vòng 10s; nếu gửi lỗi thì push thêm để không mất bản tin */
-    Backup_OnTick(&bak, GetTickNow());
 
     if (!Network_IsConnected() || !s_loginAcked) {
+        Backup_Push(&bak);
         return -1;
     }
 
@@ -344,6 +343,7 @@ static void ReplayBurst(void)
         int r = ReplayOneBackup();
         if (r <= 0) break;
     }
+    Backup_Flush();
 }
 
 void NASA_OnServerProtocolLine(const char *line)
@@ -517,14 +517,16 @@ static NasaState_t Handle_StateTracking(void)
                             return STATE_ERROR_RETRY;
                         s_lastTrackingTick = nowTick;
                     } else {
-                        /* vẫn ghi backup 10s */
-                        UINT8 csq = 0;
-                        float voltage = NASA_GetVoltage();
-                        uint32_t status = BuildDeviceStatus(&gpsTemp, voltage);
-                        BackupRecord_t bak;
-                        sAPI_NetworkGetCsq(&csq);
-                        FillBackupFromGps(&bak, &gpsTemp, dtBuf, csq, status, voltage);
-                        Backup_OnTick(&bak, nowTick);
+                        /* Chỉ ghi backup khi thực sự mất mạng/chưa nhận ACK login */
+                        if (!Network_IsConnected() || !s_loginAcked) {
+                            UINT8 csq = 0;
+                            float voltage = NASA_GetVoltage();
+                            uint32_t status = BuildDeviceStatus(&gpsTemp, voltage);
+                            BackupRecord_t bak;
+                            sAPI_NetworkGetCsq(&csq);
+                            FillBackupFromGps(&bak, &gpsTemp, dtBuf, csq, status, voltage);
+                            Backup_OnTick(&bak, nowTick);
+                        }
                     }
                 }
             }

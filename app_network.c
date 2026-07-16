@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
 
 char *strtok_r(char *str, const char *delim, char **saveptr);
 
@@ -184,30 +185,25 @@ int Network_RecvPoll(void)
         return 1;
     }
 
-    /* recv_len < 0: thường là WOULDBLOCK — thử select ngắn rồi recv lại */
+    /* recv_len < 0: thường là WOULDBLOCK, kiểm tra errno trước */
+#ifdef EWOULDBLOCK
+    if (errno == EWOULDBLOCK || errno == EAGAIN) {
+        return 0;
+    }
+#endif
+
+    /* Fallback cho trường hợp errno không đồng bộ: select với timeout 0 (không block) */
     tv.tv_sec = 0;
-    tv.tv_usec = 50000; /* 50ms */
+    tv.tv_usec = 0;
     SC_FD_ZERO(&readfds);
     SC_FD_SET(s_tcpSocketFd, &readfds);
     sel_ret = sAPI_TcpipSelect(s_tcpSocketFd + 1, &readfds, NULL, NULL, &tv);
-    if (sel_ret < 0) {
-        sAPI_Debug("[Network] select err");
-        return 1;
+    if (sel_ret == 0) {
+        return 0; /* Không có dữ liệu, socket vẫn bình thường */
     }
-    if (sel_ret == 0) return 0;
 
-    recv_len = sAPI_TcpipRecv(s_tcpSocketFd, recvbuf, sizeof(recvbuf) - 1, 0);
-    if (recv_len > 0) {
-        recvbuf[recv_len] = '\0';
-        sAPI_Debug("[Network] Recv(after select) %d bytes: %s", recv_len, recvbuf);
-        DispatchRecvLines(recvbuf);
-        return 0;
-    }
-    if (recv_len == 0) {
-        sAPI_Debug("[Network] peer closed");
-        return 1;
-    }
-    return 0;
+    sAPI_Debug("[Network] recv/select err, sel_ret=%d, errno=%d", sel_ret, errno);
+    return 1;
 }
 
 int Network_IsConnected(void)
