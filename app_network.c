@@ -1,0 +1,216 @@
+#include "simcom_api.h"
+#include "simcom_common.h"
+#include "simcom_tcpip.h"
+#include "app_config.h"
+#include "app_cmd.h"
+#include "app_nasa.h"
+#include "app_network.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+char *strtok_r(char *str, const char *delim, char **saveptr);
+
+static INT32 s_tcpSocketFd = -1;
+static int s_sockNonBlockSet = 0;
+
+static void ServerCmdReply(const char *reply, void *ctx)
+{
+    char out[400];
+    int n;
+    int ret;
+
+    (void)ctx;
+    if (!reply || s_tcpSocketFd < 0) return;
+
+    n = snprintf(out, sizeof(out), "%s\r\n", reply);
+    if (n <= 0) return;
+    if (n >= (int)sizeof(out)) n = (int)sizeof(out) - 1;
+
+    ret = Network_Send(out, (uint32_t)n);
+    sAPI_Debug("[Network] Reply ret=%d len=%d: %s", ret, n, reply);
+}
+
+static void EnsureNonBlocking(void)
+{
+    UINT32 on = 1;
+    if (s_tcpSocketFd < 0 || s_sockNonBlockSet) return;
+    if (sAPI_TcpipIoctlsocket(s_tcpSocketFd, SC_FIONBIO, &on) == SC_SOCKET_ERROR) {
+        sAPI_Debug("[Network] FIONBIO fail (continue with select)");
+    } else {
+        s_sockNonBlockSet = 1;
+        sAPI_Debug("[Network] socket non-blocking OK");
+    }
+}
+
+int Network_ActivatePdp(INT32 pdp_id)
+{
+    sAPI_Debug("[Network] Activating PDP %d...", (int)pdp_id);
+    if (sAPI_TcpipPdpActive(pdp_id, 1) == SC_TCPIP_SUCCESS) {
+        sAPI_Debug("[Network] PDP OK");
+        return 0;
+    }
+    sAPI_Debug("[Network] PDP fail");
+    return -1;
+}
+
+int Network_Connect(const char *host, int port)
+{
+    UINT32 ip;
+    SCsockAddrIn srv;
+
+    sAPI_Debug("[Network] Connect %s:%d", host, port);
+
+    ip = sAPI_TcpipInetAddr((INT8 *)(void *)host);
+    if (ip == 0xFFFFFFFFu) {
+        SChostent *h = sAPI_TcpipGethostbyname((INT8 *)(void *)host);
+        if (!h || !h->h_addr_list || !h->h_addr_list[0]) {
+            sAPI_Debug("[Network] DNS fail");
+            return -1;
+        }
+        ip = *(UINT32 *)h->h_addr_list[0];
+    }
+
+    if (s_tcpSocketFd >= 0) {
+        sAPI_TcpipClose(s_tcpSocketFd);
+        s_tcpSocketFd = -1;
+    }
+    s_sockNonBlockSet = 0;
+
+    s_tcpSocketFd = sAPI_TcpipSocket(SC_AF_INET, SC_SOCK_STREAM, 0);
+    if (s_tcpSocketFd < 0) return -1;
+
+    memset(&srv, 0, sizeof(srv));
+    srv.sin_family = SC_AF_INET;
+    srv.sin_port = sAPI_TcpipHtons((UINT16)port);
+    srv.sin_addr.s_addr = ip;
+
+    if (sAPI_TcpipConnect(s_tcpSocketFd, (SCsockAddr *)&srv, sizeof(srv)) != 0) {
+        sAPI_TcpipClose(s_tcpSocketFd);
+        s_tcpSocketFd = -1;
+        return -1;
+    }
+
+    EnsureNonBlocking();
+    sAPI_Debug("[Network] Connected fd=%d", (int)s_tcpSocketFd);
+    return 0;
+}
+
+void Network_Disconnect(void)
+{
+    if (s_tcpSocketFd >= 0) {
+        sAPI_TcpipClose(s_tcpSocketFd);
+        s_tcpSocketFd = -1;
+    }
+    s_sockNonBlockSet = 0;
+}
+
+int Network_Send(const char *data, uint32_t len)
+{
+    uint32_t sent = 0;
+    int retry = 0;
+
+    if (s_tcpSocketFd < 0 || !data || len == 0) return -1;
+
+    /* Socket non-blocking: TcpipSend có thể trả partial / WOULDBLOCK */
+    while (sent < len) {
+        INT32 ret = sAPI_TcpipSend(s_tcpSocketFd,
+                                   (INT8 *)(data + sent),
+                                   (INT32)(len - sent), 0);
+        if (ret > 0) {
+            sent += (uint32_t)ret;
+            retry = 0;
+            continue;
+        }
+        if (++retry > 40) {
+            sAPI_Debug("[Network] Send fail after retry sent=%u/%u",
+                       (unsigned)sent, (unsigned)len);
+            return (sent > 0) ? (int)sent : -1;
+        }
+        sAPI_TaskSleep(5); /* ~25ms */
+    }
+    return (int)len;
+}
+
+static void DispatchRecvLines(char *recvbuf)
+{
+    char *saveptr = NULL;
+    char *line = strtok_r(recvbuf, "\r\n", &saveptr);
+
+    while (line != NULL) {
+        while (*line == ' ' || *line == '\t') line++;
+        {
+            char *end = line + strlen(line);
+            while (end > line && (end[-1] == ' ' || end[-1] == '\t')) *--end = '\0';
+        }
+        if (*line != '\0') {
+            if (strncmp(line, "!NASA", 5) == 0) {
+                sAPI_Debug("[Network] Route !NASA line");
+                NASA_OnServerProtocolLine(line);
+            } else {
+                sAPI_Debug("[Network] Route CMD line: %s", line);
+                CMD_Execute(line, "SERVER", NULL, ServerCmdReply, NULL);
+            }
+        }
+        line = strtok_r(NULL, "\r\n", &saveptr);
+    }
+}
+
+int Network_RecvPoll(void)
+{
+    static char recvbuf[NASA_SERVER_CMD_BUF_SIZE];
+    int recv_len;
+    SCfdSet readfds;
+    SCtimeval tv;
+    int sel_ret;
+
+    if (s_tcpSocketFd < 0) return 1;
+
+    EnsureNonBlocking();
+
+    /*
+     * Ưu tiên recv non-blocking trực tiếp — trên một số firmware SIMCom,
+     * select(timeout=0) + FD_ISSET đôi khi không báo dữ liệu dù đã có trong buffer.
+     */
+    recv_len = sAPI_TcpipRecv(s_tcpSocketFd, recvbuf, sizeof(recvbuf) - 1, 0);
+    if (recv_len > 0) {
+        recvbuf[recv_len] = '\0';
+        sAPI_Debug("[Network] Recv %d bytes: %s", recv_len, recvbuf);
+        DispatchRecvLines(recvbuf);
+        return 0;
+    }
+    if (recv_len == 0) {
+        sAPI_Debug("[Network] peer closed");
+        return 1;
+    }
+
+    /* recv_len < 0: thường là WOULDBLOCK — thử select ngắn rồi recv lại */
+    tv.tv_sec = 0;
+    tv.tv_usec = 50000; /* 50ms */
+    SC_FD_ZERO(&readfds);
+    SC_FD_SET(s_tcpSocketFd, &readfds);
+    sel_ret = sAPI_TcpipSelect(s_tcpSocketFd + 1, &readfds, NULL, NULL, &tv);
+    if (sel_ret < 0) {
+        sAPI_Debug("[Network] select err");
+        return 1;
+    }
+    if (sel_ret == 0) return 0;
+
+    recv_len = sAPI_TcpipRecv(s_tcpSocketFd, recvbuf, sizeof(recvbuf) - 1, 0);
+    if (recv_len > 0) {
+        recvbuf[recv_len] = '\0';
+        sAPI_Debug("[Network] Recv(after select) %d bytes: %s", recv_len, recvbuf);
+        DispatchRecvLines(recvbuf);
+        return 0;
+    }
+    if (recv_len == 0) {
+        sAPI_Debug("[Network] peer closed");
+        return 1;
+    }
+    return 0;
+}
+
+int Network_IsConnected(void)
+{
+    return (s_tcpSocketFd >= 0) ? 1 : 0;
+}
