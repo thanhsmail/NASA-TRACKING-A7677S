@@ -29,6 +29,17 @@ static UINT8 gSmsRecvTaskStack[1024 * 4];
 static sMsgQRef gSmsMsgQueue = NULL;
 static sMsgQRef gSmsReadRspQueue = NULL;
 
+/* Xả response trễ còn kẹt trong queue (free arg3) để read/del không lẫn nhau */
+static void DrainSmsRspQueue(void)
+{
+    SIM_MSG_T stale;
+    while (1) {
+        memset(&stale, 0, sizeof(stale));
+        if (sAPI_MsgQRecv(gSmsReadRspQueue, &stale, SC_NO_SUSPEND) != SC_SUCCESS) break;
+        if (stale.arg3) sAPI_Free(stale.arg3);
+    }
+}
+
 static void SmsReceiverTask(void *argv)
 {
     SC_STATUS status;
@@ -57,7 +68,8 @@ static void SmsReceiverTask(void *argv)
             sAPI_SysReset();
         }
 
-        if (sAPI_MsgQRecv(gSmsMsgQueue, &msg, SC_SUSPEND) != SC_SUCCESS) continue;
+        /* Timeout 1s thay vì SC_SUSPEND để vòng lặp còn kiểm tra được cờ FOTA */
+        if (sAPI_MsgQRecv(gSmsMsgQueue, &msg, SC_TICKS_PER_SECOND) != SC_SUCCESS) continue;
         if (msg.msg_id != SRV_URC) goto cleanup;
 
         if (msg.arg2 == SC_URC_NEW_MSG_IND) {
@@ -65,6 +77,7 @@ static void SmsReceiverTask(void *argv)
             if (p_idx && strrchr(p_idx, ',')) {
                 int index = atoi(strrchr(p_idx, ',') + 1);
                 SIM_MSG_T readRspMsg = {0};
+                DrainSmsRspQueue();
                 if (sAPI_SmsReadMsg(1, index, gSmsReadRspQueue) == SC_SMS_SUCESS &&
                     sAPI_MsgQRecv(gSmsReadRspQueue, &readRspMsg, 1000) == SC_SUCCESS) {
                     SMS_ExtractAndExecuteSmsBody((char *)readRspMsg.arg3, "SMS");
@@ -72,6 +85,7 @@ static void SmsReceiverTask(void *argv)
                 }
                 {
                     SIM_MSG_T delRspMsg = {0};
+                    DrainSmsRspQueue();
                     if (sAPI_SmsDelOneMsg(index, gSmsReadRspQueue) == SC_SMS_SUCESS) {
                         if (sAPI_MsgQRecv(gSmsReadRspQueue, &delRspMsg, 1000) == SC_SUCCESS) {
                             if (delRspMsg.arg3) sAPI_Free(delRspMsg.arg3);
@@ -106,11 +120,12 @@ static sTaskRef s_gpioStatusTaskRef = NULL;
 static UINT8 s_gpioStatusTaskStack[1024 * 2];
 
 /*
- * LED theo RV26 Technical doc:
- *  - GNSS: nhấp chậm = fix tốt; nhấp nhanh = chưa fix
+ * LED theo Technical doc:
+ *  - GNSS: nhấp chậm = fix tốt; sáng đứng = chưa fix
  *  - 4G/Net: nhấp chậm = đã kết nối server; sáng đứng = có mạng; tắt = không mạng
  *  - Power: sáng = OK
- * ACC: active-high trên RV26_GPIO_ACC_IN
+ * Mọi LED nhấp cùng một chu kỳ (blinkSlow) để nhìn đồng nhất.
+ * ACC: active-low trên GPIO_ACC_IN (LOW = ACC ON, pull-up nên dây hở = OFF)
  */
 static void sTask_GpioStatusIndication(void *argv)
 {
@@ -126,17 +141,17 @@ static void sTask_GpioStatusIndication(void *argv)
 
     (void)argv;
 
-    sAPI_GpioConfig(RV26_GPIO_LED_GNSS, outputConfig);
-    sAPI_GpioConfig(RV26_GPIO_LED_NET, outputConfig);
-    sAPI_GpioConfig(RV26_GPIO_LED_PWR, outputConfig);
-    sAPI_GpioConfig(RV26_GPIO_DOUT, outputConfig);
-    sAPI_GpioConfig(RV26_GPIO_ACC_IN, inputConfig);
-    sAPI_GpioSetValue(RV26_GPIO_DOUT, CFG_GetDout() ? 1 : 0);
-    sAPI_GpioSetValue(RV26_GPIO_LED_PWR, 1);
+    sAPI_GpioConfig(GPIO_LED_GNSS, outputConfig);
+    sAPI_GpioConfig(GPIO_LED_NET, outputConfig);
+    sAPI_GpioConfig(GPIO_LED_PWR, outputConfig);
+    sAPI_GpioConfig(GPIO_DOUT, outputConfig);
+    sAPI_GpioConfig(GPIO_ACC_IN, inputConfig);
+    sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
+    sAPI_GpioSetValue(GPIO_LED_PWR, 1);
 
     while (1) {
         int silent = CFG_GetSilentMode();
-        int currentAcc = (sAPI_GpioGetValue(RV26_GPIO_ACC_IN) == SC_GPIORC_LOW) ? 1 : 0;
+        int currentAcc = (sAPI_GpioGetValue(GPIO_ACC_IN) == SC_GPIORC_LOW) ? 1 : 0;
 
         if (lastRawAcc == -1) {
             lastRawAcc = currentAcc;
@@ -170,26 +185,27 @@ static void sTask_GpioStatusIndication(void *argv)
         if ((blinkPhase % 2) == 0) blinkSlow = !blinkSlow;
 
         if (silent) {
-            sAPI_GpioSetValue(RV26_GPIO_LED_GNSS, 0);
-            sAPI_GpioSetValue(RV26_GPIO_LED_NET, 0);
-            sAPI_GpioSetValue(RV26_GPIO_LED_PWR, 0);
+            sAPI_GpioSetValue(GPIO_LED_GNSS, 0);
+            sAPI_GpioSetValue(GPIO_LED_NET, 0);
+            sAPI_GpioSetValue(GPIO_LED_PWR, 0);
         } else {
             int sats = GPS_GetSatellitesCount();
             int gpsOk = (sats >= 5);
-            sAPI_GpioSetValue(RV26_GPIO_LED_GNSS, gpsOk ? blinkSlow : (blinkPhase & 1));
+            /* Nhấp chậm (cùng nhịp blinkSlow với LED NET) khi fix tốt; sáng đứng khi chưa fix */
+            sAPI_GpioSetValue(GPIO_LED_GNSS, gpsOk ? blinkSlow : 1);
 
             if (Network_IsConnected() && NASA_IsSessionActive()) {
-                sAPI_GpioSetValue(RV26_GPIO_LED_NET, blinkSlow);
+                sAPI_GpioSetValue(GPIO_LED_NET, blinkSlow);
             } else if (last_csq >= 1 && last_csq <= 31) {
-                sAPI_GpioSetValue(RV26_GPIO_LED_NET, 1);
+                sAPI_GpioSetValue(GPIO_LED_NET, 1);
             } else {
-                sAPI_GpioSetValue(RV26_GPIO_LED_NET, 0);
+                sAPI_GpioSetValue(GPIO_LED_NET, 0);
             }
 
-            sAPI_GpioSetValue(RV26_GPIO_LED_PWR, 1);
+            sAPI_GpioSetValue(GPIO_LED_PWR, 1);
         }
 
-        sAPI_GpioSetValue(RV26_GPIO_DOUT, CFG_GetDout() ? 1 : 0);
+        sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
         sAPI_TaskSleep(100); /* 500ms @ 200 ticks/s */
     }
 }
@@ -245,7 +261,10 @@ void userSpace_Main(void *arg)
 
 void abort(void)
 {
-    printf("abort!!!");
+    /* Thiết bị không người trực: tự reset để phục hồi thay vì treo vĩnh viễn */
+    sAPI_Debug("abort!!! -> SysReset");
+    sAPI_TaskSleep(200);
+    sAPI_SysReset();
     while (1);
 }
 

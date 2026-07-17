@@ -15,6 +15,10 @@ char *strtok_r(char *str, const char *delim, char **saveptr);
 static INT32 s_tcpSocketFd = -1;
 static int s_sockNonBlockSet = 0;
 
+/* Buffer tích luỹ: TCP là stream, một dòng lệnh/ACK có thể bị chia nhiều segment */
+static char s_rxAcc[NASA_SERVER_CMD_BUF_SIZE * 2];
+static int  s_rxAccLen = 0;
+
 static void ServerCmdReply(const char *reply, void *ctx)
 {
     char out[400];
@@ -77,6 +81,7 @@ int Network_Connect(const char *host, int port)
         s_tcpSocketFd = -1;
     }
     s_sockNonBlockSet = 0;
+    s_rxAccLen = 0;
 
     s_tcpSocketFd = sAPI_TcpipSocket(SC_AF_INET, SC_SOCK_STREAM, 0);
     if (s_tcpSocketFd < 0) return -1;
@@ -104,6 +109,7 @@ void Network_Disconnect(void)
         s_tcpSocketFd = -1;
     }
     s_sockNonBlockSet = 0;
+    s_rxAccLen = 0;
 }
 
 int Network_Send(const char *data, uint32_t len)
@@ -124,9 +130,11 @@ int Network_Send(const char *data, uint32_t len)
             continue;
         }
         if (++retry > 40) {
+            /* Partial send = stream TCP đã hỏng khung — báo lỗi để caller
+             * ngắt kết nối và đẩy bản ghi vào backup thay vì mất dữ liệu */
             sAPI_Debug("[Network] Send fail after retry sent=%u/%u",
                        (unsigned)sent, (unsigned)len);
-            return (sent > 0) ? (int)sent : -1;
+            return -1;
         }
         sAPI_TaskSleep(5); /* ~25ms */
     }
@@ -157,6 +165,53 @@ static void DispatchRecvLines(char *recvbuf)
     }
 }
 
+/*
+ * Đẩy dữ liệu mới vào buffer tích luỹ và chỉ dispatch phần đã trọn dòng
+ * (kết thúc bằng \r hoặc \n). Phần dư giữ lại chờ segment TCP kế tiếp.
+ */
+static void AccumulateAndDispatch(const char *data, int len)
+{
+    int i;
+    int lastTerm;
+
+    if (len > (int)sizeof(s_rxAcc) - 1 - s_rxAccLen) {
+        /* Tràn buffer mà không có kết thúc dòng — dữ liệu bất thường, xả hết */
+        sAPI_Debug("[Network] rx acc overflow (%d+%d), flush", s_rxAccLen, len);
+        s_rxAccLen = 0;
+        if (len > (int)sizeof(s_rxAcc) - 1) len = (int)sizeof(s_rxAcc) - 1;
+    }
+    memcpy(s_rxAcc + s_rxAccLen, data, (size_t)len);
+    s_rxAccLen += len;
+    s_rxAcc[s_rxAccLen] = '\0';
+
+    /* Tìm vị trí kết thúc dòng cuối cùng */
+    lastTerm = -1;
+    for (i = s_rxAccLen - 1; i >= 0; i--) {
+        if (s_rxAcc[i] == '\n' || s_rxAcc[i] == '\r') {
+            lastTerm = i;
+            break;
+        }
+    }
+    if (lastTerm < 0) return; /* chưa có dòng trọn vẹn */
+
+    {
+        /* static: chỉ task NASA gọi vào đây; tránh chiếm 2KB stack */
+        static char lineBuf[sizeof(s_rxAcc)];
+        int completeLen = lastTerm + 1;
+        memcpy(lineBuf, s_rxAcc, (size_t)completeLen);
+        lineBuf[completeLen] = '\0';
+
+        /* Giữ lại phần dư (dòng chưa trọn) */
+        s_rxAccLen -= completeLen;
+        if (s_rxAccLen > 0) {
+            memmove(s_rxAcc, s_rxAcc + completeLen, (size_t)s_rxAccLen);
+        }
+        s_rxAcc[s_rxAccLen] = '\0';
+
+        DispatchRecvLines(lineBuf);
+    }
+}
+
 int Network_RecvPoll(void)
 {
     static char recvbuf[NASA_SERVER_CMD_BUF_SIZE];
@@ -177,7 +232,7 @@ int Network_RecvPoll(void)
     if (recv_len > 0) {
         recvbuf[recv_len] = '\0';
         sAPI_Debug("[Network] Recv %d bytes: %s", recv_len, recvbuf);
-        DispatchRecvLines(recvbuf);
+        AccumulateAndDispatch(recvbuf, recv_len);
         return 0;
     }
     if (recv_len == 0) {

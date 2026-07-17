@@ -31,6 +31,13 @@ static SCsysTime_t s_lastGnssTime = {0};
 static uint32_t s_lastGnssTimeTick = 0;
 static int s_hasGnssTime = 0;
 
+/* Chống nhiễu vị trí khi xe đỗ: chỉ coi là di chuyển khi tốc độ vượt ngưỡng
+ * đủ lâu (FilterMovingStatus); khi đứng yên thì neo toạ độ tại điểm dừng và
+ * không cộng odometer. */
+static int    s_isMovingNow = 0;
+static double s_anchorLat = 0.0;
+static double s_anchorLon = 0.0;
+
 static sMsgQRef s_gnssUrcMsgQ = NULL;
 static sTaskRef s_gnssUrcTaskRef = NULL;
 static UINT8 s_gnssUrcTaskStack[1024 * 3];
@@ -115,6 +122,50 @@ static double CalculateDistanceKm(double lat1, double lon1, double lat2, double 
     return EARTH_RADIUS_KM * 2.0 * asin(sqrt(a));
 }
 
+static int FilterMovingStatus(double speed)
+{
+    static uint32_t s_speedAboveThresholdTick = 0;
+    static uint32_t s_speedBelowThresholdTick = 0;
+    static int s_isMoving = 0;
+    uint32_t now = GetTickNow();
+
+    if (speed > 3.0) {
+        s_speedBelowThresholdTick = 0;
+        if (s_speedAboveThresholdTick == 0) s_speedAboveThresholdTick = now;
+        else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) s_isMoving = 1;
+    } else {
+        s_speedAboveThresholdTick = 0;
+        if (s_speedBelowThresholdTick == 0) s_speedBelowThresholdTick = now;
+        else if ((now - s_speedBelowThresholdTick) >= (STOPPED_CONFIRM_SEC * SC_TICKS_PER_SECOND)) s_isMoving = 0;
+    }
+    s_isMovingNow = s_isMoving;
+    return s_isMoving;
+}
+
+/*
+ * Neo toạ độ khi đứng yên (gọi khi ĐANG giữ mutex, sau khi cập nhật
+ * lat/lon/satellites): lần đầu dừng thì ghi vị trí neo, các fix sau khi vẫn
+ * đứng yên thì thay toạ độ nhiễu bằng vị trí neo. Xe chạy lại thì nhả neo.
+ */
+static void ApplyStationaryAnchor(int isMoving)
+{
+    if (s_lastSatellites < 5 || (s_lastLat == 0.0 && s_lastLon == 0.0)) {
+        return; /* chưa fix — không đụng anchor */
+    }
+    if (isMoving) {
+        s_anchorLat = 0.0;
+        s_anchorLon = 0.0;
+        return;
+    }
+    if (s_anchorLat == 0.0 && s_anchorLon == 0.0) {
+        s_anchorLat = s_lastLat;
+        s_anchorLon = s_lastLon;
+    } else {
+        s_lastLat = s_anchorLat;
+        s_lastLon = s_anchorLon;
+    }
+}
+
 static void UpdateOdometer(double newLat, double newLon)
 {
     uint32_t now = GetTickNow();
@@ -137,6 +188,16 @@ static void UpdateOdometer(double newLat, double newLon)
 
     int wasGpsLoss = (s_gpsLossStartTick != 0);
     s_gpsLossStartTick = 0;
+
+    if (!s_isMovingNow)
+    {
+        /* Đứng yên: không cộng quãng đường (chống odometer ảo do nhiễu GPS),
+         * chỉ dời điểm tham chiếu theo vị trí hiện tại */
+        s_prevLat = newLat;
+        s_prevLon = newLon;
+        s_prevOdomTick = now;
+        return;
+    }
 
     if (s_prevLat != 0.0 && s_prevLon != 0.0)
     {
@@ -219,6 +280,10 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
     if (fields[1][0] == 'S' || fields[1][0] == 's') latDec = -latDec;
     if (fields[3][0] == 'W' || fields[3][0] == 'w') lonDec = -lonDec;
 
+    /* Lọc nhiễu tốc độ TRƯỚC khi dùng — GPS đứng yên vẫn báo 4–13 km/h */
+    double speedRaw = strtod(fields[7], NULL) * KNOTS_TO_KMH;
+    int isMoving = FilterMovingStatus(speedRaw);
+
     if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
     if (!ParseDateTimeFromUrcTokens(fields[4], fields[5], &s_lastGnssTime))
     {
@@ -228,8 +293,12 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
 
     s_lastLat = latDec;
     s_lastLon = lonDec;
-    s_lastSpeedKph = strtod(fields[7], NULL) * KNOTS_TO_KMH;
-    s_lastHeadingDeg = (nf > 8) ? strtod(fields[8], NULL) : 0.0;
+    if (isMoving) {
+        s_lastSpeedKph = speedRaw;
+        s_lastHeadingDeg = (nf > 8) ? strtod(fields[8], NULL) : 0.0;
+    } else {
+        s_lastSpeedKph = 0.0;
+    }
     s_lastSatellites = (nf > 9) ? atoi(fields[9]) : 0;
 
     if (s_lastSatellites < 5) {
@@ -237,6 +306,7 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
         s_lastLon = 0.0;
     }
 
+    ApplyStationaryAnchor(isMoving);
     UpdateOdometer(s_lastLat, s_lastLon);
     s_hasGnssTime = 1;
     uint32_t now = GetTickNow();
@@ -247,25 +317,6 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
 
     sAPI_Debug("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d", s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites);
     return 1;
-}
-
-static int FilterMovingStatus(double speed)
-{
-    static uint32_t s_speedAboveThresholdTick = 0;
-    static uint32_t s_speedBelowThresholdTick = 0;
-    static int s_isMoving = 0;
-    uint32_t now = GetTickNow();
-
-    if (speed > 3.0) {
-        s_speedBelowThresholdTick = 0;
-        if (s_speedAboveThresholdTick == 0) s_speedAboveThresholdTick = now;
-        else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) s_isMoving = 1;
-    } else {
-        s_speedAboveThresholdTick = 0;
-        if (s_speedBelowThresholdTick == 0) s_speedBelowThresholdTick = now;
-        else if ((now - s_speedBelowThresholdTick) >= (STOPPED_CONFIRM_SEC * SC_TICKS_PER_SECOND)) s_isMoving = 0;
-    }
-    return s_isMoving;
 }
 
 static int TryParseCgnssInfoUrc(const char *gpsUrc)
@@ -330,7 +381,8 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     s_hasGnssTime = 1;
     s_lastFixTick = GetTickNow();
     if (s_lastSatellites < 5) s_lastLat = s_lastLon = 0.0;
-    
+
+    ApplyStationaryAnchor(isMoving);
     UpdateOdometer(s_lastLat, s_lastLon);
 
     if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
@@ -425,13 +477,20 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
 
     if (n >= 2)
     {
+        double speedRaw = (n >= 3) ? nums[2] * KNOTS_TO_KMH : 0.0;
+        int isMoving = FilterMovingStatus(speedRaw);
+
         sAPI_Debug("[GPS-Fallback] Dung fallback parser, raw=%s", gpsUrc);
         if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
         s_lastLat = nums[0];
         s_lastLon = nums[1];
-        
-        if (n >= 3) s_lastSpeedKph = nums[2] * KNOTS_TO_KMH;
-        if (n >= 4) s_lastHeadingDeg = nums[3];
+
+        if (isMoving) {
+            s_lastSpeedKph = speedRaw;
+            if (n >= 4) s_lastHeadingDeg = nums[3];
+        } else {
+            s_lastSpeedKph = 0.0;
+        }
         if (n >= 5) s_lastSatellites = (int)nums[4];
 
         if (s_lastSatellites < 5)
@@ -440,6 +499,7 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
             s_lastLon = 0.0;
         }
 
+        ApplyStationaryAnchor(isMoving);
         UpdateOdometer(s_lastLat, s_lastLon);
         s_lastFixTick = GetTickNow();
         if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
@@ -501,7 +561,9 @@ void GnssUrcListenerEnsureStarted(void)
     {
         static int first_boot = 1;
         if (first_boot) {
-            sAPI_GnssStartMode(SC_GNSS_START_COLD);
+            /* Hot start: dùng ephemeris/almanac đã lưu, TTFF nhanh hơn nhiều
+             * so với cold start; cold start chỉ dành cho chẩn đoán */
+            sAPI_GnssStartMode(SC_GNSS_START_HOT);
             first_boot = 0;
         }
         sAPI_GnssInfoGet(1);

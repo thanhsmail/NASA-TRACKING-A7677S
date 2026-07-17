@@ -25,14 +25,14 @@ typedef struct {
     char     driverName[64];
     char     driverLicense[32];
     int      driverLoggedIn;
-} Rv26Config_t;
+} AppConfig_t;
 
 void CFG_Init(void);
 void CFG_Load(void);
 int  CFG_Save(void);
 void CFG_FactoryReset(void);
 
-Rv26Config_t *CFG_Get(void);
+AppConfig_t *CFG_Get(void);
 
 const char *CFG_GetServerHost(void);
 int         CFG_GetServerPort(void);

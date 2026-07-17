@@ -5,7 +5,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-static Rv26Config_t s_cfg;
+static AppConfig_t s_cfg;
+
+/* Bảo vệ ghi/đọc file config: CFG_Save gọi từ cả task SMS lẫn task NASA (lệnh server) */
+static sMutexRef s_cfgMutex = NULL;
+
+static void CfgLock(void)
+{
+    if (s_cfgMutex) sAPI_MutexLock(s_cfgMutex, SC_SUSPEND);
+}
+
+static void CfgUnlock(void)
+{
+    if (s_cfgMutex) sAPI_MutexUnLock(s_cfgMutex);
+}
 
 static void CFG_SetDefaults(void)
 {
@@ -93,15 +106,20 @@ static void ApplyKeyValue(const char *key, const char *val)
 
 void CFG_Init(void)
 {
+    if (s_cfgMutex == NULL) {
+        sAPI_MutexCreate(&s_cfgMutex, SC_FIFO);
+    }
     CFG_SetDefaults();
     CFG_Load();
 }
 
 void CFG_Load(void)
 {
+    CfgLock();
     SCFILE *fp = sAPI_fopen(NASA_CFG_FILE, "rb");
     if (!fp) {
         sAPI_Debug("[CFG] No config file, using defaults");
+        CfgUnlock();
         return;
     }
 
@@ -111,6 +129,7 @@ void CFG_Load(void)
 
     if (bytesRead <= 0) {
         sAPI_Debug("[CFG] Empty config file or read error");
+        CfgUnlock();
         return;
     }
     fileBuf[bytesRead] = '\0';
@@ -154,6 +173,7 @@ void CFG_Load(void)
         lineStart = next;
     }
     sAPI_Debug("[CFG] Loaded host=%s port=%d plate=%s", s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate);
+    CfgUnlock();
 }
 
 int CFG_Save(void)
@@ -162,6 +182,7 @@ int CFG_Save(void)
     int len;
     SCFILE *fp;
 
+    CfgLock();
     len = snprintf(buf, sizeof(buf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
@@ -172,28 +193,35 @@ int CFG_Save(void)
                    s_cfg.parkConfirmSec, s_cfg.resetEveryDays, s_cfg.resetAtHour,
                    s_cfg.configLocked, s_cfg.deviceEnabled, s_cfg.operateDays,
                    s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn);
-    if (len <= 0) return -1;
+    if (len <= 0) {
+        CfgUnlock();
+        return -1;
+    }
 
     sAPI_remove(NASA_CFG_FILE);
     fp = sAPI_fopen(NASA_CFG_FILE, "wb");
     if (!fp) {
         sAPI_Debug("[CFG] Save open failed");
+        CfgUnlock();
         return -1;
     }
     sAPI_fwrite(buf, 1, (size_t)len, fp);
     sAPI_fclose(fp);
     sAPI_Debug("[CFG] Saved OK");
+    CfgUnlock();
     return 0;
 }
 
 void CFG_FactoryReset(void)
 {
+    CfgLock();
     CFG_SetDefaults();
     sAPI_remove(NASA_CFG_FILE);
+    CfgUnlock();
     CFG_Save();
 }
 
-Rv26Config_t *CFG_Get(void) { return &s_cfg; }
+AppConfig_t *CFG_Get(void) { return &s_cfg; }
 
 const char *CFG_GetServerHost(void) { return s_cfg.serverHost; }
 int CFG_GetServerPort(void) { return s_cfg.serverPort; }

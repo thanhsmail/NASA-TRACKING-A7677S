@@ -10,6 +10,7 @@
 static sTaskRef s_ntpSyncTaskRef = NULL;
 static UINT8 s_ntpSyncTaskStack[1024 * 3];
 static int s_nitzEnabled = 0;
+static volatile int s_ntpSyncRequested = 0;
 
 uint32_t Buffer_GetChecksum(const uint8_t *buffer, uint32_t length)
 {
@@ -98,42 +99,18 @@ void BuildDateTimeAutoFallback(char *dateTime, uint32_t dateTimeSize)
     }
 }
 
-static void sTask_NtpSync(void *argv)
+/* Thực hiện một đợt sync NTP (tối đa NASA_NTP_MAX_ATTEMPTS lần thử) */
+static void NtpSyncOnce(sMsgQRef ntp_msgq)
 {
-    (void)argv;
-    sAPI_Debug("[NTP] Task started.");
-    
-    sTaskRef my_task = NULL;
-    sAPI_TaskGetCurrentRef(&my_task);
-
-    t_rtc rtc;
-    sAPI_GetRealTimeClock(&rtc);
-    if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100)
-    {
-        sAPI_Debug("[NTP] Time already valid (%d-%d-%d), no sync needed.", rtc.tm_year, rtc.tm_mon, rtc.tm_mday);
-        s_ntpSyncTaskRef = NULL;
-        if (my_task) sAPI_TaskDelete(my_task);
-        return;
-    }
-
-    sMsgQRef ntp_msgq = NULL;
-    if (sAPI_MsgQCreate(&ntp_msgq, "ntp_sync_q", sizeof(SIM_MSG_T), 4, SC_FIFO) != SC_SUCCESS)
-    {
-        sAPI_Debug("[NTP] Create MsgQ failed.");
-        s_ntpSyncTaskRef = NULL;
-        if (my_task) sAPI_TaskDelete(my_task);
-        return;
-    }
-
     int attempt = 0;
     while (attempt < NASA_NTP_MAX_ATTEMPTS)
     {
         attempt++;
         sAPI_Debug("[NTP] Sync attempt %d/%d...", attempt, NASA_NTP_MAX_ATTEMPTS);
-        
+
         sAPI_NtpUpdate(SC_NTP_OP_SET, NASA_NTP_SERVER, NASA_NTP_TIMEZONE_PARAM, NULL);
         sAPI_NtpUpdate(SC_NTP_OP_EXC, NULL, 0, ntp_msgq);
-        
+
         SIM_MSG_T ntp_result = {SC_SRV_NONE, -1, 0, NULL};
         if (sAPI_MsgQRecv(ntp_msgq, &ntp_result, 15000) == SC_SUCCESS)
         {
@@ -144,12 +121,9 @@ static void sTask_NtpSync(void *argv)
                 {
                     sAPI_Free(ntp_result.arg3);
                 }
-                break;
+                return;
             }
-            else
-            {
-                sAPI_Debug("[NTP] Sync failed, error code: %d", (int)ntp_result.arg1);
-            }
+            sAPI_Debug("[NTP] Sync failed, error code: %d", (int)ntp_result.arg1);
             if (ntp_result.arg3)
             {
                 sAPI_Free(ntp_result.arg3);
@@ -159,20 +133,53 @@ static void sTask_NtpSync(void *argv)
         {
             sAPI_Debug("[NTP] Sync timeout.");
         }
-        
+
         sAPI_TaskSleep(NASA_NTP_RETRY_INTERVAL);
     }
+}
 
-    sAPI_MsgQDelete(ntp_msgq);
-    sAPI_Debug("[NTP] Task finished.");
-    s_ntpSyncTaskRef = NULL;
-    if (my_task) sAPI_TaskDelete(my_task);
+/*
+ * Task NTP thường trú: chờ cờ yêu cầu thay vì tự xoá task (self-delete trên
+ * stack tĩnh có cửa sổ race khi TriggerNtpSyncIfNeeded tạo lại task quá sớm).
+ */
+static void sTask_NtpSync(void *argv)
+{
+    sMsgQRef ntp_msgq = NULL;
+    (void)argv;
+    sAPI_Debug("[NTP] Task started.");
+
+    while (sAPI_MsgQCreate(&ntp_msgq, "ntp_sync_q", sizeof(SIM_MSG_T), 4, SC_FIFO) != SC_SUCCESS)
+    {
+        sAPI_Debug("[NTP] Create MsgQ failed, retry...");
+        sAPI_TaskSleep(10 * SC_TICKS_PER_SECOND);
+    }
+
+    for (;;)
+    {
+        if (!s_ntpSyncRequested)
+        {
+            sAPI_TaskSleep(SC_TICKS_PER_SECOND);
+            continue;
+        }
+        s_ntpSyncRequested = 0;
+
+        {
+            t_rtc rtc;
+            sAPI_GetRealTimeClock(&rtc);
+            if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100)
+            {
+                sAPI_Debug("[NTP] Time already valid (%d-%d-%d), no sync needed.",
+                           rtc.tm_year, rtc.tm_mon, rtc.tm_mday);
+                continue;
+            }
+        }
+
+        NtpSyncOnce(ntp_msgq);
+    }
 }
 
 void TriggerNtpSyncIfNeeded(void)
 {
-    if (s_ntpSyncTaskRef != NULL) return;
-    
     t_rtc rtc;
     sAPI_GetRealTimeClock(&rtc);
     if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100)
@@ -180,16 +187,21 @@ void TriggerNtpSyncIfNeeded(void)
         return;
     }
 
-    if (sAPI_TaskCreate(&s_ntpSyncTaskRef, s_ntpSyncTaskStack, sizeof(s_ntpSyncTaskStack), 
-                        130, (char *)"ntp_sync", sTask_NtpSync, NULL) == SC_SUCCESS)
+    if (s_ntpSyncTaskRef == NULL)
     {
-        sAPI_Debug("[NTP] NTP sync task created.");
+        if (sAPI_TaskCreate(&s_ntpSyncTaskRef, s_ntpSyncTaskStack, sizeof(s_ntpSyncTaskStack),
+                            130, (char *)"ntp_sync", sTask_NtpSync, NULL) == SC_SUCCESS)
+        {
+            sAPI_Debug("[NTP] NTP sync task created.");
+        }
+        else
+        {
+            sAPI_Debug("[NTP] NTP sync task creation failed.");
+            s_ntpSyncTaskRef = NULL;
+            return;
+        }
     }
-    else
-    {
-        sAPI_Debug("[NTP] NTP sync task creation failed.");
-        s_ntpSyncTaskRef = NULL;
-    }
+    s_ntpSyncRequested = 1;
 }
 
 void NitzEnableFromNetwork(void)

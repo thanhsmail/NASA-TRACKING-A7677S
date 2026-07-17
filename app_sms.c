@@ -99,8 +99,9 @@ static void SmsReply(const char *reply, void *ctx)
         return;
     }
     {
+        /* 2000 tick = 10s; 15000 tick (75s) chặn queue SMS quá lâu gây tràn */
         SIM_MSG_T rsp = {0};
-        if (sAPI_MsgQRecv(s_smsSendRspQ, &rsp, 15000) == SC_SUCCESS) {
+        if (sAPI_MsgQRecv(s_smsSendRspQ, &rsp, 2000) == SC_SUCCESS) {
             if (rsp.arg3) sAPI_Free(rsp.arg3);
         }
     }
@@ -111,20 +112,49 @@ void SMS_Command_Execute(const char *body, const char *src)
     CMD_Execute(body, src, NULL, NULL, NULL);
 }
 
+/* Chuỗi trong nháy có phải số điện thoại không: bắt đầu '+' hoặc chữ số,
+ * còn lại toàn chữ số, dài >= 8 ký tự số */
+static int LooksLikePhone(const char *s)
+{
+    int digits = 0;
+    if (!s || !s[0]) return 0;
+    if (*s == '+') s++;
+    if (!*s) return 0;
+    while (*s) {
+        if (*s < '0' || *s > '9') return 0;
+        digits++;
+        s++;
+    }
+    return (digits >= 8) ? 1 : 0;
+}
+
 static void ExtractPhoneFromPayload(const char *payload, char *out, int outsz)
 {
-    /* CMTI/CMT thường có dạng +CMT: "+84...", hoặc trong header */
+    /*
+     * Response +CMGR/+CMT có nhiều chuỗi trong nháy, chuỗi đầu có thể là
+     * "REC UNREAD" — duyệt tất cả và chọn chuỗi trông giống số điện thoại.
+     */
     const char *p;
-    int i = 0;
     if (!payload || !out || outsz <= 0) return;
     out[0] = '\0';
-    p = strchr(payload, '"');
-    if (!p) return;
-    p++;
-    while (*p && *p != '"' && i < outsz - 1) {
-        out[i++] = *p++;
+
+    p = payload;
+    while ((p = strchr(p, '"')) != NULL) {
+        char tmp[24];
+        int i = 0;
+        p++;
+        while (*p && *p != '"' && i < (int)sizeof(tmp) - 1) {
+            tmp[i++] = *p++;
+        }
+        tmp[i] = '\0';
+        if (*p == '"') p++;
+
+        if (LooksLikePhone(tmp)) {
+            strncpy(out, tmp, outsz - 1);
+            out[outsz - 1] = '\0';
+            return;
+        }
     }
-    out[i] = '\0';
 }
 
 void SMS_ExtractAndExecuteSmsBody(const char *payload, const char *source)

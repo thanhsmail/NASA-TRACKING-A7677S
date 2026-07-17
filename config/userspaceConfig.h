@@ -33,7 +33,7 @@
 // modem
 #define HAS_DEMO_NETWORK
 #define HAS_DEMO_SIMCARD
-#define HAS_DEMO_CALL
+/* #undef HAS_DEMO_CALL */
 #define HAS_DEMO_SMS
 #define HAS_DEMO_LBS
 #define HAS_DEMO_SJDR
@@ -48,9 +48,9 @@
 #define HAS_DEMO_MQTTS
 #define HAS_DEMO_NTP
 #define HAS_DEMO_HTP
-#define HAS_DEMO_AUDIO
-#define HAS_DEMO_TTS
-#define HAS_DEMO_POC
+/* #undef HAS_DEMO_AUDIO */
+/* #undef HAS_DEMO_TTS */
+/* #undef HAS_DEMO_POC */
 #define HAS_DEMO_WIFI
 #define HAS_DEMO_RTC
 /* #undef HAS_DEMO_BLE */

@@ -86,20 +86,20 @@
  * ASR1606). SC_MODULE_GPIO_00 chỉ có khi FEATURE_SIMCOM_NORI; dùng pad số cố
  * định. Đổi khi schematic PCB khác.
  */
-#ifndef RV26_GPIO_LED_NET
-#define RV26_GPIO_LED_NET 80 /* SC_MODULE_GPIO_00 */
+#ifndef GPIO_LED_NET
+#define GPIO_LED_NET 80 /* SC_MODULE_GPIO_00 */
 #endif
-#ifndef RV26_GPIO_LED_PWR
-#define RV26_GPIO_LED_PWR 32 /* SC_MODULE_GPIO_01 */
+#ifndef GPIO_LED_PWR
+#define GPIO_LED_PWR 32 /* SC_MODULE_GPIO_01 */
 #endif
-#ifndef RV26_GPIO_LED_GNSS
-#define RV26_GPIO_LED_GNSS 74 /* SC_MODULE_GPIO_03 */
+#ifndef GPIO_LED_GNSS
+#define GPIO_LED_GNSS 74 /* SC_MODULE_GPIO_03 */
 #endif
-#ifndef RV26_GPIO_DOUT
-#define RV26_GPIO_DOUT 73 /* SC_MODULE_GPIO_04 */
+#ifndef GPIO_DOUT
+#define GPIO_DOUT 73 /* SC_MODULE_GPIO_04 */
 #endif
-#ifndef RV26_GPIO_ACC_IN
-#define RV26_GPIO_ACC_IN 37 /* SC_MODULE_GPIO_10 */
+#ifndef GPIO_ACC_IN
+#define GPIO_ACC_IN 37 /* SC_MODULE_GPIO_10 */
 #endif
 
 /* Bitmask trạng thái thiết bị (Protocol RV26 — bản tin 2/7) */

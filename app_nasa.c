@@ -22,7 +22,7 @@ typedef enum {
 
 static NasaState_t s_nasaState = STATE_INIT;
 static uint32_t s_messageIdNum = 1;
-static int s_accRaw = 0;          /* 1 = ACC HIGH (ON nếu active-high) */
+static int s_accRaw = 0;          /* 1 = ACC ON (chân ACC active-low, đã quy đổi ở GPIO task) */
 static int s_loginAcked = 0;
 static char s_resetReason[16] = "R-0.0";
 static char s_loginCode[16] = "0";
@@ -59,7 +59,7 @@ static int IsAccOn(void)
 {
     int mode = CFG_GetAccMode();
     int bySpeed = (GPS_GetLastSpeedKph() >= (double)CFG_GetSpeedThresh()) ? 1 : 0;
-    int byWire = s_accRaw ? 1 : 0; /* Active-high theo RV26 Technical doc */
+    int byWire = s_accRaw ? 1 : 0; /* Chân ACC active-low; s_accRaw đã là trạng thái logic ON/OFF */
 
     if (mode == 0) return bySpeed;
     if (mode == 2) return (byWire || bySpeed) ? 1 : 0;
@@ -570,7 +570,30 @@ void NASA_RunStep(void)
         sAPI_Debug("[NASA/Retry] wait %ds", ERROR_RETRY_DELAY_SEC);
         Network_Disconnect();
         s_loginAcked = 0;
-        sAPI_TaskSleep((UINT32)ERROR_RETRY_DELAY_SEC * (UINT32)SC_TICKS_PER_SECOND);
+        /* Ngủ từng 1s và vẫn ghi backup định kỳ — không mất dữ liệu hành
+         * trình khi xe chạy trong vùng mất sóng dài */
+        {
+            int sec;
+            for (sec = 0; sec < ERROR_RETRY_DELAY_SEC; sec++) {
+                sAPI_TaskSleep(SC_TICKS_PER_SECOND);
+                {
+                    char dtBuf[40] = {0};
+                    GpsSnapshot_t gps = {0};
+                    UINT8 csq = 0;
+                    float voltage;
+                    uint32_t status;
+                    BackupRecord_t bak;
+
+                    GPS_Snapshot(&gps);
+                    BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
+                    voltage = NASA_GetVoltage();
+                    status = BuildDeviceStatus(&gps, voltage);
+                    sAPI_NetworkGetCsq(&csq);
+                    FillBackupFromGps(&bak, &gps, dtBuf, csq, status, voltage);
+                    Backup_OnTick(&bak, GetTickNow());
+                }
+            }
+        }
         s_nasaState = STATE_INIT;
         break;
     }

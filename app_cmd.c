@@ -15,6 +15,9 @@ char *strtok_r(char *str, const char *delim, char **saveptr);
 
 static volatile int g_fota_download_ready = 0;
 
+/* Queue nhận response cho SMS gửi từ lệnh 37 (một số SDK không chấp nhận NULL) */
+static sMsgQRef s_cmdSmsSendRspQ = NULL;
+
 static int FotaCb(int isok)
 {
     sAPI_Debug("[FOTA] status=%d", isok);
@@ -185,7 +188,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         param.sc_fota_cb = FotaCb;
         sAPI_FotaServiceBegin(&param);
 
-        snprintf(resp, sizeof(resp), "Update Firmwwave ok");
+        snprintf(resp, sizeof(resp), "Update Firmware ok");
         if (resp[0]) Reply(reply, ctx, src, resp);
         return;
     }
@@ -229,7 +232,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             }
             CFG_SetDout(val);
             CFG_Save();
-            sAPI_GpioSetValue(RV26_GPIO_DOUT, CFG_GetDout() ? 1 : 0);
+            sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
         }
         snprintf(resp, sizeof(resp), "sa,2 dieu khien ra: %s", CFG_GetDout() ? "bat" : "tat");
         break;
@@ -359,7 +362,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             }
             sAPI_NetworkGetCsq(&csq);
             GPS_Snapshot(&gps);
-            acc = (sAPI_GpioGetValue(RV26_GPIO_ACC_IN) == SC_GPIORC_LOW) ? 1 : 0;
+            acc = (sAPI_GpioGetValue(GPIO_ACC_IN) == SC_GPIORC_LOW) ? 1 : 0;
             conn_str = (Network_IsConnected() && NASA_IsSessionActive()) ? "da ket noi" : "chua ket noi";
 
             snprintf(resp, sizeof(resp),
@@ -420,8 +423,20 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             if (!NextToken(&save, a, sizeof(a)) || !NextToken(&save, b, sizeof(b))) {
                 Reply(reply, ctx, src, "ERROR"); return;
             }
-            /* Gửi SMS đơn giản; queue phản hồi có thể NULL nếu API cho phép */
-            sAPI_SmsSendMsg(1, (UINT8 *)b, (UINT16)strlen(b), (UINT8 *)a, NULL);
+            if (s_cmdSmsSendRspQ == NULL) {
+                if (sAPI_MsgQCreate(&s_cmdSmsSendRspQ, "cmdSmsSendRspQ",
+                                    sizeof(SIM_MSG_T), 4, SC_FIFO) != SC_SUCCESS) {
+                    s_cmdSmsSendRspQ = NULL;
+                }
+            }
+            if (sAPI_SmsSendMsg(1, (UINT8 *)b, (UINT16)strlen(b), (UINT8 *)a,
+                                s_cmdSmsSendRspQ) == SC_SMS_SUCESS &&
+                s_cmdSmsSendRspQ != NULL) {
+                SIM_MSG_T rsp = {0};
+                if (sAPI_MsgQRecv(s_cmdSmsSendRspQ, &rsp, 2000) == SC_SUCCESS) {
+                    if (rsp.arg3) sAPI_Free(rsp.arg3);
+                }
+            }
             snprintf(resp, sizeof(resp), "%s", b);
         }
         break;
