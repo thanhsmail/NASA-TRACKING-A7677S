@@ -157,6 +157,7 @@ static void sTask_GpioStatusIndication(void *argv)
             lastRawAcc = currentAcc;
             s_accVal = currentAcc;
             NASA_SetAcc(s_accVal);
+            GPS_SetAccOn(s_accVal);
         }
 
         if (currentAcc == lastRawAcc) {
@@ -166,6 +167,7 @@ static void sTask_GpioStatusIndication(void *argv)
                     s_accVal = currentAcc;
                     accDebounceCount = 0;
                     NASA_SetAcc(s_accVal);
+                    GPS_SetAccOn(s_accVal);
                     sAPI_Debug("[ACC] %d", s_accVal);
                 }
             } else {
@@ -219,7 +221,7 @@ void userSpace_Main(void *arg)
     sAPI_Debug("ApiMapInit OK (A7677S)");
 
     sAPI_TaskSleep(APP_STARTUP_DELAY_SEC * SC_TICKS_PER_SECOND);
-    sAPI_Debug("==== NASA FW %s HW %s BUILD_MARK=260714b A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
+    sAPI_Debug("==== NASA FW %s HW %s BUILD_MARK=260718a A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 
     CFG_Init();
     SMS_Init();

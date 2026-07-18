@@ -37,6 +37,12 @@ static int s_hasGnssTime = 0;
 static int    s_isMovingNow = 0;
 static double s_anchorLat = 0.0;
 static double s_anchorLon = 0.0;
+static volatile int s_accWireOn = 0; /* dây ACC (đã debounce), cập nhật từ GPIO task */
+
+void GPS_SetAccOn(int on)
+{
+    s_accWireOn = on ? 1 : 0;
+}
 
 static sMsgQRef s_gnssUrcMsgQ = NULL;
 static sTaskRef s_gnssUrcTaskRef = NULL;
@@ -122,17 +128,42 @@ static double CalculateDistanceKm(double lat1, double lon1, double lat2, double 
     return EARTH_RADIUS_KM * 2.0 * asin(sqrt(a));
 }
 
-static int FilterMovingStatus(double speed)
+/*
+ * Xác định xe đang di chuyển thật hay chỉ là nhiễu GPS khi đỗ.
+ *  - accMode 1 (chỉ theo dây ACC): ACC OFF => khoá cứng trạng thái đứng yên,
+ *    nhiễu GPS lớn cỡ nào cũng không thể nhả neo (log thực tế nhiễu tới 26km/h).
+ *  - Tốc độ > ngưỡng liên tục MOVING_CONFIRM_SEC *và* đã dịch chuyển thật
+ *    khỏi điểm neo >= MOVING_MIN_DISPLACEMENT_KM mới tính là chạy.
+ * (lat/lon là toạ độ thô của fix hiện tại, 0.0 nếu chưa fix)
+ */
+static int FilterMovingStatus(double speed, double lat, double lon)
 {
     static uint32_t s_speedAboveThresholdTick = 0;
     static uint32_t s_speedBelowThresholdTick = 0;
     static int s_isMoving = 0;
     uint32_t now = GetTickNow();
 
+    if (CFG_GetAccMode() == 1 && !s_accWireOn) {
+        s_speedAboveThresholdTick = 0;
+        s_speedBelowThresholdTick = 0;
+        s_isMoving = 0;
+        s_isMovingNow = 0;
+        return 0;
+    }
+
     if (speed > 3.0) {
         s_speedBelowThresholdTick = 0;
         if (s_speedAboveThresholdTick == 0) s_speedAboveThresholdTick = now;
-        else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) s_isMoving = 1;
+        else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+            /* Đủ thời gian vượt ngưỡng — kiểm tra thêm dịch chuyển thực khỏi neo */
+            if (s_anchorLat == 0.0 && s_anchorLon == 0.0) {
+                s_isMoving = 1; /* chưa có neo (mới boot / đang chạy sẵn) */
+            } else if (lat != 0.0 && lon != 0.0 &&
+                       CalculateDistanceKm(s_anchorLat, s_anchorLon, lat, lon) >=
+                           MOVING_MIN_DISPLACEMENT_KM) {
+                s_isMoving = 1;
+            }
+        }
     } else {
         s_speedAboveThresholdTick = 0;
         if (s_speedBelowThresholdTick == 0) s_speedBelowThresholdTick = now;
@@ -280,9 +311,9 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
     if (fields[1][0] == 'S' || fields[1][0] == 's') latDec = -latDec;
     if (fields[3][0] == 'W' || fields[3][0] == 'w') lonDec = -lonDec;
 
-    /* Lọc nhiễu tốc độ TRƯỚC khi dùng — GPS đứng yên vẫn báo 4–13 km/h */
+    /* Lọc nhiễu tốc độ TRƯỚC khi dùng — GPS đứng yên vẫn báo 4–26 km/h */
     double speedRaw = strtod(fields[7], NULL) * KNOTS_TO_KMH;
-    int isMoving = FilterMovingStatus(speedRaw);
+    int isMoving = FilterMovingStatus(speedRaw, latDec, lonDec);
 
     if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
     if (!ParseDateTimeFromUrcTokens(fields[4], fields[5], &s_lastGnssTime))
@@ -364,7 +395,7 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
 
     double speedKnots = (ns_idx + 6 < nf) ? strtod(fields[ns_idx + 6], NULL) : 0.0;
     double speed = speedKnots * KNOTS_TO_KMH;
-    int isMoving = FilterMovingStatus(speed);
+    int isMoving = FilterMovingStatus(speed, latDec, lonDec);
 
     if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
 
@@ -478,7 +509,7 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
     if (n >= 2)
     {
         double speedRaw = (n >= 3) ? nums[2] * KNOTS_TO_KMH : 0.0;
-        int isMoving = FilterMovingStatus(speedRaw);
+        int isMoving = FilterMovingStatus(speedRaw, nums[0], nums[1]);
 
         sAPI_Debug("[GPS-Fallback] Dung fallback parser, raw=%s", gpsUrc);
         if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);

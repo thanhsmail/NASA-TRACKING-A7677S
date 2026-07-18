@@ -16,6 +16,8 @@ typedef struct {
 
 void GPS_Init(void);
 void GPS_Snapshot(GpsSnapshot_t *out);
+/* Trạng thái dây ACC (đã debounce) từ GPIO task — dùng khoá trạng thái đỗ */
+void GPS_SetAccOn(int on);
 void GPS_ResetOdometer(void);
 int GPS_GetSatellitesCount(void);
 double GPS_GetLastSpeedKph(void);

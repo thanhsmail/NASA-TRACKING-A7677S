@@ -57,11 +57,15 @@
 
 #define MOVING_CONFIRM_SEC 3   // Thời gian xác nhận trạng thái di chuyển
 #define STOPPED_CONFIRM_SEC 10 // Thời gian xác nhận trạng thái dừng đỗ
+/* Dịch chuyển thực khỏi điểm neo tối thiểu để xác nhận xe chạy (chống nhiễu
+ * GPS khi đỗ — nhiễu đô thị có thể báo tốc độ tới 26 km/h nhưng vị trí chỉ
+ * quẩn quanh điểm đỗ) */
+#define MOVING_MIN_DISPLACEMENT_KM 0.05 // 50 m
 
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "NASA4G"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.0.260714b"
+#define NASA_FW_CODE "v1.0.260718a"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1
