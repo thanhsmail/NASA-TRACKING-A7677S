@@ -41,6 +41,7 @@ static void CFG_SetDefaults(void)
     strncpy(s_cfg.driverName, "", sizeof(s_cfg.driverName) - 1);
     strncpy(s_cfg.driverLicense, "", sizeof(s_cfg.driverLicense) - 1);
     s_cfg.driverLoggedIn   = 0;
+    s_cfg.lastMday         = 0;
 }
 
 static void TrimInPlace(char *s)
@@ -101,6 +102,8 @@ static void ApplyKeyValue(const char *key, const char *val)
         strncpy(s_cfg.driverLicense, val, sizeof(s_cfg.driverLicense) - 1);
     } else if (strcmp(key, "dlog") == 0) {
         s_cfg.driverLoggedIn = atoi(val);
+    } else if (strcmp(key, "lmday") == 0) {
+        s_cfg.lastMday = atoi(val);
     }
 }
 
@@ -186,13 +189,14 @@ int CFG_Save(void)
     len = snprintf(buf, sizeof(buf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
-                   "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\n",
+                   "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\n",
                    s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate,
                    s_cfg.periodMovingSec, s_cfg.periodStoppedSec, s_cfg.accMode, s_cfg.speedThreshKph,
                    s_cfg.silentMode, s_cfg.doutOn, s_cfg.phone1, s_cfg.phone2, s_cfg.phone3,
                    s_cfg.parkConfirmSec, s_cfg.resetEveryDays, s_cfg.resetAtHour,
                    s_cfg.configLocked, s_cfg.deviceEnabled, s_cfg.operateDays,
-                   s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn);
+                   s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn,
+                   s_cfg.lastMday);
     if (len <= 0) {
         CfgUnlock();
         return -1;
@@ -373,17 +377,4 @@ void CFG_SetDriver(const char *name, const char *license, int loggedIn)
     s_cfg.driverLoggedIn = loggedIn ? 1 : 0;
 }
 
-void CFG_BumpOperateDayIfNeeded(int today_mday)
-{
-    static int last_mday = -1;
-    if (today_mday < 1 || today_mday > 31) return;
-    if (last_mday == -1) {
-        last_mday = today_mday;
-        return;
-    }
-    if (today_mday != last_mday) {
-        s_cfg.operateDays++;
-        last_mday = today_mday;
-        CFG_Save();
-    }
-}
+

@@ -1,6 +1,0 @@
-E:/test/NASA-TRACKING-A7677S/out/A7677S_MANS_1606_V702_OPENSDK/CMakeFiles/userspace.dir
-E:/test/NASA-TRACKING-A7677S/out/A7677S_MANS_1606_V702_OPENSDK/CMakeFiles/edit_cache.dir
-E:/test/NASA-TRACKING-A7677S/out/A7677S_MANS_1606_V702_OPENSDK/CMakeFiles/rebuild_cache.dir
-E:/test/NASA-TRACKING-A7677S/out/A7677S_MANS_1606_V702_OPENSDK/sc_demo/CMakeFiles/sc_demo.dir
-E:/test/NASA-TRACKING-A7677S/out/A7677S_MANS_1606_V702_OPENSDK/sc_demo/CMakeFiles/edit_cache.dir
-E:/test/NASA-TRACKING-A7677S/out/A7677S_MANS_1606_V702_OPENSDK/sc_demo/CMakeFiles/rebuild_cache.dir

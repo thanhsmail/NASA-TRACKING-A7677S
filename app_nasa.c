@@ -37,7 +37,6 @@ static double      s_parkLat = 0.0;
 static double      s_parkLon = 0.0;
 static uint32_t    s_parkLastReportTick = 0;
 static int         s_parkDailyCount = 0;
-static int         s_lastOdomMday = -1;
 static int         s_parkStopPending = 0;
 static uint32_t    s_parkStopConfirmTick = 0;
 
@@ -149,16 +148,19 @@ static void MakeLoginCode(void)
 static void ResetDailyCountersIfNeeded(int today_mday)
 {
     if (today_mday < 1 || today_mday > 31) return;
-    if (s_lastOdomMday == -1) {
-        s_lastOdomMday = today_mday;
+    AppConfig_t *cfg = CFG_Get();
+    if (cfg->lastMday == 0) {
+        cfg->lastMday = today_mday;
+        CFG_Save();
         return;
     }
-    if (today_mday != s_lastOdomMday) {
+    if (today_mday != cfg->lastMday) {
         GPS_ResetOdometer();
         s_parkDailyCount = 0;
         s_messageIdNum = 1;
-        s_lastOdomMday = today_mday;
-        CFG_BumpOperateDayIfNeeded(today_mday);
+        cfg->operateDays++;
+        cfg->lastMday = today_mday;
+        CFG_Save();
     }
 }
 
@@ -438,7 +440,6 @@ static NasaState_t Handle_StateTracking(void)
 {
     static t_rtc rtc;
     static char dtBuf[40];
-    static uint32_t last_day_check_tick = 0;
 
     s_lastTrackingTick = GetTickNow();
 
@@ -462,28 +463,25 @@ static NasaState_t Handle_StateTracking(void)
             ReplayBurst();
         }
 
-        {
-            uint32_t nowTick = GetTickNow();
-            if ((nowTick - last_day_check_tick) >= (60 * SC_TICKS_PER_SECOND)) {
-                sAPI_GetRealTimeClock(&rtc);
-                if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100)
-                    ResetDailyCountersIfNeeded(rtc.tm_mday);
-                last_day_check_tick = nowTick;
+        sAPI_GetRealTimeClock(&rtc);
+        if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100) {
+            ResetDailyCountersIfNeeded(rtc.tm_mday);
 
-                /* Lịch reset cmd 32 */
-                if (CFG_Get()->resetEveryDays > 0 &&
-                    rtc.tm_hour == CFG_Get()->resetAtHour &&
-                    rtc.tm_min == 0) {
-                    static int lastResetDay = -1;
-                    if (lastResetDay != rtc.tm_mday) {
-                        lastResetDay = rtc.tm_mday;
-                        sAPI_SysReset();
-                    }
+            /* Lịch reset cmd 32 */
+            if (CFG_Get()->resetEveryDays > 0 &&
+                rtc.tm_hour == CFG_Get()->resetAtHour &&
+                rtc.tm_min == 0) {
+                static int lastResetDay = -1;
+                if (lastResetDay != rtc.tm_mday) {
+                    lastResetDay = rtc.tm_mday;
+                    sAPI_SysReset();
                 }
             }
+            (void)snprintf(dtBuf, sizeof(dtBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+                           rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
+        } else {
+            (void)snprintf(dtBuf, sizeof(dtBuf), "0000-00-00 00:00:00");
         }
-
-        BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
         {
             GpsSnapshot_t gpsTemp = {0};
             GPS_Snapshot(&gpsTemp);

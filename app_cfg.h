@@ -25,6 +25,7 @@ typedef struct {
     char     driverName[64];
     char     driverLicense[32];
     int      driverLoggedIn;
+    int      lastMday;          /* Ngày reset odometer gần nhất */
 } AppConfig_t;
 
 void CFG_Init(void);
@@ -67,6 +68,5 @@ void CFG_SetResetSchedule(int days, int hour);
 void CFG_SetLocked(int locked);
 void CFG_SetDeviceEnabled(int enabled);
 void CFG_SetDriver(const char *name, const char *license, int loggedIn);
-void CFG_BumpOperateDayIfNeeded(int today_mday);
 
 #endif /* APP_CFG_H */
