@@ -28,10 +28,22 @@ typedef struct {
     int      lastMday;          /* Ngày reset odometer gần nhất */
 } AppConfig_t;
 
+typedef struct {
+    char     imei[32];
+    char     serialNum[32];
+    char     hwVer[16];
+    char     fwVer[16];
+    char     activationCode[32];
+    uint32_t calibVoltageMv;
+} FactoryConfig_t;
+
 void CFG_Init(void);
 void CFG_Load(void);
 int  CFG_Save(void);
 void CFG_FactoryReset(void);
+
+FactoryConfig_t *CFG_GetFactory(void);
+int  CFG_SaveFactory(const FactoryConfig_t *fcfg);
 
 AppConfig_t *CFG_Get(void);
 

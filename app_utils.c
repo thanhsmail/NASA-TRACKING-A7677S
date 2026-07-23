@@ -2,6 +2,7 @@
 #include "simcom_common.h"
 #include "app_config.h"
 #include "app_utils.h"
+#include "app_gps.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,11 +93,14 @@ void BuildDateTimeAutoFallback(char *dateTime, uint32_t dateTimeSize)
     {
         (void)snprintf(dateTime, dateTimeSize, "%04d-%02d-%02d %02d:%02d:%02d",
                        rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
+        return;
     }
-    else
+    /* RTC chưa sync: lấy giờ từ GNSS (UTC + offset) */
+    if (GPS_FormatLocalDateTime(dateTime, dateTimeSize))
     {
-        (void)snprintf(dateTime, dateTimeSize, "0000-00-00 00:00:00");
+        return;
     }
+    (void)snprintf(dateTime, dateTimeSize, "0000-00-00 00:00:00");
 }
 
 /* Thực hiện một đợt sync NTP (tối đa NASA_NTP_MAX_ATTEMPTS lần thử) */

@@ -103,13 +103,17 @@ static void BuildTrackPayload(char *payload, size_t size, int msgCode,
                               const GpsSnapshot_t *gps, UINT8 csq,
                               uint32_t status, float voltage)
 {
+    /* Km tích lũy trong ngày là biến 2 byte (uint16_t), mỗi đơn vị tương ứng 10 mét (0.01 km) */
+    uint32_t odom10mCalc = (uint32_t)(gps->totalKm * 100.0 + 0.5);
+    uint16_t totalKm10m = (odom10mCalc > 65535) ? 65535 : (uint16_t)odom10mCalc;
+
     /* Nhiên liệu RS232 / xung / nhiệt độ: không lắp → 0 */
     (void)snprintf(payload, size,
-                   "!NASA,%d,%s,%s,%.6f,%.6f,%.0f,%lu,%u,%d,%.0f,%.0f,%.1f,0,0,0,",
+                   "!NASA,%d,%s,%s,%.6f,%.6f,%.0f,%lu,%u,%d,%u,%.0f,%.1f,0,0,0,",
                    msgCode, msgId, dateTime,
                    gps->lat, gps->lon, gps->speedKph,
                    (unsigned long)status, (unsigned)csq, gps->satellites,
-                   gps->totalKm, gps->headingDeg, (double)voltage);
+                   (unsigned int)totalKm10m, gps->headingDeg, (double)voltage);
 }
 
 static void BuildParkingFrame(char *out, size_t size, const char *msgId, const char *dateTime,
@@ -260,7 +264,13 @@ static int GetAdaptivePeriodSec(double speedKph, double headingDeg)
 static void FillBackupFromGps(BackupRecord_t *rec, const GpsSnapshot_t *gps,
                               const char *dateTime, UINT8 csq, uint32_t status, float voltage)
 {
+    char dtFixed[40];
     memset(rec, 0, sizeof(*rec));
+    if (dateTime == NULL || dateTime[0] == '\0' ||
+        strncmp(dateTime, "0000-00-00", 10) == 0) {
+        BuildDateTimeAutoFallback(dtFixed, sizeof(dtFixed));
+        dateTime = dtFixed;
+    }
     strncpy(rec->datetime, dateTime, sizeof(rec->datetime) - 1);
     rec->lat = gps->lat;
     rec->lon = gps->lon;
@@ -314,7 +324,9 @@ static int ReplayOneBackup(void)
     char msgId[16] = {0};
     GpsSnapshot_t gps;
 
-    if (!Backup_Pop(&rec)) return 0;
+    /* Peek trước — chỉ CommitPop sau khi gửi TCP thành công.
+     * Tránh mất bản ghi / đảo thứ tự khi Pop rồi Push lại cuối hàng đợi. */
+    if (!Backup_Peek(&rec)) return 0;
 
     memset(&gps, 0, sizeof(gps));
     gps.lat = rec.lat;
@@ -325,15 +337,20 @@ static int ReplayOneBackup(void)
     gps.headingDeg = rec.headingDeg;
     gps.valid = (rec.lat != 0.0 || rec.lon != 0.0);
 
+    if (rec.datetime[0] == '\0' || strncmp(rec.datetime, "0000-00-00", 10) == 0) {
+        BuildDateTimeAutoFallback(rec.datetime, sizeof(rec.datetime));
+    }
+
     (void)snprintf(msgId, sizeof(msgId), "%lu", (unsigned long)s_messageIdNum);
     BuildTrackPayload(payload, sizeof(payload), 7, msgId, rec.datetime, &gps,
                       rec.csq, rec.deviceStatus, rec.voltage);
     AppendChecksumAndEnd(frame, sizeof(frame), payload, 0);
 
+    sAPI_Debug("[NASA/Replay] %s", frame);
     if (NetworkSendFrame(frame) < 0) {
-        Backup_Push(&rec); /* đẩy lại nếu gửi lỗi */
-        return -1;
+        return -1; /* giữ nguyên hàng đợi, thử lại sau */
     }
+    Backup_CommitPop();
     s_messageIdNum++;
     return 1;
 }
@@ -477,11 +494,8 @@ static NasaState_t Handle_StateTracking(void)
                     sAPI_SysReset();
                 }
             }
-            (void)snprintf(dtBuf, sizeof(dtBuf), "%04d-%02d-%02d %02d:%02d:%02d",
-                           rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
-        } else {
-            (void)snprintf(dtBuf, sizeof(dtBuf), "0000-00-00 00:00:00");
         }
+        BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
         {
             GpsSnapshot_t gpsTemp = {0};
             GPS_Snapshot(&gpsTemp);

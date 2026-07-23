@@ -83,12 +83,15 @@
 #define NASA_BACKUP_FILE "C:/rv26_bak.dat"
 #define NASA_BACKUP_INTERVAL_SEC 10
 #define NASA_BACKUP_MAX_RECORDS 2000
-#define NASA_BACKUP_REPLAY_BURST 5
+#define NASA_BACKUP_REPLAY_BURST 5 
 
 /*
  * GPIO board RV26 trên A7677S — pad từ A7670C_MANS_LANS_GPIO.h (cùng họ
  * ASR1606). SC_MODULE_GPIO_00 chỉ có khi FEATURE_SIMCOM_NORI; dùng pad số cố
  * định. Đổi khi schematic PCB khác.
+ *
+ * Quan trọng: GPIO_05 (pad 120, pin19) dành riêng cho CS flash qua NPN C1815 —
+ * không được dùng chung với LED/DOUT.
  */
 #ifndef GPIO_LED_NET
 #define GPIO_LED_NET 80 /* SC_MODULE_GPIO_00 */
@@ -104,6 +107,27 @@
 #endif
 #ifndef GPIO_ACC_IN
 #define GPIO_ACC_IN 37 /* SC_MODULE_GPIO_10 */
+#endif
+
+/*
+ * SPI flash rời EN25QH64A trên A7677S MANS (SC_SPI_1606_PIN):
+ *  - SPI channel 1 = SSP0 data: pin11 CLK (pad16), pin13 MOSI (pad19), pin14 MISO (pad18)
+ *  - CS# Flash: GPIO_05 (pad 120, pin19) → NPN C1815 đảo logic
+ *      MCU HIGH → transistor dẫn → CS# = 0V (Active)
+ *      MCU LOW  → transistor ngắt → CS# kéo lên 3.3V (Inactive)
+ *  - Không dùng SSP0_CS (pin12/pad17) cho CS — schematic đấu GPIO riêng
+ */
+#ifndef FLASH_SPI_INDEX
+#define FLASH_SPI_INDEX 1
+#endif
+#ifndef FLASH_SPI_CS_PIN
+#define FLASH_SPI_CS_PIN 120 /* SC_MODULE_GPIO_05 / pin19 — lái CS# qua C1815 */
+#endif
+
+#if (GPIO_LED_PWR == FLASH_SPI_CS_PIN) || (GPIO_LED_NET == FLASH_SPI_CS_PIN) || \
+    (GPIO_LED_GNSS == FLASH_SPI_CS_PIN) || (GPIO_DOUT == FLASH_SPI_CS_PIN) || \
+    (GPIO_ACC_IN == FLASH_SPI_CS_PIN)
+#error "FLASH_SPI_CS_PIN xung đột với GPIO LED/DOUT/ACC — Flash CS phải chân riêng"
 #endif
 
 /* Bitmask trạng thái thiết bị (Protocol RV26 — bản tin 2/7) */

@@ -50,6 +50,10 @@ static void EnsureNonBlocking(void)
 
 int Network_ActivatePdp(INT32 pdp_id)
 {
+    sAPI_Debug("[Network] Deactivating PDP %d prior to activation...", (int)pdp_id);
+    (void)sAPI_TcpipPdpActive(pdp_id, 0); /* Hủy PDP context cũ kẹt do rớt sóng / tháo SIM */
+    sAPI_TaskSleep(100);
+
     sAPI_Debug("[Network] Activating PDP %d...", (int)pdp_id);
     if (sAPI_TcpipPdpActive(pdp_id, 1) == SC_TCPIP_SUCCESS) {
         sAPI_Debug("[Network] PDP OK");

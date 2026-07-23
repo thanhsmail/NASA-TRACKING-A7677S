@@ -107,6 +107,48 @@ static void ApplyKeyValue(const char *key, const char *val)
     }
 }
 
+#include "drv_en25qh64a.h"
+#include "app_utils.h"
+
+#define CFG_FLASH_MAGIC             0x4E415341 /* "NASA" */
+#define CFG_FLASH_SECTOR_PRIMARY    0          /* Address 0x000000 */
+#define CFG_FLASH_SECTOR_MIRROR     1          /* Address 0x001000 */
+
+typedef struct {
+    uint32_t        magic;
+    uint32_t        crc32;
+    uint32_t        version;
+    FactoryConfig_t factory;
+    AppConfig_t     config;
+} CfgFlashSector_t;
+
+static FactoryConfig_t s_factoryCfg;
+
+static void CFG_SetFactoryDefaults(void)
+{
+    memset(&s_factoryCfg, 0, sizeof(s_factoryCfg));
+    strncpy(s_factoryCfg.imei, "UNKNOWN_IMEI", sizeof(s_factoryCfg.imei) - 1);
+    strncpy(s_factoryCfg.serialNum, "NASA-7677S-0001", sizeof(s_factoryCfg.serialNum) - 1);
+    strncpy(s_factoryCfg.hwVer, NASA_HW_CODE, sizeof(s_factoryCfg.hwVer) - 1);
+    strncpy(s_factoryCfg.fwVer, NASA_FW_CODE, sizeof(s_factoryCfg.fwVer) - 1);
+    strncpy(s_factoryCfg.activationCode, "000000", sizeof(s_factoryCfg.activationCode) - 1);
+    s_factoryCfg.calibVoltageMv = 1000;
+}
+
+FactoryConfig_t *CFG_GetFactory(void)
+{
+    return &s_factoryCfg;
+}
+
+int CFG_SaveFactory(const FactoryConfig_t *fcfg)
+{
+    if (!fcfg) return -1;
+    CfgLock();
+    memcpy(&s_factoryCfg, fcfg, sizeof(s_factoryCfg));
+    CfgUnlock();
+    return CFG_Save();
+}
+
 void CFG_Init(void)
 {
     if (s_cfgMutex == NULL) {
@@ -119,9 +161,47 @@ void CFG_Init(void)
 void CFG_Load(void)
 {
     CfgLock();
+    CFG_SetFactoryDefaults();
+
+    /* 1. Thử đọc từ SPI Flash Sector 0 (Primary) và Sector 1 (Mirror) */
+    CfgFlashSector_t flashSec;
+    int primaryOk = 0, mirrorOk = 0;
+
+    if (EN25_Read(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
+        if (flashSec.magic == CFG_FLASH_MAGIC) {
+            uint32_t crcCalc = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
+            if (crcCalc == flashSec.crc32) {
+                primaryOk = 1;
+                memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
+                memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
+                sAPI_Debug("[CFG] Loaded from SPI Flash Sector 0 (Primary) OK");
+            }
+        }
+    }
+
+    if (!primaryOk) {
+        if (EN25_Read(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
+            if (flashSec.magic == CFG_FLASH_MAGIC) {
+                uint32_t crcCalc = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
+                if (crcCalc == flashSec.crc32) {
+                    mirrorOk = 1;
+                    memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
+                    memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
+                    sAPI_Debug("[CFG] Loaded from SPI Flash Sector 1 (Mirror Backup) OK");
+                }
+            }
+        }
+    }
+
+    if (primaryOk || mirrorOk) {
+        CfgUnlock();
+        return;
+    }
+
+    /* 2. Fallback: Đọc từ file hệ thống EFS nếu Flash chưa ghi hoặc lỗi CRC */
     SCFILE *fp = sAPI_fopen(NASA_CFG_FILE, "rb");
     if (!fp) {
-        sAPI_Debug("[CFG] No config file, using defaults");
+        sAPI_Debug("[CFG] No config file or Flash config, using defaults");
         CfgUnlock();
         return;
     }
@@ -175,7 +255,7 @@ void CFG_Load(void)
 
         lineStart = next;
     }
-    sAPI_Debug("[CFG] Loaded host=%s port=%d plate=%s", s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate);
+    sAPI_Debug("[CFG] Loaded from EFS file host=%s port=%d plate=%s", s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate);
     CfgUnlock();
 }
 
@@ -186,6 +266,24 @@ int CFG_Save(void)
     SCFILE *fp;
 
     CfgLock();
+
+    /* 1. Đóng gói và Ghi lên SPI Flash Sector 0 (Primary) và Sector 1 (Mirror) */
+    CfgFlashSector_t flashSec;
+    memset(&flashSec, 0, sizeof(flashSec));
+    flashSec.magic = CFG_FLASH_MAGIC;
+    flashSec.version = 1;
+    memcpy(&flashSec.factory, &s_factoryCfg, sizeof(FactoryConfig_t));
+    memcpy(&flashSec.config, &s_cfg, sizeof(AppConfig_t));
+    flashSec.crc32 = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
+
+    if (EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE) == 0) {
+        EN25_Write(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE, (const uint8_t *)&flashSec, sizeof(flashSec));
+    }
+    if (EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE) == 0) {
+        EN25_Write(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE, (const uint8_t *)&flashSec, sizeof(flashSec));
+    }
+
+    /* 2. Lưu đồng thời vào EFS File để tương thích ngược */
     len = snprintf(buf, sizeof(buf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
@@ -197,21 +295,16 @@ int CFG_Save(void)
                    s_cfg.configLocked, s_cfg.deviceEnabled, s_cfg.operateDays,
                    s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn,
                    s_cfg.lastMday);
-    if (len <= 0) {
-        CfgUnlock();
-        return -1;
+    if (len > 0) {
+        sAPI_remove(NASA_CFG_FILE);
+        fp = sAPI_fopen(NASA_CFG_FILE, "wb");
+        if (fp) {
+            sAPI_fwrite(buf, 1, (size_t)len, fp);
+            sAPI_fclose(fp);
+        }
     }
 
-    sAPI_remove(NASA_CFG_FILE);
-    fp = sAPI_fopen(NASA_CFG_FILE, "wb");
-    if (!fp) {
-        sAPI_Debug("[CFG] Save open failed");
-        CfgUnlock();
-        return -1;
-    }
-    sAPI_fwrite(buf, 1, (size_t)len, fp);
-    sAPI_fclose(fp);
-    sAPI_Debug("[CFG] Saved OK");
+    sAPI_Debug("[CFG] Saved to SPI Flash & EFS File OK");
     CfgUnlock();
     return 0;
 }
@@ -220,7 +313,10 @@ void CFG_FactoryReset(void)
 {
     CfgLock();
     CFG_SetDefaults();
+    CFG_SetFactoryDefaults();
     sAPI_remove(NASA_CFG_FILE);
+    EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE);
+    EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE);
     CfgUnlock();
     CFG_Save();
 }

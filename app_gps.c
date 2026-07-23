@@ -5,6 +5,7 @@
 #include "app_utils.h"
 #include "app_gps.h"
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,125 @@ static uint32_t s_gpsLossStartTick = 0;
 static SCsysTime_t s_lastGnssTime = {0};
 static uint32_t s_lastGnssTimeTick = 0;
 static int s_hasGnssTime = 0;
+
+static int DaysInMonth(int year, int mon)
+{
+    static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int d;
+    if (mon < 1 || mon > 12) return 30;
+    d = days[mon - 1];
+    if (mon == 2) {
+        int leap = ((year % 4) == 0 && ((year % 100) != 0 || (year % 400) == 0));
+        if (leap) d = 29;
+    }
+    return d;
+}
+
+static void AddSecondsToSysTime(SCsysTime_t *t, int32_t sec)
+{
+    int64_t total;
+    int dim;
+    if (t == NULL) return;
+    total = (int64_t)t->tm_sec + (int64_t)sec;
+    while (total < 0) {
+        total += 60;
+        t->tm_min--;
+        if (t->tm_min < 0) {
+            t->tm_min += 60;
+            t->tm_hour--;
+            if (t->tm_hour < 0) {
+                t->tm_hour += 24;
+                t->tm_mday--;
+                if (t->tm_mday < 1) {
+                    t->tm_mon--;
+                    if (t->tm_mon < 1) {
+                        t->tm_mon = 12;
+                        t->tm_year--;
+                    }
+                    t->tm_mday = DaysInMonth(t->tm_year, t->tm_mon);
+                }
+            }
+        }
+    }
+    t->tm_sec = (int)(total % 60);
+    t->tm_min += (int)(total / 60);
+    while (t->tm_min >= 60) {
+        t->tm_min -= 60;
+        t->tm_hour++;
+    }
+    while (t->tm_hour >= 24) {
+        t->tm_hour -= 24;
+        t->tm_mday++;
+        dim = DaysInMonth(t->tm_year, t->tm_mon);
+        if (t->tm_mday > dim) {
+            t->tm_mday = 1;
+            t->tm_mon++;
+            if (t->tm_mon > 12) {
+                t->tm_mon = 1;
+                t->tm_year++;
+            }
+        }
+    }
+}
+
+static void MaybeSyncRtcFromGnss(const SCsysTime_t *utc)
+{
+    t_rtc rtc;
+    SCsysTime_t local;
+    if (utc == NULL || utc->tm_year < 2020 || utc->tm_year > 2100) return;
+
+    sAPI_GetRealTimeClock(&rtc);
+    if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100) return;
+
+    local = *utc;
+    AddSecondsToSysTime(&local, (int32_t)NASA_GNSS_UTC_OFFSET_HOURS * 3600);
+    memset(&rtc, 0, sizeof(rtc));
+    rtc.tm_year = local.tm_year;
+    rtc.tm_mon = local.tm_mon;
+    rtc.tm_mday = local.tm_mday;
+    rtc.tm_hour = local.tm_hour;
+    rtc.tm_min = local.tm_min;
+    rtc.tm_sec = local.tm_sec;
+    (void)sAPI_SetRealTimeClock(&rtc);
+    sAPI_Debug("[GNSS] RTC synced from GNSS: %04d-%02d-%02d %02d:%02d:%02d",
+               rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
+}
+
+static void StoreGnssUtcTime(const SCsysTime_t *utc)
+{
+    if (utc == NULL || utc->tm_year < 2020 || utc->tm_year > 2100) return;
+    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    s_lastGnssTime = *utc;
+    s_hasGnssTime = 1;
+    s_lastGnssTimeTick = GetTickNow();
+    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    MaybeSyncRtcFromGnss(utc);
+}
+
+int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize)
+{
+    SCsysTime_t local;
+    uint32_t ageSec;
+    uint32_t now;
+    if ((dateTime == NULL) || (dateTimeSize == 0)) return 0;
+    if (!s_hasGnssTime) return 0;
+
+    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    local = s_lastGnssTime;
+    now = GetTickNow();
+    ageSec = (now >= s_lastGnssTimeTick)
+                 ? ((now - s_lastGnssTimeTick) / (uint32_t)SC_TICKS_PER_SECOND)
+                 : 0;
+    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+
+    AddSecondsToSysTime(&local, (int32_t)NASA_GNSS_UTC_OFFSET_HOURS * 3600 + (int32_t)ageSec);
+    if (local.tm_year < 2020 || local.tm_year > 2100) return 0;
+
+    (void)snprintf(dateTime, dateTimeSize, "%04d-%02d-%02d %02d:%02d:%02d",
+                   local.tm_year, local.tm_mon, local.tm_mday,
+                   local.tm_hour, local.tm_min, local.tm_sec);
+    return 1;
+}
 
 /* Chống nhiễu vị trí khi xe đỗ: chỉ coi là di chuyển khi tốc độ vượt ngưỡng
  * đủ lâu (FilterMovingStatus); khi đứng yên thì neo toạ độ tại điểm dừng và
@@ -315,36 +435,34 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
     double speedRaw = strtod(fields[7], NULL) * KNOTS_TO_KMH;
     int isMoving = FilterMovingStatus(speedRaw, latDec, lonDec);
 
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
-    if (!ParseDateTimeFromUrcTokens(fields[4], fields[5], &s_lastGnssTime))
     {
+        SCsysTime_t utc = {0};
+        if (!ParseDateTimeFromUrcTokens(fields[4], fields[5], &utc))
+            return 0;
+
+        if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+        s_lastLat = latDec;
+        s_lastLon = lonDec;
+        if (isMoving) {
+            s_lastSpeedKph = speedRaw;
+            s_lastHeadingDeg = (nf > 8) ? strtod(fields[8], NULL) : 0.0;
+        } else {
+            s_lastSpeedKph = 0.0;
+        }
+        s_lastSatellites = (nf > 9) ? atoi(fields[9]) : 0;
+
+        if (s_lastSatellites < 5) {
+            s_lastLat = 0.0;
+            s_lastLon = 0.0;
+        }
+
+        ApplyStationaryAnchor(isMoving);
+        UpdateOdometer(s_lastLat, s_lastLon);
+        s_lastFixTick = GetTickNow();
         if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
-        return 0;
+
+        StoreGnssUtcTime(&utc);
     }
-
-    s_lastLat = latDec;
-    s_lastLon = lonDec;
-    if (isMoving) {
-        s_lastSpeedKph = speedRaw;
-        s_lastHeadingDeg = (nf > 8) ? strtod(fields[8], NULL) : 0.0;
-    } else {
-        s_lastSpeedKph = 0.0;
-    }
-    s_lastSatellites = (nf > 9) ? atoi(fields[9]) : 0;
-
-    if (s_lastSatellites < 5) {
-        s_lastLat = 0.0;
-        s_lastLon = 0.0;
-    }
-
-    ApplyStationaryAnchor(isMoving);
-    UpdateOdometer(s_lastLat, s_lastLon);
-    s_hasGnssTime = 1;
-    uint32_t now = GetTickNow();
-    s_lastGnssTimeTick = now;
-    s_lastFixTick = now;
-
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
 
     sAPI_Debug("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d", s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites);
     return 1;
@@ -409,7 +527,6 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
         s_lastSpeedKph = 0.0;
     }
 
-    s_hasGnssTime = 1;
     s_lastFixTick = GetTickNow();
     if (s_lastSatellites < 5) s_lastLat = s_lastLon = 0.0;
 
@@ -417,6 +534,13 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     UpdateOdometer(s_lastLat, s_lastLon);
 
     if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+
+    /* date/UTC time nằm ngay sau E/W: ns_idx+3, ns_idx+4 */
+    if (ns_idx + 4 < nf && fields[ns_idx + 3][0] != '\0' && fields[ns_idx + 4][0] != '\0') {
+        SCsysTime_t utc = {0};
+        if (ParseDateTimeFromUrcTokens(fields[ns_idx + 3], fields[ns_idx + 4], &utc))
+            StoreGnssUtcTime(&utc);
+    }
     return 1;
 }
 
@@ -484,18 +608,19 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
 {
     if (gpsUrc == NULL) return;
 
-    if (TryParseCgnssInfoUrc(gpsUrc)) return;
-    if (TryParseCgpsInfoUrc(gpsUrc)) return;
-
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
-    if (TryParseGnssDateTimeFromUrc(gpsUrc, &s_lastGnssTime))
-    {
-        s_hasGnssTime = 1;
-        s_lastGnssTimeTick = GetTickNow();
-        if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    if (TryParseCgnssInfoUrc(gpsUrc) || TryParseCgpsInfoUrc(gpsUrc)) {
+        SCsysTime_t utc = {0};
+        /* Bổ sung parse date/time nếu parser fix chưa lấy được */
+        if (!s_hasGnssTime && TryParseGnssDateTimeFromUrc(gpsUrc, &utc))
+            StoreGnssUtcTime(&utc);
         return;
     }
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+
+    {
+        SCsysTime_t utc = {0};
+        if (TryParseGnssDateTimeFromUrc(gpsUrc, &utc))
+            StoreGnssUtcTime(&utc);
+    }
 
     double nums[5];
     int n = 0;

@@ -14,6 +14,7 @@
 #include "simcom_api.h"
 #include "simcom_common.h"
 
+#include "drv_en25qh64a.h"
 #include "app_config.h"
 #include "app_utils.h"
 #include "app_gps.h"
@@ -143,11 +144,14 @@ static void sTask_GpioStatusIndication(void *argv)
 
     sAPI_GpioConfig(GPIO_LED_GNSS, outputConfig);
     sAPI_GpioConfig(GPIO_LED_NET, outputConfig);
-    sAPI_GpioConfig(GPIO_LED_PWR, outputConfig);
+    /* GPIO_05 (FLASH_SPI_CS_PIN) dành cho CS flash — không config/ghi đè tại đây */
+    if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) {
+        sAPI_GpioConfig(GPIO_LED_PWR, outputConfig);
+        sAPI_GpioSetValue(GPIO_LED_PWR, 1);
+    }
     sAPI_GpioConfig(GPIO_DOUT, outputConfig);
     sAPI_GpioConfig(GPIO_ACC_IN, inputConfig);
     sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
-    sAPI_GpioSetValue(GPIO_LED_PWR, 1);
 
     while (1) {
         int silent = CFG_GetSilentMode();
@@ -189,7 +193,7 @@ static void sTask_GpioStatusIndication(void *argv)
         if (silent) {
             sAPI_GpioSetValue(GPIO_LED_GNSS, 0);
             sAPI_GpioSetValue(GPIO_LED_NET, 0);
-            sAPI_GpioSetValue(GPIO_LED_PWR, 0);
+            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) sAPI_GpioSetValue(GPIO_LED_PWR, 0);
         } else {
             int sats = GPS_GetSatellitesCount();
             int gpsOk = (sats >= 5);
@@ -204,7 +208,7 @@ static void sTask_GpioStatusIndication(void *argv)
                 sAPI_GpioSetValue(GPIO_LED_NET, 0);
             }
 
-            sAPI_GpioSetValue(GPIO_LED_PWR, 1);
+            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) sAPI_GpioSetValue(GPIO_LED_PWR, 1);
         }
 
         sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
@@ -223,6 +227,7 @@ void userSpace_Main(void *arg)
     sAPI_TaskSleep(APP_STARTUP_DELAY_SEC * SC_TICKS_PER_SECOND);
     sAPI_Debug("==== NASA FW %s HW %s BUILD_MARK=260718a A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 
+    EN25_Init();
     CFG_Init();
     SMS_Init();
 

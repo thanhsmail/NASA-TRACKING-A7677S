@@ -218,6 +218,7 @@ if(NOT DEFINED MODULE_LIST)
         if(CONFIG_SIMCOM_PROTOCOL_V1)
             SET(app_src
                 sc_application.c
+                drv_en25qh64a.c
                 app_nasa.c
                 app_network.c
                 app_gps.c

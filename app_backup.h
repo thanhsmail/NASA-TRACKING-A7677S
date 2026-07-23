@@ -22,7 +22,9 @@ typedef struct {
 
 void Backup_Init(void);
 void Backup_Push(const BackupRecord_t *rec);
-int  Backup_Pop(BackupRecord_t *out);      /* lấy bản ghi cũ nhất chưa gửi */
+int  Backup_Pop(BackupRecord_t *out);      /* lấy + xoá bản ghi cũ nhất (legacy) */
+int  Backup_Peek(BackupRecord_t *out);     /* đọc bản ghi cũ nhất, KHÔNG xoá */
+int  Backup_CommitPop(void);               /* xoá bản ghi đầu sau khi gửi OK */
 int  Backup_Count(void);
 void Backup_Clear(void);
 void Backup_Flush(void);
