@@ -7,6 +7,7 @@
 #include "app_cmd.h"
 #include "app_network.h"
 #include "app_backup.h"
+#include "drv_en25qh64a.h"
 #include "app_nasa.h"
 #include <string.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@ static char s_loginCode[16] = "0";
 static char s_devImei[32] = {0};
 static char s_devIccid[32] = {0};
 static char s_serverLastPacket[40] = {0};
+static uint32_t s_lastWatchdogFeedTick = 0;
 
 static int         s_isParkStopped = 0;
 static uint32_t    s_parkStartTick = 0;
@@ -76,7 +78,7 @@ float NASA_GetVoltage(void)
 static int IsAccOn(void)
 {
     int mode = CFG_GetAccMode();
-    int bySpeed = (GPS_GetLastSpeedKph() >= (double)CFG_GetSpeedThresh()) ? 1 : 0;
+    int bySpeed = GPS_IsMoving();
     int byWire = s_accRaw ? 1 : 0; /* Chân ACC active-low; s_accRaw đã là trạng thái logic ON/OFF */
 
     if (mode == 0) return bySpeed;
@@ -86,7 +88,8 @@ static int IsAccOn(void)
 
 static uint32_t BuildDeviceStatus(const GpsSnapshot_t *gps, float voltage)
 {
-    uint32_t st = ST_FLASH_OK;
+    uint32_t st = 0;
+    if (EN25_IsReady()) st |= ST_FLASH_OK;
     if (gps && gps->valid) st |= ST_GPS;
     if (IsAccOn()) st |= ST_ACC;
     if (CFG_IsDriverLoggedIn()) st |= ST_DRIVER;
@@ -109,7 +112,7 @@ static void AppendChecksumAndEnd(char *out, size_t size, const char *payload, in
 
 static void BuildLoginFrame(char *out, size_t size, const char *msgId, const char *dateTime)
 {
-    char payload[320] = {0};
+    static char payload[320];
     (void)snprintf(payload, sizeof(payload),
                    "!NASA,1,%s,%s,%s,%s,%s,%s,%s,%s,%s",
                    msgId, dateTime, s_devImei, s_devIccid,
@@ -140,7 +143,7 @@ static void BuildParkingFrame(char *out, size_t size, const char *msgId, const c
                               int msgType, const char *endDateTime,
                               double lat, double lon, uint32_t stopSec, int dailyCount)
 {
-    char payload[360] = {0};
+    static char payload[360];
     const char *endStr = (endDateTime != NULL) ? endDateTime : "";
     (void)snprintf(payload, sizeof(payload),
                    "!NASA,6,%s,%s,%s,%s,%s,%d,%s,%.6f,%.6f,%lu,%d,",
@@ -253,7 +256,6 @@ static void WorkStartSession(const char *dateTime, double lat, double lon, int c
     s_workLastReportTick = now;
     s_workLastAccumTick = now;
     CFG_SetDriver(CFG_GetDriverName(), CFG_GetDriverLicense(), 1);
-    CFG_Save();
     NASA_WorkSend(1, dateTime, lat, lon);
 }
 
@@ -267,14 +269,13 @@ static void WorkEndSession(const char *dateTime, double lat, double lon)
     s_workLoginTick = 0;
     s_lxltCounted4h = 0;
     CFG_SetDriver(CFG_GetDriverName(), CFG_GetDriverLicense(), 0);
-    CFG_Save();
 }
 
 static void NASA_WorkUpdate(const char *dateTime, double lat, double lon, double speed)
 {
+    (void)speed;
     uint32_t nowTick = GetTickNow();
-    int thresh = CFG_GetSpeedThresh();
-    int moving = (speed > (double)thresh) ? 1 : 0;
+    int moving = GPS_IsMoving();
     int lxltMin;
 
     WorkAccumDriveTime(nowTick);
@@ -295,13 +296,15 @@ static void NASA_WorkUpdate(const char *dateTime, double lat, double lon, double
                 WorkEndSession(dateTime, lat, lon);
             }
         } else {
-            /* Tiếp tục LXLT nếu dừng < 15 phút — không gửi lại 5-1 */
+            /* Đang di chuyển: reset cờ s_workStopPending */
             s_workStopPending = 0;
-            if ((nowTick - s_workLastReportTick) >=
-                (uint32_t)WORK_PERIODIC_SEC * (uint32_t)SC_TICKS_PER_SECOND) {
-                s_workLastReportTick = nowTick;
-                NASA_WorkSend(2, dateTime, lat, lon);
-            }
+        }
+
+        /* Gửi bản tin 5-2 định kỳ mỗi WORK_PERIODIC_SEC (60s) khi phiên s_workActive còn mở (kể cả khi đỗ) */
+        if (s_workActive && (nowTick - s_workLastReportTick) >=
+            (uint32_t)WORK_PERIODIC_SEC * (uint32_t)SC_TICKS_PER_SECOND) {
+            s_workLastReportTick = nowTick;
+            NASA_WorkSend(2, dateTime, lat, lon);
         }
     } else {
         /* Cạnh dừng→chạy: bắt đầu chuyến mới (5-1) với tên mặc định/CFG */
@@ -344,6 +347,7 @@ static void ResetDailyCountersIfNeeded(int today_mday)
         s_driveMinToday = 0;
         s_driveAccumSecToday = 0;
         s_lxltOver4hCount = 0;
+        s_workOdomStartKm = 0.0;
         s_messageIdNum = 1;
         cfg->operateDays++;
         cfg->lastMday = today_mday;
@@ -359,7 +363,7 @@ static int NetworkSendFrame(const char *frame)
 
 static void NASA_ParkSendFrame6(int msgType, const char *dateTime)
 {
-    char frame[400] = {0};
+    static char frame[400];
     char msgIdStr[16] = {0};
     uint32_t stopSec = 0;
 
@@ -378,13 +382,15 @@ static void NASA_ParkSendFrame6(int msgType, const char *dateTime)
 
 static void NASA_ParkUpdate(const char *dateTime, double lat, double lon, double speed)
 {
+    (void)speed;
     uint32_t nowTick = GetTickNow();
-    int thresh = CFG_GetSpeedThresh();
-    int parkNeed = CFG_GetParkConfirmSec();
-    if (parkNeed <= 0) parkNeed = PARK_STOP_CONFIRM_SEC;
+    int moving = GPS_IsMoving();
+    int parkConfirmSec = STOPPED_CONFIRM_SEC; /* 10s xác nhận dừng đỗ (khớp GPS filter) */
+    int parkPeriodSec = CFG_GetParkConfirmSec(); /* Config cmd 26: chu kỳ báo 6-2 (mặc định 60s) */
+    if (parkPeriodSec <= 0) parkPeriodSec = PARK_REPORT_PERIOD_SEC_DEFAULT;
 
     if (!s_isParkStopped) {
-        if (speed <= (double)thresh) {
+        if (!moving) {
             if (!s_parkStopPending) {
                 s_parkStopPending = 1;
                 s_parkStopConfirmTick = nowTick;
@@ -396,7 +402,7 @@ static void NASA_ParkUpdate(const char *dateTime, double lat, double lon, double
                     s_parkLat = lat;
                     s_parkLon = lon;
                 }
-                if ((nowTick - s_parkStopConfirmTick) >= (uint32_t)(parkNeed * SC_TICKS_PER_SECOND)) {
+                if ((nowTick - s_parkStopConfirmTick) >= (uint32_t)(parkConfirmSec * SC_TICKS_PER_SECOND)) {
                     s_isParkStopped = 1;
                     s_parkStopPending = 0;
                     s_parkStartTick = s_parkStopConfirmTick;
@@ -409,14 +415,14 @@ static void NASA_ParkUpdate(const char *dateTime, double lat, double lon, double
             s_parkStopPending = 0;
         }
     } else {
-        if (speed > (double)thresh) {
+        if (moving) {
             NASA_ParkSendFrame6(3, dateTime);
             s_isParkStopped = 0;
             s_parkStartTick = 0;
             s_trackingImmediateSend = 1;
             s_immediateMsgType = 2;
         } else if ((nowTick - s_parkLastReportTick) >=
-                   (uint32_t)(PARK_REPORT_PERIOD_SEC_DEFAULT * SC_TICKS_PER_SECOND)) {
+                   (uint32_t)(parkPeriodSec * SC_TICKS_PER_SECOND)) {
             s_parkLastReportTick = nowTick;
             NASA_ParkSendFrame6(2, dateTime);
         }
@@ -468,8 +474,8 @@ static void FillBackupFromGps(BackupRecord_t *rec, const GpsSnapshot_t *gps,
 
 static int SendTrackOrBackup(int msgCode, const char *dateTime, UINT8 csq)
 {
-    char frame[360] = {0};
-    char payload[320] = {0};
+    static char frame[360];
+    static char payload[320];
     char msgId[16] = {0};
     GpsSnapshot_t gps = {0};
     float voltage = NASA_GetVoltage();
@@ -568,6 +574,7 @@ void NASA_OnServerProtocolLine(const char *line)
         }
         if (n >= 4) {
             strncpy(s_serverLastPacket, fields[3], sizeof(s_serverLastPacket) - 1);
+            s_serverLastPacket[sizeof(s_serverLastPacket) - 1] = '\0';
         }
         s_loginAcked = 1;
         sAPI_Debug("[NASA] Login ACK OK lastPacket=%s", s_serverLastPacket);
@@ -619,6 +626,7 @@ static NasaState_t Handle_StateLogin(void)
 
     startTick = GetTickNow();
     while (!s_loginAcked) {
+        NASA_FeedWatchdog();
         if (Network_RecvPoll() != 0) return STATE_ERROR_RETRY;
         if ((GetTickNow() - startTick) >= timeoutTicks) {
             sAPI_Debug("[NASA/Login] ACK timeout");
@@ -638,96 +646,94 @@ static NasaState_t Handle_StateLogin(void)
 
 static NasaState_t Handle_StateTracking(void)
 {
-    static t_rtc rtc;
-    static char dtBuf[40];
+    t_rtc rtc;
+    char dtBuf[40];
 
-    s_lastTrackingTick = GetTickNow();
+    sAPI_TaskSleep(TASK_BASE_SLEEP_TICKS);
 
-    for (;;) {
-        sAPI_TaskSleep(TASK_BASE_SLEEP_TICKS);
+    if (!CFG_IsDeviceEnabled()) {
+        Network_Disconnect();
+        return STATE_INIT;
+    }
 
-        if (!CFG_IsDeviceEnabled()) {
-            Network_Disconnect();
-            return STATE_INIT;
-        }
+    if (Network_RecvPoll() != 0) {
+        s_loginAcked = 0;
+        return STATE_ERROR_RETRY;
+    }
 
-        if (Network_RecvPoll() != 0) {
-            s_loginAcked = 0;
-            return STATE_ERROR_RETRY;
-        }
+    if (s_requestReplayAll) {
+        s_requestReplayAll = 0;
+        ReplayBurst();
+    } else if (Backup_Count() > 0) {
+        ReplayBurst();
+    }
 
-        if (s_requestReplayAll) {
-            s_requestReplayAll = 0;
-            ReplayBurst();
-        } else if (Backup_Count() > 0) {
-            ReplayBurst();
-        }
+    sAPI_GetRealTimeClock(&rtc);
+    if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100) {
+        ResetDailyCountersIfNeeded(rtc.tm_mday);
 
-        sAPI_GetRealTimeClock(&rtc);
-        if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100) {
-            ResetDailyCountersIfNeeded(rtc.tm_mday);
-
-            /* Lịch reset cmd 32 */
-            if (CFG_Get()->resetEveryDays > 0 &&
-                rtc.tm_hour == CFG_Get()->resetAtHour &&
-                rtc.tm_min == 0) {
-                static int lastResetDay = -1;
-                if (lastResetDay != rtc.tm_mday) {
-                    lastResetDay = rtc.tm_mday;
-                    sAPI_SysReset();
-                }
+        /* Lịch reset cmd 32 */
+        if (CFG_Get()->resetEveryDays > 0 &&
+            rtc.tm_hour == CFG_Get()->resetAtHour &&
+            rtc.tm_min == 0) {
+            static int lastResetDay = -1;
+            if (lastResetDay != rtc.tm_mday) {
+                lastResetDay = rtc.tm_mday;
+                sAPI_SysReset();
             }
         }
-        BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
+    }
+    BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
+    {
+        GpsSnapshot_t gpsTemp = {0};
+        GPS_Snapshot(&gpsTemp);
+        NASA_ParkUpdate(dtBuf, gpsTemp.lat, gpsTemp.lon, gpsTemp.speedKph);
+        NASA_WorkUpdate(dtBuf, gpsTemp.lat, gpsTemp.lon, gpsTemp.speedKph);
+
         {
-            GpsSnapshot_t gpsTemp = {0};
-            GPS_Snapshot(&gpsTemp);
-            NASA_ParkUpdate(dtBuf, gpsTemp.lat, gpsTemp.lon, gpsTemp.speedKph);
-            NASA_WorkUpdate(dtBuf, gpsTemp.lat, gpsTemp.lon, gpsTemp.speedKph);
+            int accOn = IsAccOn();
+            if (s_prevAccOn != accOn) {
+                s_prevAccOn = accOn;
+                s_trackingImmediateSend = 1;
+                s_immediateMsgType = 2;
+            }
 
             {
-                int accOn = IsAccOn();
-                if (s_prevAccOn != accOn) {
-                    s_prevAccOn = accOn;
-                    s_trackingImmediateSend = 1;
+                int periodSec;
+                uint32_t nowTick = GetTickNow();
+                uint32_t periodTicks;
+
+                if (!accOn) periodSec = CFG_GetPeriodStopped();
+                else periodSec = GetAdaptivePeriodSec(gpsTemp.speedKph, gpsTemp.headingDeg);
+
+                periodTicks = (uint32_t)periodSec * (uint32_t)SC_TICKS_PER_SECOND;
+
+                if (s_trackingImmediateSend || (nowTick - s_lastTrackingTick) >= periodTicks) {
+                    UINT8 csq = 0;
+                    int msg = s_immediateMsgType;
+                    sAPI_NetworkGetCsq(&csq);
+                    s_trackingImmediateSend = 0;
                     s_immediateMsgType = 2;
-                }
-
-                {
-                    int periodSec;
-                    uint32_t nowTick = GetTickNow();
-                    uint32_t periodTicks;
-
-                    if (!accOn) periodSec = CFG_GetPeriodStopped();
-                    else periodSec = GetAdaptivePeriodSec(gpsTemp.speedKph, gpsTemp.headingDeg);
-
-                    periodTicks = (uint32_t)periodSec * (uint32_t)SC_TICKS_PER_SECOND;
-
-                    if (s_trackingImmediateSend || (nowTick - s_lastTrackingTick) >= periodTicks) {
+                    if (SendTrackOrBackup(msg, dtBuf, csq) < 0)
+                        return STATE_ERROR_RETRY;
+                    s_lastTrackingTick = nowTick;
+                } else {
+                    /* Chỉ ghi backup khi thực sự mất mạng/chưa nhận ACK login */
+                    if (!Network_IsConnected() || !s_loginAcked) {
                         UINT8 csq = 0;
-                        int msg = s_immediateMsgType;
+                        float voltage = NASA_GetVoltage();
+                        uint32_t status = BuildDeviceStatus(&gpsTemp, voltage);
+                        BackupRecord_t bak;
                         sAPI_NetworkGetCsq(&csq);
-                        s_trackingImmediateSend = 0;
-                        s_immediateMsgType = 2;
-                        if (SendTrackOrBackup(msg, dtBuf, csq) < 0)
-                            return STATE_ERROR_RETRY;
-                        s_lastTrackingTick = nowTick;
-                    } else {
-                        /* Chỉ ghi backup khi thực sự mất mạng/chưa nhận ACK login */
-                        if (!Network_IsConnected() || !s_loginAcked) {
-                            UINT8 csq = 0;
-                            float voltage = NASA_GetVoltage();
-                            uint32_t status = BuildDeviceStatus(&gpsTemp, voltage);
-                            BackupRecord_t bak;
-                            sAPI_NetworkGetCsq(&csq);
-                            FillBackupFromGps(&bak, &gpsTemp, dtBuf, csq, status, voltage);
-                            Backup_OnTick(&bak, nowTick);
-                        }
+                        FillBackupFromGps(&bak, &gpsTemp, dtBuf, csq, status, voltage);
+                        Backup_OnTick(&bak, nowTick);
                     }
                 }
             }
         }
     }
+
+    return STATE_TRACKING;
 }
 
 void NASA_Init(void)
@@ -753,10 +759,27 @@ void NASA_Init(void)
         strncpy(s_devIccid, "UNKNOWN_SIM", sizeof(s_devIccid) - 1);
 
     sAPI_Debug("[NASA] Init IMEI=%s ICCID=%s reset=%s", s_devImei, s_devIccid, s_resetReason);
+    NASA_FeedWatchdog();
+}
+
+void NASA_FeedWatchdog(void)
+{
+    s_lastWatchdogFeedTick = GetTickNow();
+}
+
+int NASA_IsWatchdogTimeout(void)
+{
+    uint32_t now = GetTickNow();
+    if (s_lastWatchdogFeedTick == 0) return 0;
+    if (now >= s_lastWatchdogFeedTick) {
+        return ((now - s_lastWatchdogFeedTick) >= (uint32_t)(180 * SC_TICKS_PER_SECOND)) ? 1 : 0;
+    }
+    return 0;
 }
 
 void NASA_RunStep(void)
 {
+    NASA_FeedWatchdog();
     switch (s_nasaState) {
     case STATE_INIT:
         s_nasaState = Handle_StateInit(NASA_PDP_ID);
@@ -780,6 +803,7 @@ void NASA_RunStep(void)
         {
             int sec;
             for (sec = 0; sec < ERROR_RETRY_DELAY_SEC; sec++) {
+                NASA_FeedWatchdog();
                 sAPI_TaskSleep(SC_TICKS_PER_SECOND);
                 {
                     char dtBuf[40] = {0};

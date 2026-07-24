@@ -72,7 +72,7 @@
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "NASA4G"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.0.260724b"
+#define NASA_FW_CODE "v1.0.260724d"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1

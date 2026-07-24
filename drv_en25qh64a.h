@@ -36,6 +36,7 @@
 
 /* API Driver */
 int EN25_Init(void);
+int EN25_IsReady(void);
 int EN25_ReadID(uint8_t *mfrId, uint16_t *devId);
 int EN25_Read(uint32_t addr, uint8_t *buf, uint32_t len);
 int EN25_WritePage(uint32_t addr, const uint8_t *buf, uint32_t len);

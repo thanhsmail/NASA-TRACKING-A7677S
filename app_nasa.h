@@ -22,5 +22,7 @@ void NASA_DriverLogin(void);
 void NASA_DriverLogout(void);
 
 uint32_t NASA_GetNextMessageId(void);
+void NASA_FeedWatchdog(void);
+int  NASA_IsWatchdogTimeout(void);
 
 #endif /* APP_NASA_H */

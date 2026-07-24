@@ -211,6 +211,12 @@ static void sTask_GpioStatusIndication(void *argv)
             if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) sAPI_GpioSetValue(GPIO_LED_PWR, 1);
         }
 
+        if (NASA_IsWatchdogTimeout()) {
+            sAPI_Debug("[WATCHDOG] Task nasa_reporter timeout >180s! SysReset...");
+            sAPI_TaskSleep(200);
+            sAPI_SysReset();
+        }
+
         sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
         sAPI_TaskSleep(100); /* 500ms @ 200 ticks/s */
     }

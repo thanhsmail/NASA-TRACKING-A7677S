@@ -32,6 +32,9 @@ static SCsysTime_t s_lastGnssTime = {0};
 static uint32_t s_lastGnssTimeTick = 0;
 static int s_hasGnssTime = 0;
 
+/**
+ * @brief Tính số ngày trong tháng (hỗ trợ năm nhuận).
+ */
 static int DaysInMonth(int year, int mon)
 {
     static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -45,6 +48,10 @@ static int DaysInMonth(int year, int mon)
     return d;
 }
 
+/**
+ * @brief Cộng/trừ số giây vào cấu trúc thời gian SCsysTime_t.
+ * Tự động quy đổi qua các ranh giới giây, phút, giờ, ngày, tháng và năm.
+ */
 static void AddSecondsToSysTime(SCsysTime_t *t, int32_t sec)
 {
     int64_t total;
@@ -92,6 +99,9 @@ static void AddSecondsToSysTime(SCsysTime_t *t, int32_t sec)
     }
 }
 
+/**
+ * @brief Đồng bộ RTC phần cứng từ thời gian GNSS UTC (chỉ thực hiện khi RTC bị mất nguồn / chưa sync).
+ */
 static void MaybeSyncRtcFromGnss(const SCsysTime_t *utc)
 {
     t_rtc rtc;
@@ -115,6 +125,9 @@ static void MaybeSyncRtcFromGnss(const SCsysTime_t *utc)
                rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
 }
 
+/**
+ * @brief Lưu thời gian UTC nhận từ URC GNSS vào RAM và kích hoạt đồng bộ RTC.
+ */
 static void StoreGnssUtcTime(const SCsysTime_t *utc)
 {
     if (utc == NULL || utc->tm_year < 2020 || utc->tm_year > 2100) return;
@@ -126,6 +139,10 @@ static void StoreGnssUtcTime(const SCsysTime_t *utc)
     MaybeSyncRtcFromGnss(utc);
 }
 
+/**
+ * @brief Định dạng chuỗi ngày giờ địa phương (UTC+7) từ bản tin GNSS mới nhất.
+ * @return 1 nếu định dạng thành công, 0 nếu chưa có thời gian GNSS hợp lệ.
+ */
 int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize)
 {
     SCsysTime_t local;
@@ -159,6 +176,10 @@ static double s_anchorLat = 0.0;
 static double s_anchorLon = 0.0;
 static volatile int s_accWireOn = 0; /* dây ACC (đã debounce), cập nhật từ GPIO task */
 
+/**
+ * @brief Cập nhật trạng thái đầu vào dây ACC (đã qua lọc debounce ở GPIO Task).
+ * @param on 1 nếu ACC ON (khóa điện bật), 0 nếu ACC OFF.
+ */
 void GPS_SetAccOn(int on)
 {
     s_accWireOn = on ? 1 : 0;
@@ -168,6 +189,9 @@ static sMsgQRef s_gnssUrcMsgQ = NULL;
 static sTaskRef s_gnssUrcTaskRef = NULL;
 static UINT8 s_gnssUrcTaskStack[1024 * 3];
 
+/**
+ * @brief Khởi tạo các tài nguyên hệ thống dùng chung cho module GPS (Mutex bảo vệ data).
+ */
 void GPS_Init(void)
 {
     if (s_gpsDataMutex == NULL)
@@ -176,6 +200,11 @@ void GPS_Init(void)
     }
 }
 
+/**
+ * @brief Trích xuất bản sao Snapshot dữ liệu GPS an toàn luồng (Thread-safe).
+ * Tự động vô hiệu hóa cờ valid nếu số vệ tinh < 5 hoặc vị trí lat/lon = 0.
+ * @param out Con trỏ tới cấu trúc GpsSnapshot_t nhận dữ liệu.
+ */
 void GPS_Snapshot(GpsSnapshot_t *out)
 {
     if (out == NULL) return;
@@ -196,6 +225,9 @@ void GPS_Snapshot(GpsSnapshot_t *out)
     if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
 }
 
+/**
+ * @brief Đặt lại (reset) tổng số km Odometer và điểm tọa độ tham chiếu về 0.
+ */
 void GPS_ResetOdometer(void)
 {
     if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
@@ -205,6 +237,9 @@ void GPS_ResetOdometer(void)
     if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
 }
 
+/**
+ * @brief Lấy số lượng vệ tinh GPS/GNSS đang thu nhận hiện tại.
+ */
 int GPS_GetSatellitesCount(void)
 {
     int val = 0;
@@ -214,6 +249,9 @@ int GPS_GetSatellitesCount(void)
     return val;
 }
 
+/**
+ * @brief Lấy vận tốc xe hiện tại (km/h).
+ */
 double GPS_GetLastSpeedKph(void)
 {
     double val = 0.0;
@@ -223,6 +261,9 @@ double GPS_GetLastSpeedKph(void)
     return val;
 }
 
+/**
+ * @brief Lấy tổng số km tích lũy Odometer trong ngày (km).
+ */
 double GPS_GetTotalKm(void)
 {
     double val = 0.0;
@@ -232,6 +273,17 @@ double GPS_GetTotalKm(void)
     return val;
 }
 
+/**
+ * @brief Kiểm tra trạng thái xe di chuyển thực tế (1 = Moving, 0 = Stopped).
+ */
+int GPS_IsMoving(void)
+{
+    return s_isMovingNow;
+}
+
+/**
+ * @brief Tính khoảng cách giữa 2 tọa độ địa lý (Lat, Lon) theo công thức Haversine (đơn vị km).
+ */
 static double CalculateDistanceKm(double lat1, double lon1, double lat2, double lon2)
 {
     double dLat = (lat2 - lat1) * RAD_PER_DEG;
@@ -248,13 +300,12 @@ static double CalculateDistanceKm(double lat1, double lon1, double lat2, double 
     return EARTH_RADIUS_KM * 2.0 * asin(sqrt(a));
 }
 
-/*
- * Xác định xe đang di chuyển thật hay chỉ là nhiễu GPS khi đỗ.
- *  - accMode 1 (chỉ theo dây ACC): ACC OFF => khoá cứng trạng thái đứng yên,
- *    nhiễu GPS lớn cỡ nào cũng không thể nhả neo (log thực tế nhiễu tới 26km/h).
- *  - Tốc độ > ngưỡng liên tục MOVING_CONFIRM_SEC *và* đã dịch chuyển thật
- *    khỏi điểm neo >= MOVING_MIN_DISPLACEMENT_KM mới tính là chạy.
- * (lat/lon là toạ độ thô của fix hiện tại, 0.0 nếu chưa fix)
+/**
+ * @brief Bộ lọc trạng thái Chạy / Dừng chống nhiễu GPS nâng cao.
+ * Logic tối ưu:
+ *  - accMode == 1: ACC OFF -> Khóa cứng trạng thái đứng yên 0, bỏ qua nhiễu tốc độ GPS.
+ *  - Tốc độ > ngưỡng (CFG_GetSpeedThresh) liên tục 3s VÀ dịch chuyển thực khỏi điểm neo >= 50m mới xác nhận di chuyển.
+ *  - Tốc độ <= ngưỡng liên tục 10s mới xác nhận dừng đỗ.
  */
 static int FilterMovingStatus(double speed, double lat, double lon)
 {
@@ -262,6 +313,8 @@ static int FilterMovingStatus(double speed, double lat, double lon)
     static uint32_t s_speedBelowThresholdTick = 0;
     static int s_isMoving = 0;
     uint32_t now = GetTickNow();
+    double thresh = (double)CFG_GetSpeedThresh();
+    if (thresh <= 0.0) thresh = 3.0;
 
     if (CFG_GetAccMode() == 1 && !s_accWireOn) {
         s_speedAboveThresholdTick = 0;
@@ -271,7 +324,7 @@ static int FilterMovingStatus(double speed, double lat, double lon)
         return 0;
     }
 
-    if (speed > 3.0) {
+    if (speed > thresh) {
         s_speedBelowThresholdTick = 0;
         if (s_speedAboveThresholdTick == 0) s_speedAboveThresholdTick = now;
         else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
@@ -293,10 +346,9 @@ static int FilterMovingStatus(double speed, double lat, double lon)
     return s_isMoving;
 }
 
-/*
- * Neo toạ độ khi đứng yên (gọi khi ĐANG giữ mutex, sau khi cập nhật
- * lat/lon/satellites): lần đầu dừng thì ghi vị trí neo, các fix sau khi vẫn
- * đứng yên thì thay toạ độ nhiễu bằng vị trí neo. Xe chạy lại thì nhả neo.
+/**
+ * @brief Neo giữ vị trí đứng yên khi xe đỗ (Stationary Anchor).
+ * Triệt tiêu 100% hiện tượng trôi vệt GPS xung quanh điểm dừng khi xe không di chuyển.
  */
 static void ApplyStationaryAnchor(int isMoving)
 {
@@ -317,6 +369,13 @@ static void ApplyStationaryAnchor(int isMoving)
     }
 }
 
+/**
+ * @brief Tính toán và cộng dồn quãng đường di chuyển Odometer (km).
+ * Logic tối ưu:
+ *  - Khi đứng yên (!s_isMovingNow): Không cộng dồn km (ngăn ngừa odometer ảo do nhiễu trôi GPS).
+ *  - Bộ lọc Haversine & Jump Filter: Bỏ qua các bước nhảy khoảng cách lớn bất thường vượt quá tốc độ tối đa cho phép.
+ *  - Tự động reset điểm tham chiếu khi mất tín hiệu GPS kéo dài (> ODOM_GPS_LOSS_TIMEOUT_SEC).
+ */
 static void UpdateOdometer(double newLat, double newLon)
 {
     uint32_t now = GetTickNow();
@@ -354,8 +413,8 @@ static void UpdateOdometer(double newLat, double newLon)
     {
         double dist = CalculateDistanceKm(s_prevLat, s_prevLon, newLat, newLon);
         double elapsedSec = (s_prevOdomTick != 0 && now > s_prevOdomTick)
-                                 ? (double)(now - s_prevOdomTick) / SC_TICKS_PER_SECOND
-                                 : 1.0;
+                                  ? (double)(now - s_prevOdomTick) / SC_TICKS_PER_SECOND
+                                  : 1.0;
         if (elapsedSec < 1.0) elapsedSec = 1.0;
 
         double maxDist;
@@ -389,6 +448,13 @@ static void UpdateOdometer(double newLat, double newLon)
     s_prevOdomTick = now;
 }
 
+/**
+ * @brief Bóc tách chuỗi CSV theo dấu phẩy trực tiếp trên buffer (Zero-copy string tokenizer).
+ * @param line Chuỗi dữ liệu cần phân tách.
+ * @param fields Mảng con trỏ lưu trữ địa chỉ các trường dữ liệu.
+ * @param maxFields Số lượng trường tối đa có thể chứa.
+ * @return Số lượng trường đã bóc tách được.
+ */
 static int SplitCommaInPlace(char *line, char **fields, int maxFields)
 {
     if (!line || !fields || maxFields <= 0) return 0;
@@ -408,6 +474,10 @@ static int SplitCommaInPlace(char *line, char **fields, int maxFields)
     return n;
 }
 
+/**
+ * @brief Bóc tách và cập nhật dữ liệu GPS từ chuỗi URC chuẩn +CGPSINFO.
+ * @return 1 nếu parse đúng định dạng chuỗi +CGPSINFO, 0 nếu không khớp.
+ */
 static int TryParseCgpsInfoUrc(const char *gpsUrc)
 {
     const char *hdr = strstr(gpsUrc, "+CGPSINFO:");
@@ -462,12 +532,20 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
         if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
 
         StoreGnssUtcTime(&utc);
+        static uint32_t lastGnssLogTick = 0;
+        uint32_t nowGnssTick = GetTickNow();
+        if (lastGnssLogTick == 0 || (nowGnssTick - lastGnssLogTick) >= (uint32_t)(10 * SC_TICKS_PER_SECOND)) {
+            lastGnssLogTick = nowGnssTick;
+            sAPI_Debug("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d", s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites);
+        }
     }
-
-    sAPI_Debug("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d", s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites);
     return 1;
 }
 
+/**
+ * @brief Bóc tách và cập nhật dữ liệu GPS từ chuỗi URC chuẩn +CGNSSINFO (hỗ trợ đa hệ vệ tinh GPS/GLONASS/Galileo/BDS).
+ * @return 1 nếu parse đúng định dạng chuỗi +CGNSSINFO, 0 nếu không khớp.
+ */
 static int TryParseCgnssInfoUrc(const char *gpsUrc)
 {
     const char *hdr = strstr(gpsUrc, "+CGNSSINFO:");
@@ -544,6 +622,9 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     return 1;
 }
 
+/**
+ * @brief Bóc tách thời gian UTC từ các trường date/time của bản tin NMEA/URC.
+ */
 static int TryParseGnssDateTimeFromUrc(const char *gpsUrc, SCsysTime_t *out)
 {
     const char *p;
@@ -571,6 +652,9 @@ static int TryParseGnssDateTimeFromUrc(const char *gpsUrc, SCsysTime_t *out)
     return 0;
 }
 
+/**
+ * @brief Hàm helper trích xuất giá trị số thực double tiếp theo từ chuỗi URC.
+ */
 static int ExtractNextDouble(const char **p, double *out)
 {
     const char *s = *p;
@@ -604,6 +688,10 @@ static int ExtractNextDouble(const char **p, double *out)
     return 1;
 }
 
+/**
+ * @brief Hàm điều phối cập nhật GPS từ chuỗi URC bất kỳ.
+ * Thử parse theo +CGNSSINFO, +CGPSINFO và Fallback Parser có kiểm tra ranh giới tọa độ [-90,90] & [-180,180].
+ */
 static void TryUpdateGpsFromUrcString(const char *gpsUrc)
 {
     if (gpsUrc == NULL) return;
@@ -631,7 +719,7 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
         n++;
     }
 
-    if (n >= 2)
+    if (n >= 2 && (nums[0] >= -90.0 && nums[0] <= 90.0) && (nums[1] >= -180.0 && nums[1] <= 180.0))
     {
         double speedRaw = (n >= 3) ? nums[2] * KNOTS_TO_KMH : 0.0;
         int isMoving = FilterMovingStatus(speedRaw, nums[0], nums[1]);
@@ -662,7 +750,11 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
     }
 }
 
-static void sTask_GnssUrcListener(void *argv)
+/**
+ * @brief Task RTOS lắng nghe và xử lý sự kiện URC GNSS từ modem theo cơ chế Queue Event-Driven.
+ * Rate-limit log URC 30s để giảm dung lượng UART log.
+ */
+static void sTask_GnssUrcListener(void *argv) 
 {
     (void)argv;
     for (;;)
@@ -679,11 +771,16 @@ static void sTask_GnssUrcListener(void *argv)
         }
         if ((msg.msg_id == SRV_URC) && (msg.arg1 == SC_URC_GNSS_MASK) && (msg.arg3 != NULL))
         {
-            sAPI_Debug("[GPS URC] msg_id=%u arg1=%d arg2=%d raw=%s",
-                       (unsigned)msg.msg_id,
-                       (int)msg.arg1,
-                       (int)msg.arg2,
-                       (const char *)msg.arg3);
+            static uint32_t lastUrcLogTick = 0;
+            uint32_t nowUrcTick = GetTickNow();
+            if (lastUrcLogTick == 0 || (nowUrcTick - lastUrcLogTick) >= (uint32_t)(30 * SC_TICKS_PER_SECOND)) {
+                lastUrcLogTick = nowUrcTick;
+                sAPI_Debug("[GPS URC] msg_id=%u arg1=%d arg2=%d raw=%s",
+                           (unsigned)msg.msg_id,
+                           (int)msg.arg1,
+                           (int)msg.arg2,
+                           (const char *)msg.arg3);
+            }
             if ((msg.arg2 == SC_URC_GPS_INFO) || (msg.arg2 == SC_URC_GNSS_INFO))
             {
                 TryUpdateGpsFromUrcString((const char *)msg.arg3);
@@ -697,6 +794,9 @@ static void sTask_GnssUrcListener(void *argv)
     }
 }
 
+/**
+ * @brief Khởi tạo và khởi chạy GNSS Hardware (Hot Start) cùng Task URC Listener.
+ */
 void GnssUrcListenerEnsureStarted(void)
 {
     if (s_gnssUrcTaskRef != NULL) return;

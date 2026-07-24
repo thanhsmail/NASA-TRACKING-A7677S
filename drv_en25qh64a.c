@@ -56,8 +56,9 @@ int EN25_IsBusy(void)
     uint8_t sr1 = 0xFF;
 
     EN25_CS_Assert();
-    sAPI_SpiReadBytesEx(&s_spiDev, &cmd, 1, &sr1, 1);
+    SC_SPI_ReturnCode rc = sAPI_SpiReadBytesEx(&s_spiDev, &cmd, 1, &sr1, 1);
     EN25_CS_Deassert();
+    if (rc != SC_SPI_RC_OK) return -1;
     return (sr1 & EN25_SR1_WIP_BIT) ? 1 : 0;
 }
 
@@ -67,14 +68,16 @@ int EN25_WaitReady(uint32_t timeoutMs)
     uint32_t timeoutTicks = (timeoutMs * SC_TICKS_PER_SECOND) / 1000;
     if (timeoutTicks == 0) timeoutTicks = 1;
 
-    while (EN25_IsBusy()) {
+    while (1) {
+        int busy = EN25_IsBusy();
+        if (busy == 0) return 0;
+        if (busy < 0)  return -1;
         if ((GetTickNow() - startTick) >= timeoutTicks) {
             sAPI_Debug("[EN25] WaitReady Timeout!");
             return -1;
         }
         sAPI_TaskSleep(1);
     }
-    return 0;
 }
 
 int EN25_ReadID(uint8_t *mfrId, uint16_t *devId)
@@ -137,14 +140,6 @@ int EN25_Init(void)
         return -1;
     }
 
-    /*
-     * sAPI_SpiCustomCs(sspport, pin): tham số 2 = PAD GPIO (không phải cờ 0/1).
-     * Schematic: CS = GPIO_05 → pad 120.
-     */
-    if (sAPI_SpiCustomCs(s_spiDev.index, FLASH_SPI_CS_PIN) != SC_SPI_RC_OK) {
-        sAPI_Debug("[EN25] SpiCustomCs failed! pin=%d", FLASH_SPI_CS_PIN);
-    }
-
     /* GPIO_05 output, idle LOW = flash bỏ chọn (NPN ngắt, CS# = 3.3V) */
     memset(&gpioCfg, 0, sizeof(gpioCfg));
     gpioCfg.pinDir = SC_GPIO_OUT_PIN;
@@ -158,6 +153,14 @@ int EN25_Init(void)
         s_isInitialized = 0;
         return -1;
     }
+
+    /*
+     * sAPI_SpiCustomCs(sspport, pin): tham số 2 = PAD GPIO (không phải cờ 0/1).
+     * Schematic: CS = GPIO_05 → pad 120.
+     */
+    if (sAPI_SpiCustomCs(s_spiDev.index, FLASH_SPI_CS_PIN) != SC_SPI_RC_OK) {
+        sAPI_Debug("[EN25] SpiCustomCs failed! pin=%d", FLASH_SPI_CS_PIN);
+    }
     EN25_CS_Deassert();
 
     /* Cho flash ổn định nguồn sau khi CS idle */
@@ -167,7 +170,7 @@ int EN25_Init(void)
         mfrId = 0;
         devId = 0;
 
-        /* Thử luân phiên cả CS 1=Select (mạch BJT đảo) và CS 0=Select (kết nối trực tiếp) */
+        /* Thử đọc JEDEC ID */
         if (EN25_ReadID(&mfrId, &devId) == 0 && EN25_IdLooksValid(mfrId, devId)) {
             sAPI_Debug("[EN25/Flash] Flash Init Success! MfrID=0x%02X DevID=0x%04X (spi=%d cs=%d)",
                        mfrId, devId, FLASH_SPI_INDEX, FLASH_SPI_CS_PIN);
@@ -183,6 +186,11 @@ int EN25_Init(void)
                mfrId, devId, FLASH_SPI_INDEX, FLASH_SPI_CS_PIN);
     s_isInitialized = 0;
     return -1;
+}
+
+int EN25_IsReady(void)
+{
+    return s_isInitialized;
 }
 
 int EN25_Read(uint32_t addr, uint8_t *buf, uint32_t len)
@@ -213,11 +221,12 @@ out:
     return rc;
 }
 
-int EN25_WritePage(uint32_t addr, const uint8_t *buf, uint32_t len)
+static int EN25_WritePageInternal(uint32_t addr, const uint8_t *buf, uint32_t len)
 {
     uint8_t cmdBlock[4];
 
-    if (!s_isInitialized || !buf || len == 0 || len > EN25_PAGE_SIZE || (addr + len) > EN25_FLASH_SIZE) return -1;
+    if (!buf || len == 0 || len > EN25_PAGE_SIZE || (addr + len) > EN25_FLASH_SIZE) return -1;
+    if ((addr % EN25_PAGE_SIZE) + len > EN25_PAGE_SIZE) return -1;
     if (EN25_WaitReady(500) < 0) return -1;
 
     EN25_WriteEnable();
@@ -242,6 +251,16 @@ int EN25_WritePage(uint32_t addr, const uint8_t *buf, uint32_t len)
     return EN25_WaitReady(1000);
 }
 
+int EN25_WritePage(uint32_t addr, const uint8_t *buf, uint32_t len)
+{
+    int rc;
+    if (!s_isInitialized) return -1;
+    EN25_Lock();
+    rc = EN25_WritePageInternal(addr, buf, len);
+    EN25_Unlock();
+    return rc;
+}
+
 int EN25_Write(uint32_t addr, const uint8_t *buf, uint32_t len)
 {
     uint32_t pageOffset, bytesToWrite;
@@ -255,7 +274,7 @@ int EN25_Write(uint32_t addr, const uint8_t *buf, uint32_t len)
         bytesToWrite = EN25_PAGE_SIZE - pageOffset;
         if (bytesToWrite > len) bytesToWrite = len;
 
-        if (EN25_WritePage(addr, buf, bytesToWrite) < 0) goto out;
+        if (EN25_WritePageInternal(addr, buf, bytesToWrite) < 0) goto out;
 
         addr += bytesToWrite;
         buf += bytesToWrite;

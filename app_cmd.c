@@ -28,11 +28,13 @@ static int FotaCb(int isok)
 int CMD_IsFotaReady(void) { return g_fota_download_ready; }
 void CMD_SetFotaHandled(void) { g_fota_download_ready = 2; }
 
+static sMutexRef s_cmdReplyMutex = NULL;
+
 static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
 {
-    /* static: giảm stack khi Reply chạy trong CMD trên task NASA */
-    static char payload[384];
-    static char out[420];
+    /* Mảng cục bộ trên stack đảm bảo thread-safety khi SmsRecvTask & nasa_reporter gọi đồng thời */
+    char payload[384];
+    char out[420];
     uint32_t cs;
     const char *content;
     const char *stripped;
@@ -41,15 +43,22 @@ static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
 
     if (!reply || !msg || !msg[0]) return;
 
+    if (s_cmdReplyMutex == NULL) {
+        sAPI_MutexCreate(&s_cmdReplyMutex, SC_FIFO);
+    }
+    if (s_cmdReplyMutex) sAPI_MutexLock(s_cmdReplyMutex, SC_SUSPEND);
+
     /* SMS / local: gửi nguyên văn */
     if (!src || strcmp(src, "SERVER") != 0) {
         reply(msg, ctx);
+        if (s_cmdReplyMutex) sAPI_MutexUnLock(s_cmdReplyMutex);
         return;
     }
 
     /* Nếu msg đã được đóng gói sẵn dạng !NASA,...*checksum, gửi trực tiếp */
     if (strncmp(msg, "!NASA", 5) == 0 && strchr(msg, '*') != NULL) {
         reply(msg, ctx);
+        if (s_cmdReplyMutex) sAPI_MutexUnLock(s_cmdReplyMutex);
         return;
     }
 
@@ -79,6 +88,8 @@ static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
     cs = Buffer_GetChecksum((const uint8_t *)payload, (uint32_t)strlen(payload));
     snprintf(out, sizeof(out), "%s*%lu", payload, (unsigned long)cs);
     reply(out, ctx);
+
+    if (s_cmdReplyMutex) sAPI_MutexUnLock(s_cmdReplyMutex);
 }
 
 static void Deny(CmdReplyFn reply, void *ctx, const char *src)
