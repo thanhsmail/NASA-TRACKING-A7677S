@@ -30,8 +30,9 @@ void CMD_SetFotaHandled(void) { g_fota_download_ready = 2; }
 
 static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
 {
-    char payload[384];
-    char out[420];
+    /* static: giảm stack khi Reply chạy trong CMD trên task NASA */
+    static char payload[384];
+    static char out[420];
     uint32_t cs;
     const char *content;
     const char *stripped;
@@ -303,6 +304,24 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
+    case 14: /* Toggle đăng nhập / đăng xuất lái xe */
+        if (isSet) {
+            if (CFG_IsDriverLoggedIn()) {
+                NASA_DriverLogout();
+                snprintf(resp, sizeof(resp), "sa,14 dang xuat lai xe: %s / %s",
+                         CFG_GetDriverName(), CFG_GetDriverLicense());
+            } else {
+                NASA_DriverLogin();
+                snprintf(resp, sizeof(resp), "sa,14 dang nhap lai xe: %s / %s",
+                         CFG_GetDriverName(), CFG_GetDriverLicense());
+            }
+        } else {
+            snprintf(resp, sizeof(resp), "sa,14 trang thai lai xe: %s / %s / %s",
+                     CFG_GetDriverName(), CFG_GetDriverLicense(),
+                     CFG_IsDriverLoggedIn() ? "login" : "logout");
+        }
+        break;
+
     case 17: /* Phone 1 */
     case 18: /* Phone 2 — doc dùng phone index = code-16 */
     {
@@ -316,6 +335,31 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         snprintf(resp, sizeof(resp), "sa,%d so dien thoai %d: %s", code, idx, CFG_GetPhone(idx));
         break;
     }
+
+    case 25: /* Cấu hình tên lái xe / GPLX; login nếu chưa, đổi identity nếu khác */
+        if (isSet) {
+            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
+            if (!NextToken(&save, b, sizeof(b))) { Reply(reply, ctx, src, "ERROR"); return; }
+            if (CFG_IsDriverLoggedIn()) {
+                int same = (strcmp(a, CFG_GetDriverName()) == 0 &&
+                            strcmp(b, CFG_GetDriverLicense()) == 0);
+                if (!same) {
+                    NASA_DriverLogout();
+                    CFG_SetDriver(a, b, 0);
+                    NASA_DriverLogin(); /* WorkStartSession tự CFG_Save 1 lần */
+                } else {
+                    CFG_SetDriver(a, b, 1);
+                    CFG_Save();
+                }
+            } else {
+                CFG_SetDriver(a, b, 0);
+                NASA_DriverLogin(); /* SetDriver + Save bên trong login */
+            }
+        }
+        snprintf(resp, sizeof(resp), "sa,25 lai xe: %s / %s / %s",
+                 CFG_GetDriverName(), CFG_GetDriverLicense(),
+                 CFG_IsDriverLoggedIn() ? "login" : "logout");
+        break;
 
     case 26: /* Thời gian ghi nhận dừng đỗ */
         if (isSet) {

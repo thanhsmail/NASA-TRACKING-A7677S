@@ -40,12 +40,31 @@ static int         s_parkDailyCount = 0;
 static int         s_parkStopPending = 0;
 static uint32_t    s_parkStopConfirmTick = 0;
 
+/* Bản tin 5 — phiên làm việc lái xe */
+static int         s_workActive = 0;
+static char        s_workLoginDT[40] = {0};
+static double      s_workLoginLat = 0.0;
+static double      s_workLoginLon = 0.0;
+static uint32_t    s_workLoginTick = 0;
+static uint32_t    s_workLastReportTick = 0;
+static int         s_workStopPending = 0;
+static uint32_t    s_workStopStartTick = 0;
+static int         s_workWasMoving = 0;
+static int         s_driveMinToday = 0;       /* LXTN phút */
+static uint32_t    s_driveAccumSecToday = 0;
+static int         s_lxltOver4hCount = 0;
+static int         s_lxltCounted4h = 0;
+static double      s_workOdomStartKm = 0.0;
+static uint32_t    s_workLastAccumTick = 0;
+
 static uint32_t    s_lastTrackingTick = 0;
 static int         s_prevAccOn = -1;
 static volatile int s_trackingImmediateSend = 0;
 static volatile int s_immediateMsgType = 2; /* 2 or 7 */
 static volatile int s_requestReplayAll = 0;
 static double      s_prevSentHeadingDeg = -1.0;
+
+static int NetworkSendFrame(const char *frame);
 
 float NASA_GetVoltage(void)
 {
@@ -72,6 +91,7 @@ static uint32_t BuildDeviceStatus(const GpsSnapshot_t *gps, float voltage)
     if (IsAccOn()) st |= ST_ACC;
     if (CFG_IsDriverLoggedIn()) st |= ST_DRIVER;
     if (gps && gps->speedKph >= (double)NASA_SPEED_LIMIT_KPH) st |= ST_SPEED_VIOLATION;
+    if (s_workActive && s_lxltCounted4h) st |= ST_LXLT_VIOLATION;
     if (voltage >= NASA_BATTERY_LOW_VOLT) st |= ST_BATTERY_OK;
     return st;
 }
@@ -131,6 +151,166 @@ static void BuildParkingFrame(char *out, size_t size, const char *msgId, const c
     AppendChecksumAndEnd(out, size, payload, 0);
 }
 
+static int WorkLxltMinutes(void)
+{
+    uint32_t now;
+    if (!s_workActive || s_workLoginTick == 0) return 0;
+    now = GetTickNow();
+    if (now < s_workLoginTick) return 0;
+    return (int)((now - s_workLoginTick) / ((uint32_t)SC_TICKS_PER_SECOND * 60u));
+}
+
+static int WorkLxltDistMeters(void)
+{
+    GpsSnapshot_t gps = {0};
+    double deltaKm;
+    GPS_Snapshot(&gps);
+    deltaKm = gps.totalKm - s_workOdomStartKm;
+    if (deltaKm < 0.0) deltaKm = 0.0;
+    return (int)(deltaKm * 1000.0 + 0.5);
+}
+
+static void BuildWorkFrame(char *out, size_t size, const char *msgId, const char *dateTime,
+                           int msgType, const char *logoutDT,
+                           double logoutLat, double logoutLon)
+{
+    static char payload[420];
+    int lxltMin = WorkLxltMinutes();
+    int distM = WorkLxltDistMeters();
+
+    payload[0] = '\0';
+    if (msgType == 1) {
+        (void)snprintf(payload, sizeof(payload),
+                       "!NASA,5,%s,%s,%d,%s,%s,%s,%.6f,%.6f,%d,%d,,,%d,%d,",
+                       msgId, dateTime, msgType,
+                       CFG_GetDriverName(), CFG_GetDriverLicense(),
+                       s_workLoginDT, s_workLoginLat, s_workLoginLon,
+                       lxltMin, s_driveMinToday, s_lxltOver4hCount, distM);
+    } else {
+        const char *outDt = (logoutDT != NULL) ? logoutDT : dateTime;
+        (void)snprintf(payload, sizeof(payload),
+                       "!NASA,5,%s,%s,%d,%s,%s,%s,%.6f,%.6f,%d,%d,%s,%.6f,%.6f,%d,%d,",
+                       msgId, dateTime, msgType,
+                       CFG_GetDriverName(), CFG_GetDriverLicense(),
+                       s_workLoginDT, s_workLoginLat, s_workLoginLon,
+                       lxltMin, s_driveMinToday,
+                       outDt, logoutLat, logoutLon,
+                       s_lxltOver4hCount, distM);
+    }
+    AppendChecksumAndEnd(out, size, payload, 0);
+}
+
+static void NASA_WorkSend(int msgType, const char *dateTime, double lat, double lon)
+{
+    static char frame[480];
+    char msgIdStr[16] = {0};
+
+    if (!Network_IsConnected() || !s_loginAcked) return;
+
+    frame[0] = '\0';
+    (void)snprintf(msgIdStr, sizeof(msgIdStr), "%lu", (unsigned long)s_messageIdNum);
+    BuildWorkFrame(frame, sizeof(frame), msgIdStr, dateTime, msgType, dateTime, lat, lon);
+    sAPI_Debug("[NASA/Work] type=%d %s", msgType, frame);
+    if (NetworkSendFrame(frame) == 0) s_messageIdNum++;
+}
+
+static void WorkAccumDriveTime(uint32_t nowTick)
+{
+    uint32_t elapsedSec;
+    if (!s_workActive) {
+        s_workLastAccumTick = nowTick;
+        return;
+    }
+    if (s_workLastAccumTick == 0) {
+        s_workLastAccumTick = nowTick;
+        return;
+    }
+    if (nowTick <= s_workLastAccumTick) return;
+    elapsedSec = (nowTick - s_workLastAccumTick) / (uint32_t)SC_TICKS_PER_SECOND;
+    if (elapsedSec == 0) return;
+    s_workLastAccumTick = nowTick;
+    s_driveAccumSecToday += elapsedSec;
+    s_driveMinToday = (int)(s_driveAccumSecToday / 60u);
+}
+
+static void WorkStartSession(const char *dateTime, double lat, double lon, int continuous)
+{
+    GpsSnapshot_t gps = {0};
+    uint32_t now = GetTickNow();
+
+    GPS_Snapshot(&gps);
+    if (!continuous) {
+        strncpy(s_workLoginDT, dateTime, sizeof(s_workLoginDT) - 1);
+        s_workLoginDT[sizeof(s_workLoginDT) - 1] = '\0';
+        s_workLoginLat = lat;
+        s_workLoginLon = lon;
+        s_workLoginTick = now;
+        s_workOdomStartKm = gps.totalKm;
+        s_lxltCounted4h = 0;
+    }
+    s_workActive = 1;
+    s_workStopPending = 0;
+    s_workLastReportTick = now;
+    s_workLastAccumTick = now;
+    CFG_SetDriver(CFG_GetDriverName(), CFG_GetDriverLicense(), 1);
+    CFG_Save();
+    NASA_WorkSend(1, dateTime, lat, lon);
+}
+
+static void WorkEndSession(const char *dateTime, double lat, double lon)
+{
+    if (!s_workActive) return;
+    WorkAccumDriveTime(GetTickNow());
+    NASA_WorkSend(3, dateTime, lat, lon);
+    s_workActive = 0;
+    s_workStopPending = 0;
+    s_workLoginTick = 0;
+    s_lxltCounted4h = 0;
+    CFG_SetDriver(CFG_GetDriverName(), CFG_GetDriverLicense(), 0);
+    CFG_Save();
+}
+
+static void NASA_WorkUpdate(const char *dateTime, double lat, double lon, double speed)
+{
+    uint32_t nowTick = GetTickNow();
+    int thresh = CFG_GetSpeedThresh();
+    int moving = (speed > (double)thresh) ? 1 : 0;
+    int lxltMin;
+
+    WorkAccumDriveTime(nowTick);
+
+    if (s_workActive) {
+        lxltMin = WorkLxltMinutes();
+        if (lxltMin >= WORK_LXLT_LIMIT_MIN && !s_lxltCounted4h) {
+            s_lxltOver4hCount++;
+            s_lxltCounted4h = 1;
+        }
+
+        if (!moving) {
+            if (!s_workStopPending) {
+                s_workStopPending = 1;
+                s_workStopStartTick = nowTick;
+            } else if ((nowTick - s_workStopStartTick) >=
+                       (uint32_t)WORK_LOGOUT_STOP_SEC * (uint32_t)SC_TICKS_PER_SECOND) {
+                WorkEndSession(dateTime, lat, lon);
+            }
+        } else {
+            /* Tiếp tục LXLT nếu dừng < 15 phút — không gửi lại 5-1 */
+            s_workStopPending = 0;
+            if ((nowTick - s_workLastReportTick) >=
+                (uint32_t)WORK_PERIODIC_SEC * (uint32_t)SC_TICKS_PER_SECOND) {
+                s_workLastReportTick = nowTick;
+                NASA_WorkSend(2, dateTime, lat, lon);
+            }
+        }
+    } else {
+        /* Cạnh dừng→chạy: bắt đầu chuyến mới (5-1) với tên mặc định/CFG */
+        if (moving && !s_workWasMoving)
+            WorkStartSession(dateTime, lat, lon, 0);
+    }
+    s_workWasMoving = moving;
+}
+
 static void DetectResetReason(void)
 {
     POWER_UP_REASON r = sAPI_GetPowerUpEvent();
@@ -161,6 +341,9 @@ static void ResetDailyCountersIfNeeded(int today_mday)
     if (today_mday != cfg->lastMday) {
         GPS_ResetOdometer();
         s_parkDailyCount = 0;
+        s_driveMinToday = 0;
+        s_driveAccumSecToday = 0;
+        s_lxltOver4hCount = 0;
         s_messageIdNum = 1;
         cfg->operateDays++;
         cfg->lastMday = today_mday;
@@ -500,6 +683,7 @@ static NasaState_t Handle_StateTracking(void)
             GpsSnapshot_t gpsTemp = {0};
             GPS_Snapshot(&gpsTemp);
             NASA_ParkUpdate(dtBuf, gpsTemp.lat, gpsTemp.lon, gpsTemp.speedKph);
+            NASA_WorkUpdate(dtBuf, gpsTemp.lat, gpsTemp.lon, gpsTemp.speedKph);
 
             {
                 int accOn = IsAccOn();
@@ -551,8 +735,17 @@ void NASA_Init(void)
     s_nasaState = STATE_INIT;
     s_messageIdNum = 1;
     s_loginAcked = 0;
+    s_workActive = 0;
+    s_workStopPending = 0;
+    s_workWasMoving = 0;
     DetectResetReason();
     Backup_Init();
+
+    /* Phiên làm việc không sống qua reset — đồng bộ bit ST_DRIVER */
+    if (CFG_IsDriverLoggedIn()) {
+        CFG_SetDriver(CFG_GetDriverName(), CFG_GetDriverLicense(), 0);
+        CFG_Save();
+    }
 
     if (sAPI_SysGetImei(s_devImei) != 0)
         strncpy(s_devImei, "UNKNOWN_IMEI", sizeof(s_devImei) - 1);
@@ -644,6 +837,36 @@ void NASA_ClearAllData(void)
 {
     Backup_Clear();
     GPS_ResetOdometer();
+}
+
+void NASA_DriverLogin(void)
+{
+    char dt[40] = {0};
+    GpsSnapshot_t gps = {0};
+
+    BuildDateTimeAutoFallback(dt, sizeof(dt));
+    GPS_Snapshot(&gps);
+    if (s_workActive) {
+        /* Đã login — không gửi lại 5-1 (dùng cho na,14 khi đã ON) */
+        return;
+    }
+    WorkStartSession(dt, gps.lat, gps.lon, 0);
+}
+
+void NASA_DriverLogout(void)
+{
+    char dt[40] = {0};
+    GpsSnapshot_t gps = {0};
+
+    if (!s_workActive && !CFG_IsDriverLoggedIn()) return;
+    BuildDateTimeAutoFallback(dt, sizeof(dt));
+    GPS_Snapshot(&gps);
+    if (s_workActive)
+        WorkEndSession(dt, gps.lat, gps.lon);
+    else {
+        CFG_SetDriver(CFG_GetDriverName(), CFG_GetDriverLicense(), 0);
+        CFG_Save();
+    }
 }
 
 uint32_t NASA_GetNextMessageId(void)

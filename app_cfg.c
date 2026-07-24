@@ -38,8 +38,8 @@ static void CFG_SetDefaults(void)
     s_cfg.configLocked     = 0;
     s_cfg.deviceEnabled    = 1;
     s_cfg.operateDays      = 0;
-    strncpy(s_cfg.driverName, "", sizeof(s_cfg.driverName) - 1);
-    strncpy(s_cfg.driverLicense, "", sizeof(s_cfg.driverLicense) - 1);
+    strncpy(s_cfg.driverName, NASA_DEFAULT_DRIVER_NAME, sizeof(s_cfg.driverName) - 1);
+    strncpy(s_cfg.driverLicense, NASA_DEFAULT_DRIVER_LICENSE, sizeof(s_cfg.driverLicense) - 1);
     s_cfg.driverLoggedIn   = 0;
     s_cfg.lastMday         = 0;
 }
@@ -149,6 +149,18 @@ int CFG_SaveFactory(const FactoryConfig_t *fcfg)
     return CFG_Save();
 }
 
+static void CFG_EnsureDefaultDriver(void)
+{
+    if (s_cfg.driverName[0] == '\0') {
+        strncpy(s_cfg.driverName, NASA_DEFAULT_DRIVER_NAME, sizeof(s_cfg.driverName) - 1);
+        s_cfg.driverName[sizeof(s_cfg.driverName) - 1] = '\0';
+    }
+    if (s_cfg.driverLicense[0] == '\0') {
+        strncpy(s_cfg.driverLicense, NASA_DEFAULT_DRIVER_LICENSE, sizeof(s_cfg.driverLicense) - 1);
+        s_cfg.driverLicense[sizeof(s_cfg.driverLicense) - 1] = '\0';
+    }
+}
+
 void CFG_Init(void)
 {
     if (s_cfgMutex == NULL) {
@@ -156,6 +168,7 @@ void CFG_Init(void)
     }
     CFG_SetDefaults();
     CFG_Load();
+    CFG_EnsureDefaultDriver();
 }
 
 void CFG_Load(void)
@@ -261,30 +274,34 @@ void CFG_Load(void)
 
 int CFG_Save(void)
 {
-    char buf[768];
+    /* static: tránh cộng ~1.2KB stack khi gọi từ CMD trong task NASA */
+    static char s_saveBuf[768];
+    static CfgFlashSector_t s_flashSec;
     int len;
     SCFILE *fp;
 
     CfgLock();
 
     /* 1. Đóng gói và Ghi lên SPI Flash Sector 0 (Primary) và Sector 1 (Mirror) */
-    CfgFlashSector_t flashSec;
-    memset(&flashSec, 0, sizeof(flashSec));
-    flashSec.magic = CFG_FLASH_MAGIC;
-    flashSec.version = 1;
-    memcpy(&flashSec.factory, &s_factoryCfg, sizeof(FactoryConfig_t));
-    memcpy(&flashSec.config, &s_cfg, sizeof(AppConfig_t));
-    flashSec.crc32 = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
+    memset(&s_flashSec, 0, sizeof(s_flashSec));
+    s_flashSec.magic = CFG_FLASH_MAGIC;
+    s_flashSec.version = 1;
+    memcpy(&s_flashSec.factory, &s_factoryCfg, sizeof(FactoryConfig_t));
+    memcpy(&s_flashSec.config, &s_cfg, sizeof(AppConfig_t));
+    s_flashSec.crc32 = Buffer_GetChecksum((const uint8_t *)&s_flashSec.factory,
+                                         sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
 
     if (EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE) == 0) {
-        EN25_Write(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE, (const uint8_t *)&flashSec, sizeof(flashSec));
+        EN25_Write(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE,
+                   (const uint8_t *)&s_flashSec, sizeof(s_flashSec));
     }
     if (EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE) == 0) {
-        EN25_Write(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE, (const uint8_t *)&flashSec, sizeof(flashSec));
+        EN25_Write(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE,
+                   (const uint8_t *)&s_flashSec, sizeof(s_flashSec));
     }
 
     /* 2. Lưu đồng thời vào EFS File để tương thích ngược */
-    len = snprintf(buf, sizeof(buf),
+    len = snprintf(s_saveBuf, sizeof(s_saveBuf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
                    "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\n",
@@ -299,7 +316,7 @@ int CFG_Save(void)
         sAPI_remove(NASA_CFG_FILE);
         fp = sAPI_fopen(NASA_CFG_FILE, "wb");
         if (fp) {
-            sAPI_fwrite(buf, 1, (size_t)len, fp);
+            sAPI_fwrite(s_saveBuf, 1, (size_t)len, fp);
             sAPI_fclose(fp);
         }
     }
@@ -462,12 +479,18 @@ void CFG_SetDeviceEnabled(int enabled) { s_cfg.deviceEnabled = enabled ? 1 : 0; 
 
 void CFG_SetDriver(const char *name, const char *license, int loggedIn)
 {
-    if (name) {
+    if (name && name[0] != '\0') {
         strncpy(s_cfg.driverName, name, sizeof(s_cfg.driverName) - 1);
         s_cfg.driverName[sizeof(s_cfg.driverName) - 1] = '\0';
+    } else if (s_cfg.driverName[0] == '\0') {
+        strncpy(s_cfg.driverName, NASA_DEFAULT_DRIVER_NAME, sizeof(s_cfg.driverName) - 1);
+        s_cfg.driverName[sizeof(s_cfg.driverName) - 1] = '\0';
     }
-    if (license) {
+    if (license && license[0] != '\0') {
         strncpy(s_cfg.driverLicense, license, sizeof(s_cfg.driverLicense) - 1);
+        s_cfg.driverLicense[sizeof(s_cfg.driverLicense) - 1] = '\0';
+    } else if (s_cfg.driverLicense[0] == '\0') {
+        strncpy(s_cfg.driverLicense, NASA_DEFAULT_DRIVER_LICENSE, sizeof(s_cfg.driverLicense) - 1);
         s_cfg.driverLicense[sizeof(s_cfg.driverLicense) - 1] = '\0';
     }
     s_cfg.driverLoggedIn = loggedIn ? 1 : 0;

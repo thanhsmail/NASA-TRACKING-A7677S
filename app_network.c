@@ -19,6 +19,24 @@ static int s_sockNonBlockSet = 0;
 static char s_rxAcc[NASA_SERVER_CMD_BUF_SIZE * 2];
 static int  s_rxAccLen = 0;
 
+static void DispatchRecvLines(char *recvbuf);
+
+/* Server đôi khi gửi na,/sa, không kèm \r\n — flush buffer còn treo khi idle */
+static void FlushAccAsCompleteLine(void)
+{
+    static char lineBuf[sizeof(s_rxAcc)];
+    int len = s_rxAccLen;
+
+    if (len <= 0) return;
+    if (len >= (int)sizeof(lineBuf)) len = (int)sizeof(lineBuf) - 1;
+    memcpy(lineBuf, s_rxAcc, (size_t)len);
+    lineBuf[len] = '\0';
+    s_rxAccLen = 0;
+    s_rxAcc[0] = '\0';
+    sAPI_Debug("[Network] Flush unterminated CMD (%d): %s", len, lineBuf);
+    DispatchRecvLines(lineBuf);
+}
+
 static void ServerCmdReply(const char *reply, void *ctx)
 {
     char out[400];
@@ -218,6 +236,7 @@ static void AccumulateAndDispatch(const char *data, int len)
 
 int Network_RecvPoll(void)
 {
+    /* static: tránh chiếm 1KB stack khi RecvPoll → CMD → CFG_Save lồng nhau */
     static char recvbuf[NASA_SERVER_CMD_BUF_SIZE];
     int recv_len;
     SCfdSet readfds;
@@ -243,6 +262,10 @@ int Network_RecvPoll(void)
         sAPI_Debug("[Network] peer closed");
         return 1;
     }
+
+    /* Không còn byte mới: nếu còn dòng lệnh thiếu \\r\\n thì xử lý luôn */
+    if (s_rxAccLen > 0)
+        FlushAccAsCompleteLine();
 
     /* recv_len < 0: thường là WOULDBLOCK, kiểm tra errno trước */
 #ifdef EWOULDBLOCK

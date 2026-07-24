@@ -105,7 +105,7 @@ static void SmsReceiverTask(void *argv)
 
 /* --- NASA reporter task --- */
 static sTaskRef s_nasaReportTaskRef = NULL;
-static UINT8 s_nasaReportTaskStack[1024 * 6];
+static UINT8 s_nasaReportTaskStack[1024 * 10];
 
 static void sTask_NasaReport(void *argv)
 {

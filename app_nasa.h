@@ -17,6 +17,10 @@ void NASA_ClearAllData(void);
 /** Server gửi dòng bắt đầu bằng !NASA — xử lý ACK login */
 void NASA_OnServerProtocolLine(const char *line);
 
+/** Bản tin 5: đăng nhập / đăng xuất lái xe (cmd 14, 25) */
+void NASA_DriverLogin(void);
+void NASA_DriverLogout(void);
+
 uint32_t NASA_GetNextMessageId(void);
 
 #endif /* APP_NASA_H */

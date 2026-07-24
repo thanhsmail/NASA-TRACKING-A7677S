@@ -14,6 +14,13 @@
 #define PARK_REPORT_PERIOD_SEC_DEFAULT 60
 #define PARK_REPORT_PERIOD_SEC_MAX 900
 
+/* Bản tin 5 — thời gian làm việc lái xe */
+#define WORK_PERIODIC_SEC 60
+#define WORK_LOGOUT_STOP_SEC 900   /* dừng >= 15 phút → đăng xuất (5-3) */
+#define WORK_LXLT_LIMIT_MIN 240    /* LXLT quá 4 giờ */
+#define NASA_DEFAULT_DRIVER_NAME    "LAI XE"
+#define NASA_DEFAULT_DRIVER_LICENSE "000000"
+
 /* Ngưỡng vận tốc phân biệt chạy/dừng (km/h) — Config cmd 10 */
 #define TRACKING_SPEED_THRESHOLD_DEFAULT 3
 
@@ -65,14 +72,14 @@
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "NASA4G"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.0.260718a"
+#define NASA_FW_CODE "v1.0.260724b"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1
 
 /* Điện áp acquy: ngưỡng bình yếu (Volt) */
 #define NASA_BATTERY_LOW_VOLT 11.5f
-#define NASA_SPEED_LIMIT_KPH 80
+#define NASA_SPEED_LIMIT_KPH    120 
 
 /* Khóa cấu hình / SĐT trung tâm — 0 = tắt (chưa dùng) */
 #define NASA_LOCK_FEATURE_ENABLE 0
