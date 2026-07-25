@@ -31,6 +31,7 @@ static char s_devImei[32] = {0};
 static char s_devIccid[32] = {0};
 static char s_serverLastPacket[40] = {0};
 static uint32_t s_lastWatchdogFeedTick = 0;
+static uint32_t s_disconnStartTick = 0;
 
 static int         s_isParkStopped = 0;
 static uint32_t    s_parkStartTick = 0;
@@ -759,6 +760,7 @@ void NASA_Init(void)
         strncpy(s_devIccid, "UNKNOWN_SIM", sizeof(s_devIccid) - 1);
 
     sAPI_Debug("[NASA] Init IMEI=%s ICCID=%s reset=%s", s_devImei, s_devIccid, s_resetReason);
+    s_disconnStartTick = 0;
     NASA_FeedWatchdog();
 }
 
@@ -777,9 +779,38 @@ int NASA_IsWatchdogTimeout(void)
     return 0;
 }
 
+#define NET_DISCONN_RESET_SEC (15 * 60) /* 15 phút = 900s */
+
+static void CheckNetworkDisconnTimeout(void)
+{
+    uint32_t now = GetTickNow();
+    if (!CFG_IsDeviceEnabled()) {
+        s_disconnStartTick = 0;
+        return;
+    }
+
+    if (Network_IsConnected() && s_loginAcked) {
+        s_disconnStartTick = 0;
+        return;
+    }
+
+    if (s_disconnStartTick == 0) {
+        s_disconnStartTick = (now != 0) ? now : 1;
+        return;
+    }
+
+    if (now >= s_disconnStartTick &&
+        (now - s_disconnStartTick) >= (uint32_t)(NET_DISCONN_RESET_SEC * SC_TICKS_PER_SECOND)) {
+        sAPI_Debug("[NASA] Mat ket noi >15 phut (%ds) -> Tu dong SysReset modem...", NET_DISCONN_RESET_SEC);
+        sAPI_TaskSleep(200);
+        sAPI_SysReset();
+    }
+}
+
 void NASA_RunStep(void)
 {
     NASA_FeedWatchdog();
+    CheckNetworkDisconnTimeout();
     switch (s_nasaState) {
     case STATE_INIT:
         s_nasaState = Handle_StateInit(NASA_PDP_ID);
@@ -804,6 +835,7 @@ void NASA_RunStep(void)
             int sec;
             for (sec = 0; sec < ERROR_RETRY_DELAY_SEC; sec++) {
                 NASA_FeedWatchdog();
+                CheckNetworkDisconnTimeout();
                 sAPI_TaskSleep(SC_TICKS_PER_SECOND);
                 {
                     char dtBuf[40] = {0};

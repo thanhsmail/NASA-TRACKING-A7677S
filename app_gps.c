@@ -424,7 +424,10 @@ static void UpdateOdometer(double newLat, double newLon)
         }
         else
         {
-            maxDist = (s_lastSpeedKph / 3.6) * elapsedSec * ODOM_MAX_JUMP_FACTOR / 1000.0;
+            double calcSpeed = (s_lastSpeedKph < (double)ODOM_JUMP_MIN_CALC_SPEED_KPH)
+                                   ? (double)ODOM_JUMP_MIN_CALC_SPEED_KPH
+                                   : s_lastSpeedKph;
+            maxDist = (calcSpeed / 3.6) * elapsedSec * ODOM_MAX_JUMP_FACTOR / 1000.0;
         }
 
         if (dist >= ODOM_MIN_DIST_KM && dist <= maxDist)

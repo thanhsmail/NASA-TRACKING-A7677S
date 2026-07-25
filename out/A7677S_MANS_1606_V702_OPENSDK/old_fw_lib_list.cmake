@@ -1,3 +1,0 @@
-SET(OLD_FW_LIB_LIST
-E:/test/NASA-TRACKING-A7677S/out/A7677S_MANS_1606_V702_OPENSDK/lib/cuslibold_fw_demo.a
-)
