@@ -417,18 +417,11 @@ static void UpdateOdometer(double newLat, double newLon)
                                   : 1.0;
         if (elapsedSec < 1.0) elapsedSec = 1.0;
 
-        double maxDist;
-        if (s_lastSpeedKph < (double)CFG_GetSpeedThresh())
-        {
-            maxDist = ODOM_MAX_STATIONARY_KM;
-        }
-        else
-        {
-            double calcSpeed = (s_lastSpeedKph < (double)ODOM_JUMP_MIN_CALC_SPEED_KPH)
-                                   ? (double)ODOM_JUMP_MIN_CALC_SPEED_KPH
-                                   : s_lastSpeedKph;
-            maxDist = (calcSpeed / 3.6) * elapsedSec * ODOM_MAX_JUMP_FACTOR / 1000.0;
-        }
+        double calcSpeed = (s_lastSpeedKph < (double)ODOM_JUMP_MIN_CALC_SPEED_KPH)
+                               ? (double)ODOM_JUMP_MIN_CALC_SPEED_KPH
+                               : s_lastSpeedKph;
+        double maxDist = (calcSpeed / 3.6) * elapsedSec * ODOM_MAX_JUMP_FACTOR / 1000.0;
+        if (maxDist < ODOM_MAX_STATIONARY_KM) maxDist = ODOM_MAX_STATIONARY_KM;
 
         if (dist >= ODOM_MIN_DIST_KM && dist <= maxDist)
         {
@@ -529,8 +522,8 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
             s_lastLon = 0.0;
         }
 
+        UpdateOdometer(latDec, lonDec);
         ApplyStationaryAnchor(isMoving);
-        UpdateOdometer(s_lastLat, s_lastLon);
         s_lastFixTick = GetTickNow();
         if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
 
@@ -611,8 +604,8 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     s_lastFixTick = GetTickNow();
     if (s_lastSatellites < 5) s_lastLat = s_lastLon = 0.0;
 
+    UpdateOdometer(latDec, lonDec);
     ApplyStationaryAnchor(isMoving);
-    UpdateOdometer(s_lastLat, s_lastLon);
 
     if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
 
@@ -746,8 +739,8 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
             s_lastLon = 0.0;
         }
 
+        UpdateOdometer(nums[0], nums[1]);
         ApplyStationaryAnchor(isMoving);
-        UpdateOdometer(s_lastLat, s_lastLon);
         s_lastFixTick = GetTickNow();
         if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
     }

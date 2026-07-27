@@ -59,12 +59,12 @@
 /* Odometer */
 #define ODOM_MIN_DIST_KM 0.001       // Quãng đường tối thiểu để tính Odometer
 #define ODOM_MAX_JUMP_FACTOR 3.0     // Hệ số nhảy Odometer tối đa
-#define ODOM_MAX_STATIONARY_KM 0.010 // Quãng đường tối đa khi dừng đỗ
+#define ODOM_MAX_STATIONARY_KM 0.100 // Quãng đường tối đa khi dừng đỗ
 #define ODOM_GPS_LOSS_TIMEOUT_SEC 30 // Thời gian GPS mất để reset Odometer
 #define ODOM_JUMP_MIN_CALC_SPEED_KPH 30.0 // Ngưỡng vận tốc sàn tối thiểu để tính maxDist cho Jump Filter
 
-#define MOVING_CONFIRM_SEC 3   // Thời gian xác nhận trạng thái di chuyển
-#define STOPPED_CONFIRM_SEC 10 // Thời gian xác nhận trạng thái dừng đỗ
+#define MOVING_CONFIRM_SEC 1   // Thời gian xác nhận trạng thái di chuyển
+#define STOPPED_CONFIRM_SEC 180 // Thời gian xác nhận trạng thái dừng đỗ
 /* Dịch chuyển thực khỏi điểm neo tối thiểu để xác nhận xe chạy (chống nhiễu
  * GPS khi đỗ — nhiễu đô thị có thể báo tốc độ tới 26 km/h nhưng vị trí chỉ
  * quẩn quanh điểm đỗ) */
