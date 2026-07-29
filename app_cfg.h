@@ -80,5 +80,6 @@ void CFG_SetResetSchedule(int days, int hour);
 void CFG_SetLocked(int locked);
 void CFG_SetDeviceEnabled(int enabled);
 void CFG_SetDriver(const char *name, const char *license, int loggedIn);
+void CFG_FlushDirty(void); /* flush deferred driver/config dirty flag */
 
 #endif /* APP_CFG_H */

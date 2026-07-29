@@ -40,8 +40,6 @@ static double      s_parkLat = 0.0;
 static double      s_parkLon = 0.0;
 static uint32_t    s_parkLastReportTick = 0;
 static int         s_parkDailyCount = 0;
-static int         s_parkStopPending = 0;
-static uint32_t    s_parkStopConfirmTick = 0;
 
 /* Bản tin 5 — phiên làm việc lái xe */
 static int         s_workActive = 0;
@@ -381,51 +379,61 @@ static void NASA_ParkSendFrame6(int msgType, const char *dateTime)
     if (NetworkSendFrame(frame) == 0) s_messageIdNum++;
 }
 
+static uint32_t s_park61Tick = 0;
+static int      s_pendingSend63 = 0;
+
 static void NASA_ParkUpdate(const char *dateTime, double lat, double lon, double speed)
 {
     (void)speed;
     uint32_t nowTick = GetTickNow();
-    int moving = GPS_IsMoving();
-    int parkConfirmSec = STOPPED_CONFIRM_SEC; /* 10s xác nhận dừng đỗ (khớp GPS filter) */
+    int isParked = GPS_IsParked();
+    int isMoving = GPS_IsMoving();
     int parkPeriodSec = CFG_GetParkConfirmSec(); /* Config cmd 26: chu kỳ báo 6-2 (mặc định 60s) */
     if (parkPeriodSec <= 0) parkPeriodSec = PARK_REPORT_PERIOD_SEC_DEFAULT;
 
+    /* Xử lý xả bản tin 6-3 hoãn (pending 5s guard) nếu đã đủ thời gian */
+    if (s_pendingSend63 && (nowTick - s_park61Tick) >= (uint32_t)(PARK_FRAME_GUARD_SEC * SC_TICKS_PER_SECOND)) {
+        NASA_ParkSendFrame6(3, dateTime);
+        s_pendingSend63 = 0;
+    }
+
     if (!s_isParkStopped) {
-        if (!moving) {
-            if (!s_parkStopPending) {
-                s_parkStopPending = 1;
-                s_parkStopConfirmTick = nowTick;
-                s_parkLat = lat;
-                s_parkLon = lon;
-                snprintf(s_parkStartDateTime, sizeof(s_parkStartDateTime), "%s", dateTime);
-            } else {
-                if (lat != 0.0 && lon != 0.0) {
-                    s_parkLat = lat;
-                    s_parkLon = lon;
-                }
-                if ((nowTick - s_parkStopConfirmTick) >= (uint32_t)(parkConfirmSec * SC_TICKS_PER_SECOND)) {
-                    s_isParkStopped = 1;
-                    s_parkStopPending = 0;
-                    s_parkStartTick = s_parkStopConfirmTick;
-                    s_parkLastReportTick = nowTick;
-                    s_parkDailyCount++;
-                    NASA_ParkSendFrame6(1, dateTime);
-                }
+        if (isParked) {
+            /* Nếu có 6-3 cũ đang chờ -> Xả 6-3 cũ trước (Bảo đảm thứ tự FIFO) */
+            if (s_pendingSend63) {
+                NASA_ParkSendFrame6(3, dateTime);
+                s_pendingSend63 = 0;
             }
-        } else {
-            s_parkStopPending = 0;
+
+            s_isParkStopped = 1;
+            s_parkStartTick = nowTick;
+            s_parkLastReportTick = nowTick;
+            s_parkDailyCount++;
+            s_parkLat = lat;
+            s_parkLon = lon;
+            snprintf(s_parkStartDateTime, sizeof(s_parkStartDateTime), "%s", dateTime);
+            s_park61Tick = nowTick;
+            NASA_ParkSendFrame6(1, dateTime);
         }
     } else {
-        if (moving) {
-            NASA_ParkSendFrame6(3, dateTime);
+        if (!isParked && isMoving) {
             s_isParkStopped = 0;
             s_parkStartTick = 0;
             s_trackingImmediateSend = 1;
             s_immediateMsgType = 2;
-        } else if ((nowTick - s_parkLastReportTick) >=
-                   (uint32_t)(parkPeriodSec * SC_TICKS_PER_SECOND)) {
-            s_parkLastReportTick = nowTick;
-            NASA_ParkSendFrame6(2, dateTime);
+
+            /* Guard 5s giữa 6-1 và 6-3 */
+            if ((nowTick - s_park61Tick) >= (uint32_t)(PARK_FRAME_GUARD_SEC * SC_TICKS_PER_SECOND)) {
+                NASA_ParkSendFrame6(3, dateTime);
+                s_pendingSend63 = 0;
+            } else {
+                s_pendingSend63 = 1; /* Hoãn gửi 6-3 cho tới khi đủ 5s */
+            }
+        } else if (isParked) {
+            if ((nowTick - s_parkLastReportTick) >= (uint32_t)(parkPeriodSec * SC_TICKS_PER_SECOND)) {
+                s_parkLastReportTick = nowTick;
+                NASA_ParkSendFrame6(2, dateTime);
+            }
         }
     }
 }
@@ -809,8 +817,17 @@ static void CheckNetworkDisconnTimeout(void)
 
 void NASA_RunStep(void)
 {
+    static uint32_t s_lastCfgFlushTick = 0;
+    uint32_t nowFlush = GetTickNow();
+
     NASA_FeedWatchdog();
     CheckNetworkDisconnTimeout();
+    /* Deferred CFG save (~10s): tránh nest Save trong CMD 14/25 + Work frame */
+    if (s_lastCfgFlushTick == 0 ||
+        (nowFlush - s_lastCfgFlushTick) >= (uint32_t)(10 * SC_TICKS_PER_SECOND)) {
+        s_lastCfgFlushTick = nowFlush;
+        CFG_FlushDirty();
+    }
     switch (s_nasaState) {
     case STATE_INIT:
         s_nasaState = Handle_StateInit(NASA_PDP_ID);
@@ -921,7 +938,7 @@ void NASA_DriverLogout(void)
         WorkEndSession(dt, gps.lat, gps.lon);
     else {
         CFG_SetDriver(CFG_GetDriverName(), CFG_GetDriverLicense(), 0);
-        CFG_Save();
+        /* driverLoggedIn dirty — CFG_FlushDirty trong NASA_RunStep */
     }
 }
 

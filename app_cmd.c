@@ -357,14 +357,13 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                 if (!same) {
                     NASA_DriverLogout();
                     CFG_SetDriver(a, b, 0);
-                    NASA_DriverLogin(); /* WorkStartSession tự CFG_Save 1 lần */
+                    NASA_DriverLogin(); /* SetDriver dirty; FlushDirty sau CMD */
                 } else {
-                    CFG_SetDriver(a, b, 1);
-                    CFG_Save();
+                    CFG_SetDriver(a, b, 1); /* dirty only — defer Save */
                 }
             } else {
                 CFG_SetDriver(a, b, 0);
-                NASA_DriverLogin(); /* SetDriver + Save bên trong login */
+                NASA_DriverLogin(); /* SetDriver dirty; FlushDirty sau CMD */
             }
         }
         snprintf(resp, sizeof(resp), "sa,25 lai xe: %s / %s / %s",

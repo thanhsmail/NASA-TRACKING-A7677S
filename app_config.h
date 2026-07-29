@@ -63,17 +63,27 @@
 #define ODOM_GPS_LOSS_TIMEOUT_SEC 30 // Thời gian GPS mất để reset Odometer
 #define ODOM_JUMP_MIN_CALC_SPEED_KPH 30.0 // Ngưỡng vận tốc sàn tối thiểu để tính maxDist cho Jump Filter
 
-#define MOVING_CONFIRM_SEC 1   // Thời gian xác nhận trạng thái di chuyển
-#define STOPPED_CONFIRM_SEC 180 // Thời gian xác nhận trạng thái dừng đỗ
+#define MOVING_CONFIRM_SEC 3   // Thời gian xác nhận trạng thái di chuyển
+#define STOPPED_CONFIRM_SEC 10 // Thời gian xác nhận trạng thái dừng đỗ (khớp Park)
+#define PARKED_CONFIRM_SEC 600 // Thời gian dừng liên tục (10 phút = 600s) xác nhận Đỗ (accMode 0 hoặc fallback)
+#define PARK_FRAME_GUARD_SEC 5 // Thời gian tối thiểu (5s) hoãn phát bản tin 6-3 sau khi phát 6-1
+
 /* Dịch chuyển thực khỏi điểm neo tối thiểu để xác nhận xe chạy (chống nhiễu
  * GPS khi đỗ — nhiễu đô thị có thể báo tốc độ tới 26 km/h nhưng vị trí chỉ
  * quẩn quanh điểm đỗ) */
 #define MOVING_MIN_DISPLACEMENT_KM 0.015 // 15 m
 
+/*
+ * Quy tắc accMode (Config cmd 8):
+ *  - accMode == 0 (GPS Speed only): Đỗ khi dừng liên tục >= PARKED_CONFIRM_SEC (600s).
+ *  - accMode == 1 (Wire ACC only + Fallback): ACC OFF -> COASTING_TO_PARK -> PARKED khi speed <= thresh. Fallback 600s.
+ *  - accMode == 2 (Hybrid ACC): ACC OFF -> COASTING_TO_PARK (ngừng km dồn) -> PARKED khi speed <= thresh. Fallback 600s.
+ */
+
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "NASA4G"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.0.260724d"
+#define NASA_FW_CODE "v1.0.260724e"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1

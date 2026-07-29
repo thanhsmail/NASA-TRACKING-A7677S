@@ -26,7 +26,7 @@
 
 /* --- SMS URC task --- */
 static sTaskRef gSmsRecvTask = NULL;
-static UINT8 gSmsRecvTaskStack[1024 * 4];
+static UINT8 gSmsRecvTaskStack[1024 * 8];
 static sMsgQRef gSmsMsgQueue = NULL;
 static sMsgQRef gSmsReadRspQueue = NULL;
 

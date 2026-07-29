@@ -172,6 +172,8 @@ int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize)
  * đủ lâu (FilterMovingStatus); khi đứng yên thì neo toạ độ tại điểm dừng và
  * không cộng odometer. */
 static int    s_isMovingNow = 0;
+static int    s_isParkedNow = 0;
+static int    s_isCoastingToPark = 0;
 static double s_anchorLat = 0.0;
 static double s_anchorLon = 0.0;
 static volatile int s_accWireOn = 0; /* dây ACC (đã debounce), cập nhật từ GPIO task */
@@ -274,11 +276,19 @@ double GPS_GetTotalKm(void)
 }
 
 /**
- * @brief Kiểm tra trạng thái xe di chuyển thực tế (1 = Moving, 0 = Stopped).
+ * @brief Kiểm tra trạng thái xe di chuyển thực tế (1 = Moving, 0 = Stopped/Parked).
  */
 int GPS_IsMoving(void)
 {
     return s_isMovingNow;
+}
+
+/**
+ * @brief Kiểm tra trạng thái xe Đỗ chính thức (1 = Parked, 0 = Otherwise).
+ */
+int GPS_IsParked(void)
+{
+    return s_isParkedNow;
 }
 
 /**
@@ -301,61 +311,114 @@ static double CalculateDistanceKm(double lat1, double lon1, double lat2, double 
 }
 
 /**
- * @brief Bộ lọc trạng thái Chạy / Dừng chống nhiễu GPS nâng cao.
- * Logic tối ưu:
- *  - accMode == 1: ACC OFF -> Khóa cứng trạng thái đứng yên 0, bỏ qua nhiễu tốc độ GPS.
- *  - Tốc độ > ngưỡng (CFG_GetSpeedThresh) liên tục 3s VÀ dịch chuyển thực khỏi điểm neo >= 50m mới xác nhận di chuyển.
- *  - Tốc độ <= ngưỡng liên tục 10s mới xác nhận dừng đỗ.
+ * @brief Bộ lọc trạng thái Chạy / Dừng / Đỗ chống nhiễu GPS nâng cao.
+ * Phân biệt rõ các trạng thái MOVING, STOPPED, COASTING_TO_PARK, PARKED.
  */
 static int FilterMovingStatus(double speed, double lat, double lon)
 {
     static uint32_t s_speedAboveThresholdTick = 0;
     static uint32_t s_speedBelowThresholdTick = 0;
-    static int s_isMoving = 0;
+    static uint32_t s_parkTimeoutStartTick = 0;
     uint32_t now = GetTickNow();
     double thresh = (double)CFG_GetSpeedThresh();
     if (thresh <= 0.0) thresh = 3.0;
 
-    if (CFG_GetAccMode() == 1 && !s_accWireOn) {
-        s_speedAboveThresholdTick = 0;
-        s_speedBelowThresholdTick = 0;
-        s_isMoving = 0;
-        s_isMovingNow = 0;
-        return 0;
-    }
+    int accMode = CFG_GetAccMode();
+    int wireAccOff = (accMode != 0) ? !s_accWireOn : 0;
 
-    if (speed > thresh) {
-        s_speedBelowThresholdTick = 0;
-        if (s_speedAboveThresholdTick == 0) s_speedAboveThresholdTick = now;
-        else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
-            /* Đủ thời gian vượt ngưỡng — kiểm tra thêm dịch chuyển thực khỏi neo */
-            if (s_anchorLat == 0.0 && s_anchorLon == 0.0) {
-                s_isMoving = 1; /* chưa có neo (mới boot / đang chạy sẵn) */
-            } else if (lat != 0.0 && lon != 0.0 &&
-                       CalculateDistanceKm(s_anchorLat, s_anchorLon, lat, lon) >=
-                           MOVING_MIN_DISPLACEMENT_KM) {
-                s_isMoving = 1;
-            }
+    /* 1. Xử lý khi tín hiệu ACC OFF xuất hiện (accMode 1 hoặc 2) */
+    if (wireAccOff) {
+        /* Lập tức dừng cộng dồn Odometer */
+        s_isMovingNow = 0;
+        s_speedAboveThresholdTick = 0;
+
+        if (speed <= thresh) {
+            /* Xe đã dừng hẳn -> Chuyển sang PARKED */
+            s_isCoastingToPark = 0;
+            s_isParkedNow = 1;
+        } else {
+            /* Xe còn đang hãm tốc quán tính -> Trạng thái COASTING_TO_PARK */
+            s_isCoastingToPark = 1;
+            s_isParkedNow = 0;
         }
     } else {
-        s_speedAboveThresholdTick = 0;
-        if (s_speedBelowThresholdTick == 0) s_speedBelowThresholdTick = now;
-        else if ((now - s_speedBelowThresholdTick) >= (STOPPED_CONFIRM_SEC * SC_TICKS_PER_SECOND)) s_isMoving = 0;
+        /* Nếu ACC ON trở lại trong lúc đang COASTING_TO_PARK (nhiễu sụt áp / chập chờn) -> HỦY ĐỖ */
+        if (s_isCoastingToPark) {
+            s_isCoastingToPark = 0;
+            if (speed > thresh) {
+                s_isMovingNow = 1;
+                s_isParkedNow = 0;
+            } else {
+                s_isMovingNow = 0;
+                s_isParkedNow = 0;
+            }
+        }
     }
-    s_isMovingNow = s_isMoving;
-    return s_isMoving;
+
+    /* 2. Logic đếm tốc độ & Timeout đỗ khi ACC ON (hoặc accMode == 0) */
+    if (!s_isParkedNow && !s_isCoastingToPark) {
+        if (speed > thresh) {
+            s_speedBelowThresholdTick = 0;
+            s_parkTimeoutStartTick = 0;
+            if (s_speedAboveThresholdTick == 0) {
+                s_speedAboveThresholdTick = now;
+            } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+                s_isMovingNow = 1;
+            }
+        } else {
+            s_speedAboveThresholdTick = 0;
+            if (s_speedBelowThresholdTick == 0) {
+                s_speedBelowThresholdTick = now;
+            } else if ((now - s_speedBelowThresholdTick) >= (STOPPED_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+                s_isMovingNow = 0;
+            }
+
+            /* Fallback 600s (10 phút) đỗ áp dụng cho mọi accMode */
+            if (s_parkTimeoutStartTick == 0) {
+                s_parkTimeoutStartTick = now;
+            } else if ((now - s_parkTimeoutStartTick) >= (PARKED_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+                s_isParkedNow = 1;
+                s_isMovingNow = 0;
+            }
+        }
+    }
+
+    /* 3. Logic từ PARKED -> MOVING */
+    if (s_isParkedNow) {
+        s_isMovingNow = 0;
+        if (speed > thresh) {
+            if (s_speedAboveThresholdTick == 0) {
+                s_speedAboveThresholdTick = now;
+            } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+                /* Kiểm tra dịch chuyển thực khỏi điểm Neo >= 15m */
+                if (s_anchorLat == 0.0 && s_anchorLon == 0.0) {
+                    s_isParkedNow = 0;
+                    s_isMovingNow = 1;
+                } else if (lat != 0.0 && lon != 0.0 &&
+                           CalculateDistanceKm(s_anchorLat, s_anchorLon, lat, lon) >= MOVING_MIN_DISPLACEMENT_KM) {
+                    s_isParkedNow = 0;
+                    s_isMovingNow = 1;
+                }
+            }
+        } else {
+            s_speedAboveThresholdTick = 0;
+        }
+    }
+
+    return s_isMovingNow;
 }
 
 /**
  * @brief Neo giữ vị trí đứng yên khi xe đỗ (Stationary Anchor).
- * Triệt tiêu 100% hiện tượng trôi vệt GPS xung quanh điểm dừng khi xe không di chuyển.
+ * Triệt tiêu 100% hiện tượng trôi vệt GPS xung quanh điểm dừng khi xe đỗ.
  */
 static void ApplyStationaryAnchor(int isMoving)
 {
+    (void)isMoving;
     if (s_lastSatellites < 5 || (s_lastLat == 0.0 && s_lastLon == 0.0)) {
         return; /* chưa fix — không đụng anchor */
     }
-    if (isMoving) {
+    if (!s_isParkedNow) {
         s_anchorLat = 0.0;
         s_anchorLon = 0.0;
         return;
@@ -530,9 +593,10 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
         StoreGnssUtcTime(&utc);
         static uint32_t lastGnssLogTick = 0;
         uint32_t nowGnssTick = GetTickNow();
-        if (lastGnssLogTick == 0 || (nowGnssTick - lastGnssLogTick) >= (uint32_t)(10 * SC_TICKS_PER_SECOND)) {
+        if (lastGnssLogTick == 0 || (nowGnssTick - lastGnssLogTick) >= (uint32_t)(30 * SC_TICKS_PER_SECOND)) {
             lastGnssLogTick = nowGnssTick;
-            sAPI_Debug("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d", s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites);
+            sAPI_Debug("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d moving=%d",
+                       s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites, isMoving);
         }
     }
     return 1;
@@ -558,13 +622,19 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     int nf = SplitCommaInPlace(buf, fields, 20);
     if (nf < 13)
     {
+        static uint32_t lastNoFixLogTick = 0;
+        uint32_t nowNoFix = GetTickNow();
         if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
         s_lastSatellites = 0;
         s_lastLat = 0.0;
         s_lastLon = 0.0;
         s_lastSpeedKph = 0.0;
         if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
-        sAPI_Debug("[GNSS] No fix (nf=%d)", nf);
+        if (lastNoFixLogTick == 0 ||
+            (nowNoFix - lastNoFixLogTick) >= (uint32_t)(30 * SC_TICKS_PER_SECOND)) {
+            lastNoFixLogTick = nowNoFix;
+            sAPI_Debug("[GNSS] No fix (nf=%d)", nf);
+        }
         return 1;
     }
 

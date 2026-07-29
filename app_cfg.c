@@ -6,6 +6,7 @@
 #include <string.h>
 
 static AppConfig_t s_cfg;
+static int s_cfgDirty = 0; /* deferred save (driver login/identity) */
 
 /* Bảo vệ ghi/đọc file config: CFG_Save gọi từ cả task SMS lẫn task NASA (lệnh server) */
 static sMutexRef s_cfgMutex = NULL;
@@ -180,27 +181,29 @@ void CFG_Load(void)
     CfgFlashSector_t flashSec;
     int primaryOk = 0, mirrorOk = 0;
 
-    if (EN25_Read(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
-        if (flashSec.magic == CFG_FLASH_MAGIC) {
-            uint32_t crcCalc = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
-            if (crcCalc == flashSec.crc32) {
-                primaryOk = 1;
-                memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
-                memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
-                sAPI_Debug("[CFG] Loaded from SPI Flash Sector 0 (Primary) OK");
-            }
-        }
-    }
-
-    if (!primaryOk) {
-        if (EN25_Read(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
+    if (EN25_IsReady()) {
+        if (EN25_Read(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
             if (flashSec.magic == CFG_FLASH_MAGIC) {
                 uint32_t crcCalc = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
                 if (crcCalc == flashSec.crc32) {
-                    mirrorOk = 1;
+                    primaryOk = 1;
                     memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
                     memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
-                    sAPI_Debug("[CFG] Loaded from SPI Flash Sector 1 (Mirror Backup) OK");
+                    sAPI_Debug("[CFG] Loaded from SPI Flash Sector 0 (Primary) OK");
+                }
+            }
+        }
+
+        if (!primaryOk) {
+            if (EN25_Read(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
+                if (flashSec.magic == CFG_FLASH_MAGIC) {
+                    uint32_t crcCalc = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
+                    if (crcCalc == flashSec.crc32) {
+                        mirrorOk = 1;
+                        memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
+                        memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
+                        sAPI_Debug("[CFG] Loaded from SPI Flash Sector 1 (Mirror Backup) OK");
+                    }
                 }
             }
         }
@@ -279,10 +282,12 @@ int CFG_Save(void)
     static CfgFlashSector_t s_flashSec;
     int len;
     SCFILE *fp;
+    int flashOk = 0;
+    int efsOk = 0;
 
     CfgLock();
 
-    /* 1. Đóng gói và Ghi lên SPI Flash Sector 0 (Primary) và Sector 1 (Mirror) */
+    /* 1. SPI Flash chỉ khi EN25 sẵn sàng — tránh erase/write khi init fail */
     memset(&s_flashSec, 0, sizeof(s_flashSec));
     s_flashSec.magic = CFG_FLASH_MAGIC;
     s_flashSec.version = 1;
@@ -291,16 +296,19 @@ int CFG_Save(void)
     s_flashSec.crc32 = Buffer_GetChecksum((const uint8_t *)&s_flashSec.factory,
                                          sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
 
-    if (EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE) == 0) {
-        EN25_Write(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE,
-                   (const uint8_t *)&s_flashSec, sizeof(s_flashSec));
-    }
-    if (EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE) == 0) {
-        EN25_Write(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE,
-                   (const uint8_t *)&s_flashSec, sizeof(s_flashSec));
+    if (EN25_IsReady()) {
+        if (EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE) == 0) {
+            if (EN25_Write(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE,
+                           (const uint8_t *)&s_flashSec, sizeof(s_flashSec)) == 0)
+                flashOk = 1;
+        }
+        if (EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE) == 0) {
+            EN25_Write(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE,
+                       (const uint8_t *)&s_flashSec, sizeof(s_flashSec));
+        }
     }
 
-    /* 2. Lưu đồng thời vào EFS File để tương thích ngược */
+    /* 2. EFS luôn ghi (fallback khi SPI không sẵn sàng) */
     len = snprintf(s_saveBuf, sizeof(s_saveBuf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
@@ -318,12 +326,22 @@ int CFG_Save(void)
         if (fp) {
             sAPI_fwrite(s_saveBuf, 1, (size_t)len, fp);
             sAPI_fclose(fp);
+            efsOk = 1;
         }
     }
 
-    sAPI_Debug("[CFG] Saved to SPI Flash & EFS File OK");
+    if (flashOk && efsOk)
+        sAPI_Debug("[CFG] Saved to SPI Flash & EFS OK");
+    else if (efsOk)
+        sAPI_Debug("[CFG] Saved to EFS only (SPI Flash not ready)");
+    else if (flashOk)
+        sAPI_Debug("[CFG] Saved to SPI Flash only (EFS failed)");
+    else
+        sAPI_Debug("[CFG] Save FAILED (SPI+EFS)");
+
+    s_cfgDirty = 0;
     CfgUnlock();
-    return 0;
+    return (efsOk || flashOk) ? 0 : -1;
 }
 
 void CFG_FactoryReset(void)
@@ -332,8 +350,10 @@ void CFG_FactoryReset(void)
     CFG_SetDefaults();
     CFG_SetFactoryDefaults();
     sAPI_remove(NASA_CFG_FILE);
-    EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE);
-    EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE);
+    if (EN25_IsReady()) {
+        EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE);
+        EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE);
+    }
     CfgUnlock();
     CFG_Save();
 }
@@ -494,6 +514,14 @@ void CFG_SetDriver(const char *name, const char *license, int loggedIn)
         s_cfg.driverLicense[sizeof(s_cfg.driverLicense) - 1] = '\0';
     }
     s_cfg.driverLoggedIn = loggedIn ? 1 : 0;
+    /* Chỉ đánh dirty — flush sau (tránh nest Save trong CMD + Work frame) */
+    s_cfgDirty = 1;
+}
+
+void CFG_FlushDirty(void)
+{
+    if (!s_cfgDirty) return;
+    CFG_Save();
 }
 
 

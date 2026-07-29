@@ -23,6 +23,7 @@ int GPS_GetSatellitesCount(void);
 double GPS_GetLastSpeedKph(void);
 double GPS_GetTotalKm(void);
 int GPS_IsMoving(void);
+int GPS_IsParked(void);
 /* Format giờ local từ GNSS (UTC + offset). Trả 1 nếu có thời gian hợp lệ. */
 int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize);
 void GnssUrcListenerEnsureStarted(void);

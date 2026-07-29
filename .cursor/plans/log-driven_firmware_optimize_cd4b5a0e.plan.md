@@ -3,22 +3,22 @@ name: Log-driven firmware optimize
 overview: "Tối ưu logic chạy/dừng/tin 5–6 dựa trên code + log 11:18:04 (260724b): na,25/5-1/5-3 OK, thiếu 5-2 khi đỗ, GPS URC spam ~63%; thống nhất GPS_IsMoving và gửi 5-2 khi phiên active."
 todos:
   - id: opt-moving
-    content: "Thống nhất FilterMovingStatus(CFG thresh) + GPS_IsMoving; Park/Work/IsAccOn dùng chung"
+    content: Thống nhất FilterMovingStatus(CFG thresh) + GPS_IsMoving; Park/Work/IsAccOn dùng chung
     status: completed
   - id: opt-type56
-    content: "Tin 5-2 mỗi 60s khi s_workActive (kể cả đỗ); tin 6 confirm/chu kỳ tách rõ"
+    content: Tin 5-2 mỗi 60s khi s_workActive (kể cả đỗ); tin 6 confirm/chu kỳ tách rõ
     status: completed
   - id: opt-stack
-    content: "Static Work/Park frames + Reply mutex (260724b đã hết reset CMD — củng cố thêm)"
+    content: Static Work/Park frames + Reply mutex (260724b đã hết reset CMD — củng cố thêm)
     status: completed
   - id: opt-cfg-flash
-    content: "EN25_IsReady; ST_FLASH_OK đúng; defer CFG_Save driverLoggedIn"
+    content: EN25_IsReady; ST_FLASH_OK đúng; defer CFG_Save driverLoggedIn
     status: completed
   - id: opt-log
-    content: "Rate-limit GPS URC (log 11:18 ~63% là GPS URC)"
+    content: Rate-limit GPS URC (log 11:18 ~63% là GPS URC)
     status: completed
   - id: opt-build
-    content: "Bump FW 260724c; verify 5-2 khi login+đỗ, không reset CMD"
+    content: Bump FW 260724c; verify 5-2 khi login+đỗ, không reset CMD
     status: completed
 isProject: false
 ---
