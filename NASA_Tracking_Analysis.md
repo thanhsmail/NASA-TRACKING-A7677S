@@ -46,27 +46,27 @@ NASA-TRACKING-A7677S/
 
 ```mermaid
 graph TD
-    Main[userSpace_Main - Init] --> Task1[SmsReceiverTask]
-    Main --> Task2[IndicationTask]
-    Main --> Task3[nasa_reporter Task]
+    Main["userSpace_Main (Khởi tạo)"] --> Task1["SmsReceiverTask"]
+    Main --> Task2["IndicationTask"]
+    Main --> Task3["nasa_reporter Task"]
 
-    subgraph Task1: Xử lý SMS
-        Task1 --> SMS_Recv[Đợi URC SMS]
-        SMS_Recv --> SMS_Exec[Thực thi lệnh SMS / Cấu hình]
+    subgraph Task1Group["Task 1: Xử lý SMS"]
+        Task1 --> SMS_Recv["Đợi URC SMS"]
+        SMS_Recv --> SMS_Exec["Thực thi lệnh SMS / Cấu hình"]
     end
 
-    subgraph Task2: Giám sát & Hiển thị
-        Task2 --> ACC_Filter[Lọc chống nhiễu ACC Debounce]
-        Task2 --> CSQ_Instant[Đo CSQ tức thì từ giây đầu tiên]
-        Task2 --> LED_Ctrl[Điều khiển chớp LED GNSS / Mạng / Nguồn]
-        Task2 --> WDT_Supervision[Giám sát Watchdog 180s Reset]
+    subgraph Task2Group["Task 2: Giám sát & Hiển thị"]
+        Task2 --> ACC_Filter["Lọc chống nhiễu ACC Debounce"]
+        Task2 --> CSQ_Instant["Đo CSQ tức thì từ giây đầu tiên"]
+        Task2 --> LED_Ctrl["Điều khiển chớp LED GNSS / Mạng / Nguồn"]
+        Task2 --> WDT_Supervision["Giám sát Watchdog 180s Reset"]
     end
 
-    subgraph Task3: Báo cáo Hành trình
-        Task3 --> StateMachine[NASA_RunStep - Máy trạng thái Mạng]
-        StateMachine --> RulePark[ParkRules_Process - Xử lý đỗ xe]
-        StateMachine --> RuleLxlt[LxltRules_Process - Xử lý LXLT]
-        StateMachine --> NetSend[Gửi bản tin !NASA,2 / !NASA,5 / !NASA,6]
+    subgraph Task3Group["Task 3: Báo cáo Hành trình"]
+        Task3 --> StateMachine["NASA_RunStep - Máy trạng thái Mạng"]
+        StateMachine --> RulePark["ParkRules_Process - Xử lý đỗ xe"]
+        StateMachine --> RuleLxlt["LxltRules_Process - Xử lý LXLT"]
+        StateMachine --> NetSend["Gửi bản tin !NASA,2 / !NASA,5 / !NASA,6"]
     end
 ```
 
@@ -164,35 +164,35 @@ Khi ở trạng thái `STATE_TRACKING`, ứng dụng tự động điều chỉn
 
 ```mermaid
 flowchart TD
-    A[Trạng thái STATE_TRACKING] --> B{Mạng & Socket OK?}
-    B -- Mất kết nối --> B1[Chuyển sang STATE_ERROR_RETRY]
-    B -- Kết nối OK --> C{Có dữ liệu cũ cần Replay Flash?}
-    C -- Có --> C1[Phát bù bản tin mù !NASA,7]
+    A["Trạng thái STATE_TRACKING"] --> B{"Mạng & Socket OK?"}
+    B -- "Mất kết nối" --> B1["Chuyển sang STATE_ERROR_RETRY"]
+    B -- "Kết nối OK" --> C{"Có dữ liệu cũ cần Replay Flash?"}
+    C -- "Có" --> C1["Phát bù bản tin mù !NASA,7"]
     C1 --> D
-    C -- Không --> D[Đọc GPS Snapshot & Cập nhật Odometer]
-    D --> E[Xử lý Quy tắc Đỗ xe ParkRules_Process]
-    E --> F[Xử lý Quy tắc Lái xe LXLT LxltRules_Process]
-    F --> G{ACC thay đổi trạng thái <br/> hoặc có Event khẩn?}
-    G -- Có --> G1[Đánh dấu gửi ngay lập tức]
+    C -- "Không" --> D["Đọc GPS Snapshot & Cập nhật Odometer"]
+    D --> E["Xử lý Quy tắc Đỗ xe (ParkRules_Process)"]
+    E --> F["Xử lý Quy tắc Lái xe LXLT (LxltRules_Process)"]
+    F --> G{"ACC thay đổi trạng thái<br/>hoặc có Event khẩn?"}
+    G -- "Có" --> G1["Đánh dấu gửi ngay lập tức"]
     G1 --> H
-    G -- Không --> H{Đã tới chu kỳ gửi tin định kỳ?}
+    G -- "Không" --> H{"Đã tới chu kỳ gửi tin định kỳ?"}
     
-    subgraph Thuật toán Chu kỳ Động (Adaptive Heading)
-        H --> H1{Tốc độ >= 8 km/h & Cua gấp >= 30°?}
-        H1 -- Đúng --> H2[Chu kỳ cua gấp: 2 giây]
-        H1 -- Sai --> H3{Cua nhẹ >= 15°?}
-        H3 -- Đúng --> H4[Chu kỳ cua nhẹ: 50% chu kỳ chạy]
-        H3 -- Sai --> H5[Chu kỳ chạy tiêu chuẩn: PeriodMoving]
+    subgraph AdaptiveHeading["Thuật toán Chu kỳ Động (Adaptive Heading)"]
+        H --> H1{"Tốc độ >= 8 km/h & Cua gấp >= 30°?"}
+        H1 -- "Đúng" --> H2["Chu kỳ cua gấp: 2 giây"]
+        H1 -- "Sai" --> H3{"Cua nhẹ >= 15°?"}
+        H3 -- "Đúng" --> H4["Chu kỳ cua nhẹ: 50% chu kỳ chạy"]
+        H3 -- "Sai" --> H5["Chu kỳ chạy tiêu chuẩn: PeriodMoving"]
     end
 
     H2 --> I
     H4 --> I
     H5 --> I
-    I[Đọc ADC1 Voltage & CSQ tức thì] --> J[Tạo gói tin !NASA,2,...]
-    J --> K[Gửi Socket TCP/UDP]
-    K -- Gửi thành công --> L[Lưu Snapshot đệm 10s]
-    K -- Lỗi gửi --> L1[Đẩy bản tin vào Flash EN25QH64A]
-    L --> M[Nuôi Watchdog Feed & Sleep 100ms]
+    I["Đọc ADC1 Voltage & CSQ tức thì"] --> J["Tạo gói tin !NASA,2,..."]
+    J --> K["Gửi Socket TCP/UDP"]
+    K -- "Gửi thành công" --> L["Lưu Snapshot đệm 10s"]
+    K -- "Lỗi gửi" --> L1["Đẩy bản tin vào Flash EN25QH64A"]
+    L --> M["Nuôi Watchdog Feed & Sleep 100ms"]
     L1 --> M
     M --> A
 ```
