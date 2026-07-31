@@ -1,46 +1,46 @@
 #ifndef APP_NETWORK_H
 #define APP_NETWORK_H
 
-#include "simcom_api.h"
+#include <stdint.h>
 
 /**
- * Kích hoạt PDP context để chuẩn bị kết nối mạng.
- * @param pdp_id ID của PDP context (thông thường là 1).
- * @return 0 nếu thành công, -1 nếu thất bại.
+ * Kich hoat PDP context de chuan bi ket noi mang.
+ * @param pdp_id ID cua PDP context (thong thuong la 1).
+ * @return 0 neu thanh cong, -1 neu that bai.
  */
-int Network_ActivatePdp(INT32 pdp_id);
+int Network_ActivatePdp(int pdp_id);
 
 /**
- * Thực hiện phân giải DNS và kết nối TCP đến server.
- * @param host IP hoặc tên miền của server.
- * @param port Cổng (port) của server.
- * @return 0 nếu kết nối thành công, -1 nếu thất bại.
+ * Thuc hien phan giai DNS va ket noi TCP den server.
+ * @param host IP hoac ten mien cua server.
+ * @param port Cong (port) cua server.
+ * @return 0 neu thanh cong, -1 neu that bai.
  */
 int Network_Connect(const char *host, int port);
 
 /**
- * Đóng kết nối TCP hiện tại và giải phóng socket.
+ * Dong ket noi TCP hien tai va giai phong socket.
  */
 void Network_Disconnect(void);
 
 /**
- * Gửi chuỗi dữ liệu qua socket TCP đang kết nối.
- * @param data Chuỗi ký tự cần gửi.
- * @param len Độ dài chuỗi dữ liệu.
- * @return Số byte đã gửi hoặc -1 nếu gặp lỗi.
+ * Gui chuoi du lieu qua socket TCP dang ket noi.
+ * @param data Chuoi ky tu can gui.
+ * @param len Do dai chuoi du lieu.
+ * @return So byte da gui hoac -1 neu gap loi.
  */
 int Network_Send(const char *data, uint32_t len);
 
 /**
- * Kiểm tra (poll) dữ liệu đến từ server bằng select timeout=0.
- * Nhận dữ liệu, cắt dòng và thực thi lệnh tương ứng.
- * @return 0 nếu hoạt động bình thường, 1 nếu mất kết nối hoặc socket lỗi.
+ * Kiem tra (poll) du lieu den tu server bang select timeout=0.
+ * Nhan du lieu, cat dong va thuc thi lenh tuong ung.
+ * @return 0 neu hoat dong binh thuong, 1 neu mat ket noi hoac socket loi.
  */
 int Network_RecvPoll(void);
 
 /**
- * Kiểm tra trạng thái kết nối socket.
- * @return 1 nếu socket hợp lệ, 0 nếu chưa kết nối hoặc đã đóng.
+ * Kiem tra trang thai ket noi socket.
+ * @return 1 neu socket hap le, 0 neu chua ket noi hoac da dong.
  */
 int Network_IsConnected(void);
 

@@ -47,7 +47,7 @@ int  CFG_SaveFactory(const FactoryConfig_t *fcfg);
 
 AppConfig_t *CFG_Get(void);
 
-const char *CFG_GetServerHost(void);
+const char *CFG_GetServerHost(void);// 
 int         CFG_GetServerPort(void);
 const char *CFG_GetPlate(void);
 int         CFG_GetPeriodMoving(void);

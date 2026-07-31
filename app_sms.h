@@ -1,8 +1,6 @@
 #ifndef APP_SMS_H
 #define APP_SMS_H
 
-#include "simcom_api.h"
-
 /**
  * Khởi tạo dữ liệu và cấu hình ban đầu cho module SMS.
  */
@@ -34,25 +32,5 @@ int SMS_IsFotaDownloadReady(void);
  * Đánh dấu trạng thái FOTA đang được xử lý nâng cấp (chuẩn bị reset).
  */
 void SMS_SetFotaDownloadHandled(void);
-
-/* --- Các hàm Getter/Setter cho cấu hình hệ thống thay đổi qua SMS --- */
-
-/** Lấy chu kỳ gửi tin khi đang di chuyển (giây) */
-int SMS_GetPeriodMoving(void);
-/** Lấy chu kỳ gửi tin khi dừng/đỗ (giây) */
-int SMS_GetPeriodStopped(void);
-/** Lấy biển số xe */
-const char *SMS_GetLicensePlate(void);
-/** Lấy tên lái xe */
-const char *SMS_GetDriverName(void);
-/** Lấy số giấy phép lái xe */
-const char *SMS_GetDriverLicense(void);
-
-/** Cập nhật biển số xe */
-void SMS_SetLicensePlate(const char *val);
-/** Cập nhật tên lái xe */
-void SMS_SetDriverName(const char *val);
-/** Cập nhật số giấy phép lái xe */
-void SMS_SetDriverLicense(const char *val);
 
 #endif /* APP_SMS_H */

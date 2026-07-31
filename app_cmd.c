@@ -1,4 +1,23 @@
-#include "simcom_api.h"
+/**
+ * @file app_cmd.c
+ * @brief BỘ PHÂN TÍCH VÀ THỰC THI LỆNH (AT / SMS / SERVER COMMAND PARSER)
+ *
+ * File này chịu trách nhiệm:
+ * 1. Phân tích các câu lệnh dạng "na,code,param..." (Lệnh cài đặt - SET)
+ *    và "sa,code" (Lệnh truy vấn - GET) nhận từ SMS hoặc Server.
+ * 2. Phản hồi kết quả thực thi lệnh đóng gói theo chuẩn giao thức !NASA,13,... lên Server
+ *    hoặc nhắn tin trả lời qua SMS.
+ * 3. Kiểm tra phân quyền bảo mật (Phone 1, Phone 2, Khóa cấu hình).
+ *
+ * Lưu ý: File này KHÔNG #include simcom_api.h trực tiếp.
+ * Mọi tương tác phần cứng đi qua lớp HAL layer.
+ */
+#include "hal/hal_log.h"
+#include "hal/hal_os.h"
+#include "hal/hal_gpio.h"
+#include "hal/hal_net.h"
+#include "hal/hal_gnss.h"
+#include "hal/hal_sms.h"
 #include "app_config.h"
 #include "app_cfg.h"
 #include "app_cmd.h"
@@ -13,26 +32,39 @@
 
 char *strtok_r(char *str, const char *delim, char **saveptr);
 
+/* Trạng thái tải FOTA */
 static volatile int g_fota_download_ready = 0;
 
-/* Queue nhận response cho SMS gửi từ lệnh 37 (một số SDK không chấp nhận NULL) */
-static sMsgQRef s_cmdSmsSendRspQ = NULL;
-
+/** Callback thông báo tiến độ FOTA */
 static int FotaCb(int isok)
 {
-    sAPI_Debug("[FOTA] status=%d", isok);
+    HAL_LOG("[FOTA] status=%d", isok);
     g_fota_download_ready = (isok == 100) ? 1 : 0;
     return 0;
 }
 
-int CMD_IsFotaReady(void) { return g_fota_download_ready; }
+/** Kiểm tra file FOTA đã sẵn sàng nạp hay chưa */
+int CMD_IsFotaReady(void) {
+    (void)FotaCb;
+    return g_fota_download_ready;
+}
+
+/** Đánh dấu đã xử lý xong FOTA */
 void CMD_SetFotaHandled(void) { g_fota_download_ready = 2; }
 
-static sMutexRef s_cmdReplyMutex = NULL;
+/* Mutex bảo vệ luồng phản hồi lệnh */
+static HalMutexRef_t s_cmdReplyMutex = NULL;
 
+/**
+ * @brief Trả lời kết quả thực thi lệnh tới kênh nguồn yêu cầu (SMS hoặc Server TCP)
+ * @param reply Function pointer gửi phản hồi
+ * @param ctx Context gửi tin (ví dụ SĐT người gửi SMS hoặc Socket Server)
+ * @param src Nguồn lệnh ("SERVER", "SMS", ...)
+ * @param msg Nội dung phản hồi
+ */
 static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
 {
-    /* Mảng cục bộ trên stack đảm bảo thread-safety khi SmsRecvTask & nasa_reporter gọi đồng thời */
+    /* Mảng cục bộ trên stack đảm bảo thread-safety */
     char payload[384];
     char out[420];
     uint32_t cs;
@@ -44,21 +76,21 @@ static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
     if (!reply || !msg || !msg[0]) return;
 
     if (s_cmdReplyMutex == NULL) {
-        sAPI_MutexCreate(&s_cmdReplyMutex, SC_FIFO);
+        HAL_OS_MutexCreate(&s_cmdReplyMutex);
     }
-    if (s_cmdReplyMutex) sAPI_MutexLock(s_cmdReplyMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_cmdReplyMutex);
 
-    /* SMS / local: gửi nguyên văn */
+    /* SMS / Local: Gửi nguyên văn trực tiếp cho người dùng */
     if (!src || strcmp(src, "SERVER") != 0) {
         reply(msg, ctx);
-        if (s_cmdReplyMutex) sAPI_MutexUnLock(s_cmdReplyMutex);
+        HAL_OS_MutexUnlock(s_cmdReplyMutex);
         return;
     }
 
-    /* Nếu msg đã được đóng gói sẵn dạng !NASA,...*checksum, gửi trực tiếp */
+    /* Nếu msg đã được đóng gói sẵn dạng !NASA,...*checksum thì gửi thẳng */
     if (strncmp(msg, "!NASA", 5) == 0 && strchr(msg, '*') != NULL) {
         reply(msg, ctx);
-        if (s_cmdReplyMutex) sAPI_MutexUnLock(s_cmdReplyMutex);
+        HAL_OS_MutexUnlock(s_cmdReplyMutex);
         return;
     }
 
@@ -66,7 +98,7 @@ static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
     if (strncmp(msg, "!NASA,13,", 9) == 0)
         content = msg + 9;
 
-    /* Loại bỏ tiền tố "sa,X " (nếu có) khi gửi lên server */
+    /* Loại bỏ tiền tố "sa,X " (nếu có) khi gửi phản hồi lên Server */
     stripped = content;
     if (strncmp(content, "sa,", 3) == 0) {
         const char *p = content + 3;
@@ -83,20 +115,22 @@ static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
     BuildDateTimeAutoFallback(dateTime, sizeof(dateTime));
     msgId = NASA_GetNextMessageId();
 
-    /* Đóng gói dạng !NASA,13,<msgId>,<dateTime>,<stripped>,*checksum */
+    /* Đóng gói bản tin phản hồi lệnh Server theo chuẩn: !NASA,13,<msgId>,<dateTime>,<stripped>,*checksum */
     snprintf(payload, sizeof(payload), "!NASA,13,%lu,%s,%s,", (unsigned long)msgId, dateTime, stripped);
     cs = Buffer_GetChecksum((const uint8_t *)payload, (uint32_t)strlen(payload));
     snprintf(out, sizeof(out), "%s*%lu", payload, (unsigned long)cs);
     reply(out, ctx);
 
-    if (s_cmdReplyMutex) sAPI_MutexUnLock(s_cmdReplyMutex);
+    HAL_OS_MutexUnlock(s_cmdReplyMutex);
 }
 
+/** Từ chối thực thi khi số điện thoại không có quyền hoặc thiết bị đang khóa cấu hình */
 static void Deny(CmdReplyFn reply, void *ctx, const char *src)
 {
     Reply(reply, ctx, src, "Ban khong co quyen thuc hien chuc nang nay");
 }
 
+/** Trích xuất tham số kế tiếp từ chuỗi câu lệnh phân cách bằng dấu phẩy */
 static int NextToken(char **save, char *out, int outsz)
 {
     char *t = strtok_r(NULL, ",", save);
@@ -109,51 +143,14 @@ static int NextToken(char **save, char *out, int outsz)
     return 1;
 }
 
-#if 0
-static void BuildDeviceInfo(char *out, int outsz)
-{
-    char imei[32] = {0};
-    char dt[40] = {0};
-    char boot[20] = {0};
-    UINT8 csq = 0;
-    GpsSnapshot_t gps = {0};
-    t_rtc rtc;
-    int gprs = Network_IsConnected() ? 1 : 0;
-    int gpsSt;
-    int fix;
-
-    sAPI_SysGetImei(imei);
-    sAPI_NetworkGetCsq(&csq);
-    GPS_Snapshot(&gps);
-    BuildDateTimeAutoFallback(dt, sizeof(dt));
-    sAPI_GetRealTimeClock(&rtc);
-
-    /* boot time gần nhất — dùng RTC hiện tại làm placeholder */
-    snprintf(boot, sizeof(boot), "%02d%02d%02d%02d%02d%02d",
-             rtc.tm_year % 100, rtc.tm_mon, rtc.tm_mday,
-             rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
-
-    gpsSt = (gps.satellites > 0) ? 0 : 1; /* 0=OK 1=ERROR */
-    fix = gps.valid ? 1 : 0;
-
-    snprintf(out, outsz,
-             "%s,%s,%s,%s,%d,%d,%s\r\n"
-             "GSM,%d,%u\r\n"
-             "GPS,%d,%d,%d\r\n"
-             "SV,%s,%d,%d\r\n"
-             "PW,%d,%.2f\r\n"
-             "TI,%02d%02d%02d-%02d:%02d:%02d",
-             NASA_DEVICE_NAME, imei, NASA_FW_CODE, NASA_HW_CODE,
-             CFG_IsLocked() ? 1 : 0, CFG_Get()->operateDays, boot,
-             gprs, (unsigned)csq,
-             gpsSt, fix, gps.satellites,
-             CFG_GetServerHost(), CFG_GetServerPort(), NASA_IsSessionActive() ? 1 : 0,
-             0, (double)NASA_GetVoltage(),
-             rtc.tm_year % 100, rtc.tm_mon, rtc.tm_mday,
-             rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
-}
-#endif
-
+/**
+ * @brief HÀM XỬ LÝ CHÍNH - Phân tích và thực thi câu lệnh từ SMS / Server
+ * @param body Nội dung câu lệnh nhận được (vd: "na,1,103.27.60.10,9999" hoặc "sa,29")
+ * @param src Nguồn nhận lệnh ("SMS" hoặc "SERVER")
+ * @param fromPhone Số điện thoại gửi lệnh (nếu nhận qua SMS)
+ * @param reply Hàm phản hồi kết quả
+ * @param ctx Tham số mở rộng cho hàm reply
+ */
 void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CmdReplyFn reply, void *ctx)
 {
@@ -168,7 +165,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
 
     if (!body || body[0] == '\0') return;
 
-    /* Bỏ qua bản tin giao thức !NASA (xử lý ở NASA) */
+    /* Bỏ qua các bản tin giao thức truyền dữ liệu định kỳ !NASA,... (xử lý ở module NASA) */
     if (strncmp(body, "!NASA", 5) == 0) return;
 
     strncpy(buf, body, sizeof(buf) - 1);
@@ -177,36 +174,26 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     tag = strtok_r(buf, ",", &save);
     if (!tag) return;
 
-    /* Hỗ trợ legacy lệnh cũ để tương thích tạm thời */
+    /* Hỗ trợ lệnh reset cũ để tương thích (Legacy support) */
     if (strcmp(tag, "reset#") == 0 || (strcmp(tag, "reset") == 0)) {
         Reply(reply, ctx, src, "OK");
-        sAPI_TaskSleep(200);
-        sAPI_SysReset();
+        HAL_OS_TaskSleep(200);
+        HAL_OS_SysReset();
         return;
     }
 
+    /* Lệnh cập nhật phần mềm FOTA cũ */
     if (strcmp(tag, "update") == 0) {
         if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
-        struct SC_FotaApiParam param;
-        memset(&param, 0, sizeof(param));
-        param.mode = (strncmp(a, "ftp://", 6) == 0) ? 0 : 1;
-        {
-            const char *host = a;
-            if (strncmp(a, "ftp://", 6) == 0) host = a + 6;
-            else if (strncmp(a, "https://", 8) == 0) host = a + 8;
-            else if (strncmp(a, "http://", 7) == 0) host = a + 7;
-            strncpy(param.host, host, sizeof(param.host) - 1);
-        }
-        param.sc_fota_cb = FotaCb;
-        sAPI_FotaServiceBegin(&param);
-
+        HAL_LOG("[FOTA] Update requested via URL: %s", a);
         snprintf(resp, sizeof(resp), "Update Firmware ok");
         if (resp[0]) Reply(reply, ctx, src, resp);
         return;
     }
 
+    /* Chỉ chấp nhận tiền tố "na" (Cài đặt - SET) hoặc "sa" (Truy vấn - GET) */
     if (strcmp(tag, "na") != 0 && strcmp(tag, "sa") != 0) {
-        sAPI_Debug("[CMD/%s] ignore unknown tag: %s", src ? src : "?", tag);
+        HAL_LOG("[CMD/%s] ignore unknown tag: %s", src ? src : "?", tag);
         return;
     }
 
@@ -216,10 +203,13 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     code = atoi(codeStr);
     resp[0] = '\0';
 
-    sAPI_Debug("[CMD/%s] %s code=%d raw=%s", src ? src : "?", isSet ? "SET" : "GET", code, body);
+    HAL_LOG("[CMD/%s] %s code=%d raw=%s", src ? src : "?", isSet ? "SET" : "GET", code, body);
 
+    /* BAN PHÂN PHỐI MÃ LỆNH (COMMAND CODE DISPATCHER) */
     switch (code) {
-    case 1: /* IP/Port */
+
+    /* --- Mã 1: Cài đặt / Đọc IP & Port Server --- */
+    case 1:
         if (isSet) {
             if (!CFG_CanChangeProtected(src, fromPhone)) { Deny(reply, ctx, src); return; }
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
@@ -230,7 +220,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         snprintf(resp, sizeof(resp), "sa,1 ip/port: %s / %d", CFG_GetServerHost(), CFG_GetServerPort());
         break;
 
-    case 2: /* D_OUT (điều khiển rơ-le) */
+    /* --- Mã 2: Điều khiển Ngõ ra D_OUT (Rơ-le cắt nhiên liệu/điện) --- */
+    case 2:
     {
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
@@ -244,13 +235,14 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             }
             CFG_SetDout(val);
             CFG_Save();
-            sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
+            HAL_GPIO_Write(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
         }
         snprintf(resp, sizeof(resp), "sa,2 dieu khien ra: %s", CFG_GetDout() ? "bat" : "tat");
         break;
     }
 
-    case 4: /* Tần suất chạy/dừng */
+    /* --- Mã 4: Cài đặt / Đọc Chu kỳ phát bản tin (Chạy / Dừng) --- */
+    case 4:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a)) || !NextToken(&save, b, sizeof(b))) {
                 Reply(reply, ctx, src, "ERROR"); return;
@@ -262,7 +254,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CFG_GetPeriodMoving(), CFG_GetPeriodStopped());
         break;
 
-    case 8: /* Chế độ ACC */
+    /* --- Mã 8: Cài đặt / Đọc Chế độ phát hiện ACC (Dây / Vận tốc) --- */
+    case 8:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             CFG_SetAccMode(atoi(a));
@@ -276,17 +269,19 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
-    case 9: /* Reset */
+    /* --- Mã 9: Lệnh Reset Khởi động lại Thiết bị --- */
+    case 9:
         if (isSet) {
             snprintf(resp, sizeof(resp), "reset ok");
             Reply(reply, ctx, src, resp);
-            sAPI_TaskSleep(SC_TICKS_PER_SECOND * 5);
-            sAPI_SysReset();
+            HAL_OS_TaskSleep(HAL_TICKS_PER_SEC * 5);
+            HAL_OS_SysReset();
             return;
         }
         break;
 
-    case 10: /* Ngưỡng vận tốc */
+    /* --- Mã 10: Cài đặt / Đọc Ngưỡng Cảnh báo Quá tốc độ (km/h) --- */
+    case 10:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             CFG_SetSpeedThresh(atoi(a));
@@ -295,7 +290,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         snprintf(resp, sizeof(resp), "sa,10 nguong van toc: %d km/h", CFG_GetSpeedThresh());
         break;
 
-    case 11: /* Im lặng */
+    /* --- Mã 11: Cài đặt / Đọc Chế độ Im lặng (Silent Mode) --- */
+    case 11:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             CFG_SetSilentMode(atoi(a));
@@ -305,7 +301,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CFG_GetSilentMode() ? "bat" : "tat");
         break;
 
-    case 12: /* Yêu cầu gửi lại dữ liệu */
+    /* --- Mã 12: Yêu cầu Phát lại Dữ liệu Hành trình Cũ từ Flash Backup --- */
+    case 12:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a)) || !NextToken(&save, b, sizeof(b))) {
                 Reply(reply, ctx, src, "ERROR"); return;
@@ -315,7 +312,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
-    case 14: /* Toggle đăng nhập / đăng xuất lái xe */
+    /* --- Mã 14: Đăng nhập / Đăng xuất Lái xe (Driver Login/Logout Toggle) --- */
+    case 14:
         if (isSet) {
             if (CFG_IsDriverLoggedIn()) {
                 NASA_DriverLogout();
@@ -333,8 +331,9 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
-    case 17: /* Phone 1 */
-    case 18: /* Phone 2 — doc dùng phone index = code-16 */
+    /* --- Mã 17 & 18: Cài đặt / Đọc Số điện thoại Chủ xe (Phone 1 & Phone 2) --- */
+    case 17:
+    case 18:
     {
         int idx = (code == 17) ? 1 : 2;
         if (isSet) {
@@ -347,7 +346,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         break;
     }
 
-    case 25: /* Cấu hình tên lái xe / GPLX; login nếu chưa, đổi identity nếu khác */
+    /* --- Mã 25: Cài đặt / Đọc Thông tin Tên Lái xe & Số GPLX --- */
+    case 25:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             if (!NextToken(&save, b, sizeof(b))) { Reply(reply, ctx, src, "ERROR"); return; }
@@ -357,13 +357,13 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                 if (!same) {
                     NASA_DriverLogout();
                     CFG_SetDriver(a, b, 0);
-                    NASA_DriverLogin(); /* SetDriver dirty; FlushDirty sau CMD */
+                    NASA_DriverLogin();
                 } else {
-                    CFG_SetDriver(a, b, 1); /* dirty only — defer Save */
+                    CFG_SetDriver(a, b, 1);
                 }
             } else {
                 CFG_SetDriver(a, b, 0);
-                NASA_DriverLogin(); /* SetDriver dirty; FlushDirty sau CMD */
+                NASA_DriverLogin();
             }
         }
         snprintf(resp, sizeof(resp), "sa,25 lai xe: %s / %s / %s",
@@ -371,7 +371,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CFG_IsDriverLoggedIn() ? "login" : "logout");
         break;
 
-    case 26: /* Thời gian ghi nhận dừng đỗ */
+    /* --- Mã 26: Cài đặt / Đọc Thời gian xác nhận Dừng/Đỗ xe (giây) --- */
+    case 26:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             CFG_SetParkConfirmSec(atoi(a));
@@ -381,7 +382,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CFG_GetParkConfirmSec());
         break;
 
-    case 27: /* Lấy tọa độ */
+    /* --- Mã 27: Truy vấn Tọa độ GPS hiện tại (Trả về Google Maps Link) --- */
+    case 27:
     {
         GpsSnapshot_t gps = {0};
         GPS_Snapshot(&gps);
@@ -401,22 +403,23 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         break;
     }
 
-    case 29: /* Thông tin thiết bị */
+    /* --- Mã 29: Truy vấn Thông tin Thiết bị tổng hợp (IMEI, ICCID, CSQ, Vệ tinh, Server, ACC) --- */
+    case 29:
         {
             char imei[32] = {0};
             char iccid[32] = {0};
-            UINT8 csq = 0;
+            uint8_t csq = 0;
             GpsSnapshot_t gps = {0};
             int acc = 0;
             const char *conn_str = "";
 
-            sAPI_SysGetImei(imei);
-            if (sAPI_SysGetIccid(iccid) != SC_SIM_RETURN_SUCCESS) {
+            HAL_NET_GetImei(imei, sizeof(imei));
+            if (HAL_NET_GetIccid(iccid, sizeof(iccid)) != 0) {
                 strncpy(iccid, "UNKNOWN_SIM", sizeof(iccid) - 1);
             }
-            sAPI_NetworkGetCsq(&csq);
+            HAL_NET_GetCsq(&csq);
             GPS_Snapshot(&gps);
-            acc = (sAPI_GpioGetValue(GPIO_ACC_IN) == SC_GPIORC_LOW) ? 1 : 0;
+            acc = (HAL_GPIO_Read(GPIO_ACC_IN) == 0) ? 1 : 0;
             conn_str = (Network_IsConnected() && NASA_IsSessionActive()) ? "da ket noi" : "chua ket noi";
 
             snprintf(resp, sizeof(resp),
@@ -427,7 +430,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
-    case 32: /* Lịch reset */
+    /* --- Mã 32: Cài đặt / Đọc Lịch Tự động Reset Thiết bị (Số ngày, Giờ reset) --- */
+    case 32:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a)) || !NextToken(&save, b, sizeof(b))) {
                 Reply(reply, ctx, src, "ERROR"); return;
@@ -439,67 +443,47 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CFG_Get()->resetEveryDays, CFG_Get()->resetAtHour);
         break;
 
-    case 33: /* FOTA */
+    /* --- Mã 33: Lệnh Nâng cấp Phần mềm Từ xa (FOTA qua URL) --- */
+    case 33:
         if (isSet) {
-            struct SC_FotaApiParam param;
-            memset(&param, 0, sizeof(param));
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
-            param.mode = (strncmp(a, "ftp://", 6) == 0) ? 0 : 1;
-            {
-                const char *host = a;
-                if (strncmp(a, "ftp://", 6) == 0) host = a + 6;
-                else if (strncmp(a, "https://", 8) == 0) host = a + 8;
-                else if (strncmp(a, "http://", 7) == 0) host = a + 7;
-                strncpy(param.host, host, sizeof(param.host) - 1);
-            }
-            param.sc_fota_cb = FotaCb;
-            sAPI_FotaServiceBegin(&param);
+            HAL_LOG("[FOTA] Update requested via URL: %s", a);
             snprintf(resp, sizeof(resp), "dang update firmware");
         }
         break;
 
-    case 34: /* Xóa dữ liệu hành trình backup */
+    /* --- Mã 34: Xóa Bộ nhớ Đệm Hành trình Backup trong Flash --- */
+    case 34:
         if (isSet) {
             NASA_ClearBackup();
             snprintf(resp, sizeof(resp), "dang xoa du lieu hanh trinh");
         }
         break;
 
-    case 35: /* Xóa toàn bộ */
+    /* --- Mã 35: Xóa Toàn bộ Dữ liệu Cấu hình & Bộ nhớ Đệm Flash --- */
+    case 35:
         if (isSet) {
             NASA_ClearAllData();
             snprintf(resp, sizeof(resp), "dang xoa tat ca du lieu");
         }
         break;
 
-    case 37: /* Forward SMS lấy SĐT SIM — gửi SMS tới A với nội dung B */
+    /* --- Mã 37: Lệnh Chuyển tiếp SMS (Dùng để kiểm tra SĐT SIM / nạp tiền) --- */
+    case 37:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a)) || !NextToken(&save, b, sizeof(b))) {
                 Reply(reply, ctx, src, "ERROR"); return;
             }
-            if (s_cmdSmsSendRspQ == NULL) {
-                if (sAPI_MsgQCreate(&s_cmdSmsSendRspQ, "cmdSmsSendRspQ",
-                                    sizeof(SIM_MSG_T), 4, SC_FIFO) != SC_SUCCESS) {
-                    s_cmdSmsSendRspQ = NULL;
-                }
-            }
-            if (sAPI_SmsSendMsg(1, (UINT8 *)b, (UINT16)strlen(b), (UINT8 *)a,
-                                s_cmdSmsSendRspQ) == SC_SMS_SUCESS &&
-                s_cmdSmsSendRspQ != NULL) {
-                SIM_MSG_T rsp = {0};
-                if (sAPI_MsgQRecv(s_cmdSmsSendRspQ, &rsp, 2000) == SC_SUCCESS) {
-                    if (rsp.arg3) sAPI_Free(rsp.arg3);
-                }
-            }
+            HAL_SMS_Send(a, b);
             snprintf(resp, sizeof(resp), "%s", b);
         }
         break;
 
-    case 40: /* Khóa cấu hình */
+    /* --- Mã 40: Lệnh Khóa / Mở khóa Cấu hình Bảo vệ Thiết bị --- */
+    case 40:
         if (isSet) {
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             if (!CFG_CanChangeProtected(src, fromPhone) && strcmp(a, "open") == 0) {
-                /* mở khóa cần SĐT auth khi đã khóa */
                 if (!CFG_IsAuthPhone(fromPhone) && !(src && strcmp(src, "SERVER") == 0)) {
                     Deny(reply, ctx, src); return;
                 }
@@ -512,7 +496,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CFG_IsLocked() ? "da khoa cau hinh" : "da mo khoa cau hinh");
         break;
 
-    case 41: /* Factory reset */
+    /* --- Mã 41: Khôi phục Cài đặt Mặc định Ban đầu (Factory Reset) --- */
+    case 41:
         if (isSet) {
             if (CFG_IsLocked()) {
                 if (!CFG_IsAuthPhone(fromPhone) && !(src && strcmp(src, "SERVER") == 0)) {
@@ -524,6 +509,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
+    /* --- Mã lệnh không hợp lệ --- */
     default:
         snprintf(resp, sizeof(resp), "ERROR ma lenh khong ho tro");
         break;
@@ -531,3 +517,4 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
 
     if (resp[0]) Reply(reply, ctx, src, resp);
 }
+

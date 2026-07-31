@@ -1,7 +1,10 @@
 /**
   ******************************************************************************
   * @file    sc_application.c
-  * @brief   A7677S OpenSDK entry — NASA Tracking (port từ simcom_application.c A7672S)
+  * @brief   Main Application Entry Point -- NASA Tracking
+  *
+  * Luu y: File nay KHONG #include simcom_api.h / simcom_common.h.
+  * Moi tuong tac phan cung di qua HAL layer.
   ******************************************************************************
   */
 
@@ -11,8 +14,13 @@
 #include <string.h>
 
 #include "api_map.h"
-#include "simcom_api.h"
-#include "simcom_common.h"
+
+/* HAL layer */
+#include "hal/hal_log.h"
+#include "hal/hal_os.h"
+#include "hal/hal_net.h"
+#include "hal/hal_gnss.h"
+#include "hal/hal_sms.h"
 
 #include "drv_en25qh64a.h"
 #include "app_config.h"
@@ -20,92 +28,59 @@
 #include "app_gps.h"
 #include "app_sms.h"
 #include "app_cfg.h"
-#include "app_cmd.h"
-#include "app_network.h"
 #include "app_nasa.h"
+#include "app_indication.h"
 
 /* --- SMS URC task --- */
-static sTaskRef gSmsRecvTask = NULL;
-static UINT8 gSmsRecvTaskStack[1024 * 8];
-static sMsgQRef gSmsMsgQueue = NULL;
-static sMsgQRef gSmsReadRspQueue = NULL;
-
-/* Xả response trễ còn kẹt trong queue (free arg3) để read/del không lẫn nhau */
-static void DrainSmsRspQueue(void)
-{
-    SIM_MSG_T stale;
-    while (1) {
-        memset(&stale, 0, sizeof(stale));
-        if (sAPI_MsgQRecv(gSmsReadRspQueue, &stale, SC_NO_SUSPEND) != SC_SUCCESS) break;
-        if (stale.arg3) sAPI_Free(stale.arg3);
-    }
-}
-
+static HalTaskRef_t gSmsRecvTask = NULL;
+static uint8_t      gSmsRecvTaskStack[1024 * 8];
+static HalSmsRspQ_t gSmsMsgQueue = NULL;
+// Task nhận SMS
 static void SmsReceiverTask(void *argv)
 {
-    SC_STATUS status;
+    HalSmsUrcEvent_t evt;
     (void)argv;
 
-    sAPI_Debug("SmsReceiverTask start");
-    status = sAPI_MsgQCreate(&gSmsReadRspQueue, "gSmsReadRspQueue", sizeof(SIM_MSG_T), 4, SC_FIFO);
-    if (status != SC_SUCCESS) return;
-    status = sAPI_MsgQCreate(&gSmsMsgQueue, "gSmsMsgQueue", sizeof(SIM_MSG_T), 10, SC_FIFO);
-    if (status != SC_SUCCESS) return;
+    HAL_LOG("SmsReceiverTask start");
 
-    /* Đợi SIM rồi cấu hình CNMI — thiếu bước này thì A7677S không báo URC SMS */
+    /* Tao URC queue noi bo */
+    if (HAL_SMS_CreateUrcQueue(&gSmsMsgQueue) != 0) return;
+
+    /* Doi SIM san sang va cau hinh CNMI */
     if (SMS_EnsureReady() != 0) {
-        sAPI_Debug("SmsReceiverTask: SMS modem config fail (continue)");
+        HAL_LOG("SmsReceiverTask: SMS modem config fail (continue)");
     }
 
-    sAPI_UrcRefRegister(gSmsMsgQueue, SC_URC_SMS_MASK);
-    sAPI_TaskSleep(200);
+    /* Dang ky nhan URC SMS */
+    HAL_SMS_RegisterUrc(gSmsMsgQueue, HAL_SMS_URC_MASK_NEW | HAL_SMS_URC_MASK_FLASH);
+    HAL_OS_TaskSleep(200);
 
     while (1) {
-        SIM_MSG_T msg = {0};
-
+        /* Kiem tra FOTA truoc khi block recv */
         if (SMS_IsFotaDownloadReady() == 1) {
             SMS_SetFotaDownloadHandled();
-            sAPI_TaskSleep(200);
-            sAPI_SysReset();
+            HAL_OS_TaskSleep(200);
+            HAL_OS_SysReset();
         }
 
-        /* Timeout 1s thay vì SC_SUSPEND để vòng lặp còn kiểm tra được cờ FOTA */
-        if (sAPI_MsgQRecv(gSmsMsgQueue, &msg, SC_TICKS_PER_SECOND) != SC_SUCCESS) continue;
-        if (msg.msg_id != SRV_URC) goto cleanup;
+        /* Timeout 1s de vong lap van kiem tra duoc co FOTA */
+        if (HAL_SMS_RecvUrc(gSmsMsgQueue, &evt, HAL_TICKS_PER_SEC) != 0) continue;
 
-        if (msg.arg2 == SC_URC_NEW_MSG_IND) {
-            char *p_idx = (char *)msg.arg3;
-            if (p_idx && strrchr(p_idx, ',')) {
-                int index = atoi(strrchr(p_idx, ',') + 1);
-                SIM_MSG_T readRspMsg = {0};
-                DrainSmsRspQueue();
-                if (sAPI_SmsReadMsg(1, index, gSmsReadRspQueue) == SC_SMS_SUCESS &&
-                    sAPI_MsgQRecv(gSmsReadRspQueue, &readRspMsg, 1000) == SC_SUCCESS) {
-                    SMS_ExtractAndExecuteSmsBody((char *)readRspMsg.arg3, "SMS");
-                    sAPI_Free(readRspMsg.arg3);
-                }
-                {
-                    SIM_MSG_T delRspMsg = {0};
-                    DrainSmsRspQueue();
-                    if (sAPI_SmsDelOneMsg(index, gSmsReadRspQueue) == SC_SMS_SUCESS) {
-                        if (sAPI_MsgQRecv(gSmsReadRspQueue, &delRspMsg, 1000) == SC_SUCCESS) {
-                            if (delRspMsg.arg3) sAPI_Free(delRspMsg.arg3);
-                        }
-                    }
-                }
+        if (evt.type == HAL_SMS_URC_NEW_MSG && evt.index > 0) {
+            char smsBuf[256] = {0};
+            if (HAL_SMS_Read(evt.index, smsBuf, sizeof(smsBuf)) == 0) {
+                SMS_ExtractAndExecuteSmsBody(smsBuf, "SMS");
             }
-        } else if (msg.arg2 == SC_URC_FLASH_MSG) {
-            SMS_ExtractAndExecuteSmsBody((char *)msg.arg3, "SMS_FLASH");
+            HAL_SMS_Delete(evt.index);
+        } else if (evt.type == HAL_SMS_URC_FLASH_MSG) {
+            SMS_ExtractAndExecuteSmsBody(evt.body, "SMS_FLASH");
         }
-
-    cleanup:
-        if (msg.arg3) sAPI_Free(msg.arg3);
     }
 }
 
 /* --- NASA reporter task --- */
-static sTaskRef s_nasaReportTaskRef = NULL;
-static UINT8 s_nasaReportTaskStack[1024 * 10];
+static HalTaskRef_t s_nasaReportTaskRef = NULL;
+static uint8_t      s_nasaReportTaskStack[1024 * 10];
 
 static void sTask_NasaReport(void *argv)
 {
@@ -116,168 +91,55 @@ static void sTask_NasaReport(void *argv)
     }
 }
 
-/* --- GPIO / ACC / LED task --- */
-static sTaskRef s_gpioStatusTaskRef = NULL;
-static UINT8 s_gpioStatusTaskStack[1024 * 2];
-
-/*
- * LED theo Technical doc:
- *  - GNSS: nhấp chậm = fix tốt; sáng đứng = chưa fix
- *  - 4G/Net: nhấp chậm = đã kết nối server; sáng đứng = có mạng; tắt = không mạng
- *  - Power: sáng = OK
- * Mọi LED nhấp cùng một chu kỳ (blinkSlow) để nhìn đồng nhất.
- * ACC: active-low trên GPIO_ACC_IN (LOW = ACC ON, pull-up nên dây hở = OFF)
- */
-static void sTask_GpioStatusIndication(void *argv)
-{
-    SC_GPIOConfiguration outputConfig = {SC_GPIO_OUT_PIN, 0, SC_GPIO_PULLUP_ENABLE, SC_GPIO_NO_EDGE, NULL, NULL};
-    SC_GPIOConfiguration inputConfig = {SC_GPIO_IN_PIN, 1, SC_GPIO_PULLUP_ENABLE, SC_GPIO_NO_EDGE, NULL, NULL};
-    int blinkSlow = 0;
-    int blinkPhase = 0;
-    UINT8 last_csq = 99;
-    int csq_poll_count = 0;
-    int lastRawAcc = -1;
-    int accDebounceCount = 0;
-    int s_accVal = 0;
-
-    (void)argv;
-
-    sAPI_GpioConfig(GPIO_LED_GNSS, outputConfig);
-    sAPI_GpioConfig(GPIO_LED_NET, outputConfig);
-    /* GPIO_05 (FLASH_SPI_CS_PIN) dành cho CS flash — không config/ghi đè tại đây */
-    if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) {
-        sAPI_GpioConfig(GPIO_LED_PWR, outputConfig);
-        sAPI_GpioSetValue(GPIO_LED_PWR, 1);
-    }
-    sAPI_GpioConfig(GPIO_DOUT, outputConfig);
-    sAPI_GpioConfig(GPIO_ACC_IN, inputConfig);
-    sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
-
-    while (1) {
-        int silent = CFG_GetSilentMode();
-        int currentAcc = (sAPI_GpioGetValue(GPIO_ACC_IN) == SC_GPIORC_LOW) ? 1 : 0;
-
-        if (lastRawAcc == -1) {
-            lastRawAcc = currentAcc;
-            s_accVal = currentAcc;
-            NASA_SetAcc(s_accVal);
-            GPS_SetAccOn(s_accVal);
-        }
-
-        if (currentAcc == lastRawAcc) {
-            if (currentAcc != s_accVal) {
-                accDebounceCount++;
-                if (accDebounceCount >= ACC_DEBOUNCE_CYCLES) {
-                    s_accVal = currentAcc;
-                    accDebounceCount = 0;
-                    NASA_SetAcc(s_accVal);
-                    GPS_SetAccOn(s_accVal);
-                    sAPI_Debug("[ACC] %d", s_accVal);
-                }
-            } else {
-                accDebounceCount = 0;
-            }
-        } else {
-            lastRawAcc = currentAcc;
-            accDebounceCount = 1;
-        }
-
-        if (++csq_poll_count >= 10) {
-            sAPI_NetworkGetCsq(&last_csq);
-            csq_poll_count = 0;
-        }
-
-        blinkPhase++;
-        if ((blinkPhase % 2) == 0) blinkSlow = !blinkSlow;
-
-        if (silent) {
-            sAPI_GpioSetValue(GPIO_LED_GNSS, 0);
-            sAPI_GpioSetValue(GPIO_LED_NET, 0);
-            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) sAPI_GpioSetValue(GPIO_LED_PWR, 0);
-        } else {
-            int sats = GPS_GetSatellitesCount();
-            int gpsOk = (sats >= 5);
-            /* Nhấp chậm (cùng nhịp blinkSlow với LED NET) khi fix tốt; sáng đứng khi chưa fix */
-            sAPI_GpioSetValue(GPIO_LED_GNSS, gpsOk ? blinkSlow : 1);
-
-            if (Network_IsConnected() && NASA_IsSessionActive()) {
-                sAPI_GpioSetValue(GPIO_LED_NET, blinkSlow);
-            } else if (last_csq >= 1 && last_csq <= 31) {
-                sAPI_GpioSetValue(GPIO_LED_NET, 1);
-            } else {
-                sAPI_GpioSetValue(GPIO_LED_NET, 0);
-            }
-
-            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) sAPI_GpioSetValue(GPIO_LED_PWR, 1);
-        }
-
-        if (NASA_IsWatchdogTimeout()) {
-            sAPI_Debug("[WATCHDOG] Task nasa_reporter timeout >180s! SysReset...");
-            sAPI_TaskSleep(200);
-            sAPI_SysReset();
-        }
-
-        sAPI_GpioSetValue(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
-        sAPI_TaskSleep(100); /* 500ms @ 200 ticks/s */
-    }
-}
-
 /**
  * OpenSDK A7677S app entry (thay cho Application/get_sAPI trên A7672S).
  */
 void userSpace_Main(void *arg)
 {
     ApiMapInit(arg);
-    sAPI_Debug("ApiMapInit OK (A7677S)");
+    HAL_LOG("ApiMapInit OK (A7677S)");
 
-    sAPI_TaskSleep(APP_STARTUP_DELAY_SEC * SC_TICKS_PER_SECOND);
-    sAPI_Debug("==== NASA FW %s HW %s BUILD_MARK=260718a A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
+    HAL_OS_TaskSleep(APP_STARTUP_DELAY_SEC * HAL_TICKS_PER_SEC);
+    HAL_LOG("==== NASA FW %s HW %s A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 
-    EN25_Init();
-    CFG_Init();
-    SMS_Init();
+    EN25_Init();    // Khoi tao Flash
+    CFG_Init();     // Khoi tao cau hinh
+    GPS_Init();     // Khoi tao GPS
+    SMS_Init();     // Khoi tao SMS
 
-    sAPI_NetworkInit();
-    NitzEnableFromNetwork();
-    GnssUrcListenerEnsureStarted();
+    /* Khoi tao mang qua HAL -- khong goi sAPI_NetworkInit truc tiep */
+    HAL_NET_Init(); // Khoi tao mang
+    HAL_NET_NitzEnable();// Khoi tao NITZ
+    HAL_GNSS_UrcListenerStart(); // Khoi tao GPS URC
 
-    if (s_gpioStatusTaskRef == NULL) {
-        if (sAPI_TaskCreate(&s_gpioStatusTaskRef, s_gpioStatusTaskStack,
-                            sizeof(s_gpioStatusTaskStack), 200, (char *)"gpio_status",
-                            sTask_GpioStatusIndication, NULL) != SC_SUCCESS) {
-            s_gpioStatusTaskRef = NULL;
-            sAPI_Debug("[GPIO Status] create task fail");
-        } else {
-            sAPI_Debug("[GPIO Status] create task OK");
-        }
-    }
+    INDICATION_TaskStart(); // Khoi tao LED
 
     if (s_nasaReportTaskRef == NULL) {
-        if (sAPI_TaskCreate(&s_nasaReportTaskRef, s_nasaReportTaskStack,
-                            sizeof(s_nasaReportTaskStack), 120, (char *)"nasa_reporter",
-                            sTask_NasaReport, NULL) != SC_SUCCESS) {
+        if (HAL_OS_TaskCreate(&s_nasaReportTaskRef, s_nasaReportTaskStack,
+                              sizeof(s_nasaReportTaskStack), 15, "nasa_reporter",
+                              sTask_NasaReport, NULL) != 0) {
             s_nasaReportTaskRef = NULL;
-            sAPI_Debug("[NASA Reporter] create task fail");
+            HAL_LOG("[NASA Reporter] create task fail");
         } else {
-            sAPI_Debug("[NASA Reporter] create task OK");
+            HAL_LOG("[NASA Reporter] create task OK");
         }
     }
-
-    if (sAPI_TaskCreate(&gSmsRecvTask, gSmsRecvTaskStack, sizeof(gSmsRecvTaskStack),
-                        90, "SmsRecvTask", SmsReceiverTask, NULL) != SC_SUCCESS) {
+    // Task nhận SMS
+    if (HAL_OS_TaskCreate(&gSmsRecvTask, gSmsRecvTaskStack, sizeof(gSmsRecvTaskStack),
+                          18, "SmsRecvTask", SmsReceiverTask, NULL) != 0) {
         gSmsRecvTask = NULL;
-        sAPI_Debug("SmsRecvTask create fail");
+        HAL_LOG("SmsRecvTask create fail");
     } else {
-        sAPI_Debug("SmsRecvTask create OK");
+        HAL_LOG("SmsRecvTask create OK");
     }
 }
-
+// Task báo cáo NASA
 void abort(void)
 {
-    /* Thiết bị không người trực: tự reset để phục hồi thay vì treo vĩnh viễn */
-    sAPI_Debug("abort!!! -> SysReset");
-    sAPI_TaskSleep(200);
-    sAPI_SysReset();
+    /* Thiet bi khong nguoi truc: tu reset thay vi treo vinh vien */
+    HAL_LOG("abort!!! -> SysReset");
+    HAL_OS_TaskSleep(200);
+    HAL_OS_SysReset();
     while (1);
 }
 

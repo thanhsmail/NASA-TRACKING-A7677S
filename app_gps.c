@@ -1,5 +1,15 @@
-#include "simcom_api.h"
-#include "simcom_common.h"
+/**
+ * @file app_gps.c
+ * @brief GPS/GNSS processing module -- NASA Tracking
+ *
+ * Luu y: File nay KHONG #include simcom_api.h truc tiep.
+ * RTC, GNSS URC -> HAL_GNSS_*, Mutex -> HAL_OS_*, Debug -> HAL_LOG.
+ * Ham GnssUrcListenerEnsureStarted da duoc chuyen vao hal_impl_simcom.c
+ * (nay goi la HAL_GNSS_UrcListenerStart).
+ */
+#include "hal/hal_log.h"
+#include "hal/hal_os.h"
+#include "hal/hal_gnss.h"
 #include "app_config.h"
 #include "app_cfg.h"
 #include "app_utils.h"
@@ -14,23 +24,24 @@
 #define RAD_PER_DEG (NASA_PI / 180.0)
 #define EARTH_RADIUS_KM 6371.0
 
-static double s_lastLat = 0.0;
-static double s_lastLon = 0.0;
-static double s_lastSpeedKph = 0.0;
-static double s_lastHeadingDeg = 0.0;
-static int s_lastSatellites = 0;
-static double s_totalKm = 0.0;
-static uint32_t s_lastFixTick = 0;
-static sMutexRef s_gpsDataMutex = NULL;
+static double   s_lastLat       = 0.0;
+static double   s_lastLon       = 0.0;
+static double   s_lastSpeedKph  = 0.0;
+static double   s_lastHeadingDeg= 0.0;
+static int      s_lastSatellites= 0;
+static double   s_totalKm       = 0.0;
+static uint32_t s_lastFixTick   = 0;
+static HalMutexRef_t s_gpsDataMutex = NULL;
 
-static double s_prevLat = 0.0;
-static double s_prevLon = 0.0;
+static double   s_prevLat      = 0.0;
+static double   s_prevLon      = 0.0;
 static uint32_t s_prevOdomTick = 0;
 static uint32_t s_gpsLossStartTick = 0;
 
-static SCsysTime_t s_lastGnssTime = {0};
-static uint32_t s_lastGnssTimeTick = 0;
-static int s_hasGnssTime = 0;
+/* Su dung HalDateTime_t thay cho SCsysTime_t (khong phu thuoc SDK) */
+static HalDateTime_t s_lastGnssTime = {0};
+static uint32_t      s_lastGnssTimeTick = 0;
+static int           s_hasGnssTime = 0;
 
 /**
  * @brief Tính số ngày trong tháng (hỗ trợ năm nhuận).
@@ -49,10 +60,9 @@ static int DaysInMonth(int year, int mon)
 }
 
 /**
- * @brief Cộng/trừ số giây vào cấu trúc thời gian SCsysTime_t.
- * Tự động quy đổi qua các ranh giới giây, phút, giờ, ngày, tháng và năm.
+ * @brief Cộng/trừ số giây vào cấu trúc thời gian HalDateTime_t.
  */
-static void AddSecondsToSysTime(SCsysTime_t *t, int32_t sec)
+static void AddSecondsToSysTime(HalDateTime_t *t, int32_t sec)
 {
     int64_t total;
     int dim;
@@ -100,42 +110,42 @@ static void AddSecondsToSysTime(SCsysTime_t *t, int32_t sec)
 }
 
 /**
- * @brief Đồng bộ RTC phần cứng từ thời gian GNSS UTC (chỉ thực hiện khi RTC bị mất nguồn / chưa sync).
+ * @brief Dong bo RTC phan cung tu thoi gian GNSS UTC (chi khi RTC bi mat nguon / chua sync).
  */
-static void MaybeSyncRtcFromGnss(const SCsysTime_t *utc)
+static void MaybeSyncRtcFromGnss(const HalDateTime_t *utc)
 {
-    t_rtc rtc;
-    SCsysTime_t local;
+    HalDateTime_t rtc;
+    HalDateTime_t local;
     if (utc == NULL || utc->tm_year < 2020 || utc->tm_year > 2100) return;
 
-    sAPI_GetRealTimeClock(&rtc);
+    HAL_GNSS_GetRtc(&rtc);
     if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100) return;
 
     local = *utc;
     AddSecondsToSysTime(&local, (int32_t)NASA_GNSS_UTC_OFFSET_HOURS * 3600);
     memset(&rtc, 0, sizeof(rtc));
     rtc.tm_year = local.tm_year;
-    rtc.tm_mon = local.tm_mon;
+    rtc.tm_mon  = local.tm_mon;
     rtc.tm_mday = local.tm_mday;
     rtc.tm_hour = local.tm_hour;
-    rtc.tm_min = local.tm_min;
-    rtc.tm_sec = local.tm_sec;
-    (void)sAPI_SetRealTimeClock(&rtc);
-    sAPI_Debug("[GNSS] RTC synced from GNSS: %04d-%02d-%02d %02d:%02d:%02d",
-               rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
+    rtc.tm_min  = local.tm_min;
+    rtc.tm_sec  = local.tm_sec;
+    HAL_GNSS_SetRtc(&rtc);
+    HAL_LOG("[GNSS] RTC synced: %04d-%02d-%02d %02d:%02d:%02d",
+            rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec);
 }
 
 /**
- * @brief Lưu thời gian UTC nhận từ URC GNSS vào RAM và kích hoạt đồng bộ RTC.
+ * @brief Luu thoi gian UTC nhan tu URC GNSS vao RAM va kich hoat dong bo RTC.
  */
-static void StoreGnssUtcTime(const SCsysTime_t *utc)
+static void StoreGnssUtcTime(const HalDateTime_t *utc)
 {
     if (utc == NULL || utc->tm_year < 2020 || utc->tm_year > 2100) return;
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_gpsDataMutex);
     s_lastGnssTime = *utc;
-    s_hasGnssTime = 1;
+    s_hasGnssTime  = 1;
     s_lastGnssTimeTick = GetTickNow();
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
     MaybeSyncRtcFromGnss(utc);
 }
 
@@ -145,19 +155,19 @@ static void StoreGnssUtcTime(const SCsysTime_t *utc)
  */
 int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize)
 {
-    SCsysTime_t local;
+    HalDateTime_t local;
     uint32_t ageSec;
     uint32_t now;
     if ((dateTime == NULL) || (dateTimeSize == 0)) return 0;
     if (!s_hasGnssTime) return 0;
 
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
-    local = s_lastGnssTime;
-    now = GetTickNow();
+    HAL_OS_MutexLock(s_gpsDataMutex);
+    local  = s_lastGnssTime;
+    now    = GetTickNow();
     ageSec = (now >= s_lastGnssTimeTick)
-                 ? ((now - s_lastGnssTimeTick) / (uint32_t)SC_TICKS_PER_SECOND)
+                 ? ((now - s_lastGnssTimeTick) / (uint32_t)HAL_TICKS_PER_SEC)
                  : 0;
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
 
     AddSecondsToSysTime(&local, (int32_t)NASA_GNSS_UTC_OFFSET_HOURS * 3600 + (int32_t)ageSec);
     if (local.tm_year < 2020 || local.tm_year > 2100) return 0;
@@ -176,29 +186,21 @@ static int    s_isParkedNow = 0;
 static int    s_isCoastingToPark = 0;
 static double s_anchorLat = 0.0;
 static double s_anchorLon = 0.0;
-static volatile int s_accWireOn = 0; /* dây ACC (đã debounce), cập nhật từ GPIO task */
+static volatile int s_accWireOn = 0;
 
-/**
- * @brief Cập nhật trạng thái đầu vào dây ACC (đã qua lọc debounce ở GPIO Task).
- * @param on 1 nếu ACC ON (khóa điện bật), 0 nếu ACC OFF.
- */
 void GPS_SetAccOn(int on)
 {
     s_accWireOn = on ? 1 : 0;
 }
 
-static sMsgQRef s_gnssUrcMsgQ = NULL;
-static sTaskRef s_gnssUrcTaskRef = NULL;
-static UINT8 s_gnssUrcTaskStack[1024 * 3];
-
 /**
- * @brief Khởi tạo các tài nguyên hệ thống dùng chung cho module GPS (Mutex bảo vệ data).
+ * @brief Khoi tao Mutex bao ve GPS data.
  */
 void GPS_Init(void)
 {
     if (s_gpsDataMutex == NULL)
     {
-        sAPI_MutexCreate(&s_gpsDataMutex, SC_FIFO);
+        HAL_OS_MutexCreate(&s_gpsDataMutex);
     }
 }
 
@@ -210,7 +212,7 @@ void GPS_Init(void)
 void GPS_Snapshot(GpsSnapshot_t *out)
 {
     if (out == NULL) return;
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_gpsDataMutex);
     out->lat        = s_lastLat;
     out->lon        = s_lastLon;
     out->speedKph   = s_lastSpeedKph;
@@ -219,12 +221,8 @@ void GPS_Snapshot(GpsSnapshot_t *out)
     out->totalKm    = s_totalKm;
     out->fixTick    = s_lastFixTick;
     out->valid      = (out->satellites >= 5 && out->lat != 0.0 && out->lon != 0.0);
-    if (!out->valid)
-    {
-        out->lat = 0.0;
-        out->lon = 0.0;
-    }
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    if (!out->valid) { out->lat = 0.0; out->lon = 0.0; }
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
 /**
@@ -232,11 +230,11 @@ void GPS_Snapshot(GpsSnapshot_t *out)
  */
 void GPS_ResetOdometer(void)
 {
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_gpsDataMutex);
     s_totalKm = 0.0;
     s_prevLat = 0.0;
     s_prevLon = 0.0;
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
 /**
@@ -245,9 +243,9 @@ void GPS_ResetOdometer(void)
 int GPS_GetSatellitesCount(void)
 {
     int val = 0;
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_gpsDataMutex);
     val = s_lastSatellites;
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
     return val;
 }
 
@@ -257,9 +255,9 @@ int GPS_GetSatellitesCount(void)
 double GPS_GetLastSpeedKph(void)
 {
     double val = 0.0;
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_gpsDataMutex);
     val = s_lastSpeedKph;
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
     return val;
 }
 
@@ -269,9 +267,9 @@ double GPS_GetLastSpeedKph(void)
 double GPS_GetTotalKm(void)
 {
     double val = 0.0;
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_gpsDataMutex);
     val = s_totalKm;
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
     return val;
 }
 
@@ -362,21 +360,21 @@ static int FilterMovingStatus(double speed, double lat, double lon)
             s_parkTimeoutStartTick = 0;
             if (s_speedAboveThresholdTick == 0) {
                 s_speedAboveThresholdTick = now;
-            } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+            } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * HAL_TICKS_PER_SEC)) {
                 s_isMovingNow = 1;
             }
         } else {
             s_speedAboveThresholdTick = 0;
             if (s_speedBelowThresholdTick == 0) {
                 s_speedBelowThresholdTick = now;
-            } else if ((now - s_speedBelowThresholdTick) >= (STOPPED_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+            } else if ((now - s_speedBelowThresholdTick) >= (STOPPED_CONFIRM_SEC * HAL_TICKS_PER_SEC)) {
                 s_isMovingNow = 0;
             }
 
             /* Fallback 600s (10 phút) đỗ áp dụng cho mọi accMode */
             if (s_parkTimeoutStartTick == 0) {
                 s_parkTimeoutStartTick = now;
-            } else if ((now - s_parkTimeoutStartTick) >= (PARKED_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+            } else if ((now - s_parkTimeoutStartTick) >= (PARKED_CONFIRM_SEC * HAL_TICKS_PER_SEC)) {
                 s_isParkedNow = 1;
                 s_isMovingNow = 0;
             }
@@ -389,7 +387,7 @@ static int FilterMovingStatus(double speed, double lat, double lon)
         if (speed > thresh) {
             if (s_speedAboveThresholdTick == 0) {
                 s_speedAboveThresholdTick = now;
-            } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * SC_TICKS_PER_SECOND)) {
+            } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * HAL_TICKS_PER_SEC)) {
                 /* Kiểm tra dịch chuyển thực khỏi điểm Neo >= 15m */
                 if (s_anchorLat == 0.0 && s_anchorLon == 0.0) {
                     s_isParkedNow = 0;
@@ -449,10 +447,10 @@ static void UpdateOdometer(double newLat, double newLon)
         {
             s_gpsLossStartTick = (now != 0) ? now : 1;
         }
-        else if ((now - s_gpsLossStartTick) >= (uint32_t)(ODOM_GPS_LOSS_TIMEOUT_SEC * SC_TICKS_PER_SECOND))
+        else
         {
-            sAPI_Debug("[Odom] Mat GPS qua lau (>%ds) -> reset diem tham chieu odometer",
-                       ODOM_GPS_LOSS_TIMEOUT_SEC);
+            HAL_LOG("[Odom] Mat GPS qua lau (>%ds) -> reset diem tham chieu odometer",
+                    ODOM_GPS_LOSS_TIMEOUT_SEC);
             s_prevLat = 0.0;
             s_prevLon = 0.0;
         }
@@ -476,7 +474,7 @@ static void UpdateOdometer(double newLat, double newLon)
     {
         double dist = CalculateDistanceKm(s_prevLat, s_prevLon, newLat, newLon);
         double elapsedSec = (s_prevOdomTick != 0 && now > s_prevOdomTick)
-                                  ? (double)(now - s_prevOdomTick) / SC_TICKS_PER_SECOND
+                                  ? (double)(now - s_prevOdomTick) / HAL_TICKS_PER_SEC
                                   : 1.0;
         if (elapsedSec < 1.0) elapsedSec = 1.0;
 
@@ -491,13 +489,13 @@ static void UpdateOdometer(double newLat, double newLon)
             s_totalKm += dist;
             if (wasGpsLoss)
             {
-                sAPI_Debug("[Odom] Noi lai sau mat GPS ngan (%.1fs): +%.1fm",
-                           elapsedSec, dist * 1000.0);
+                HAL_LOG("[Odom] Noi lai sau mat GPS ngan (%.1fs): +%.1fm",
+                        elapsedSec, dist * 1000.0);
             }
         }
         else if (dist > maxDist)
         {
-            sAPI_Debug("[Odom] Jump filtered: %.1fm > max %.1fm (speed=%.1fkph, elapsed=%.1fs)",
+            HAL_LOG("[Odom] Jump filtered: %.1fm > max %.1fm (speed=%.1fkph, elapsed=%.1fs)",
                        dist * 1000.0, maxDist * 1000.0, s_lastSpeedKph, elapsedSec);
         }
     }
@@ -565,11 +563,11 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
     int isMoving = FilterMovingStatus(speedRaw, latDec, lonDec);
 
     {
-        SCsysTime_t utc = {0};
+        HalDateTime_t utc = {0};
         if (!ParseDateTimeFromUrcTokens(fields[4], fields[5], &utc))
             return 0;
 
-        if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+        HAL_OS_MutexLock(s_gpsDataMutex);
         s_lastLat = latDec;
         s_lastLon = lonDec;
         if (isMoving) {
@@ -588,15 +586,15 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
         UpdateOdometer(latDec, lonDec);
         ApplyStationaryAnchor(isMoving);
         s_lastFixTick = GetTickNow();
-        if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+        HAL_OS_MutexUnlock(s_gpsDataMutex);
 
         StoreGnssUtcTime(&utc);
         static uint32_t lastGnssLogTick = 0;
         uint32_t nowGnssTick = GetTickNow();
-        if (lastGnssLogTick == 0 || (nowGnssTick - lastGnssLogTick) >= (uint32_t)(30 * SC_TICKS_PER_SECOND)) {
+        if (lastGnssLogTick == 0 || (nowGnssTick - lastGnssLogTick) >= (uint32_t)(5 * HAL_TICKS_PER_SEC)) {
             lastGnssLogTick = nowGnssTick;
-            sAPI_Debug("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d moving=%d",
-                       s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites, isMoving);
+            HAL_LOG("[GNSS] lat=%.6f lon=%.6f spd=%.2f sats=%d moving=%d",
+                    s_lastLat, s_lastLon, s_lastSpeedKph, s_lastSatellites, isMoving);
         }
     }
     return 1;
@@ -624,16 +622,16 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     {
         static uint32_t lastNoFixLogTick = 0;
         uint32_t nowNoFix = GetTickNow();
-        if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+        HAL_OS_MutexLock(s_gpsDataMutex);
         s_lastSatellites = 0;
-        s_lastLat = 0.0;
-        s_lastLon = 0.0;
-        s_lastSpeedKph = 0.0;
-        if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+        s_lastLat        = 0.0;
+        s_lastLon        = 0.0;
+        s_lastSpeedKph   = 0.0;
+        HAL_OS_MutexUnlock(s_gpsDataMutex);
         if (lastNoFixLogTick == 0 ||
-            (nowNoFix - lastNoFixLogTick) >= (uint32_t)(30 * SC_TICKS_PER_SECOND)) {
+            (nowNoFix - lastNoFixLogTick) >= (uint32_t)(5 * HAL_TICKS_PER_SEC)) {
             lastNoFixLogTick = nowNoFix;
-            sAPI_Debug("[GNSS] No fix (nf=%d)", nf);
+            HAL_LOG("[GNSS] No fix (nf=%d)", nf);
         }
         return 1;
     }
@@ -659,14 +657,14 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     double speed = speedKnots * KNOTS_TO_KMH;
     int isMoving = FilterMovingStatus(speed, latDec, lonDec);
 
-    if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+    if (s_gpsDataMutex) HAL_OS_MutexLock(s_gpsDataMutex);
 
     s_lastSatellites = satellites;
-    s_lastLat = latDec;
-    s_lastLon = lonDec;
+    s_lastLat        = latDec;
+    s_lastLon        = lonDec;
     if (isMoving) {
         s_lastHeadingDeg = (ns_idx + 7 < nf) ? strtod(fields[ns_idx + 7], NULL) : 0.0;
-        s_lastSpeedKph = speed;
+        s_lastSpeedKph   = speed;
     } else {
         s_lastSpeedKph = 0.0;
     }
@@ -677,11 +675,11 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     UpdateOdometer(latDec, lonDec);
     ApplyStationaryAnchor(isMoving);
 
-    if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+    if (s_gpsDataMutex) HAL_OS_MutexUnlock(s_gpsDataMutex);
 
-    /* date/UTC time nằm ngay sau E/W: ns_idx+3, ns_idx+4 */
+    /* date/UTC time nam ngay sau E/W: ns_idx+3, ns_idx+4 */
     if (ns_idx + 4 < nf && fields[ns_idx + 3][0] != '\0' && fields[ns_idx + 4][0] != '\0') {
-        SCsysTime_t utc = {0};
+        HalDateTime_t utc = {0};
         if (ParseDateTimeFromUrcTokens(fields[ns_idx + 3], fields[ns_idx + 4], &utc))
             StoreGnssUtcTime(&utc);
     }
@@ -691,7 +689,7 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
 /**
  * @brief Bóc tách thời gian UTC từ các trường date/time của bản tin NMEA/URC.
  */
-static int TryParseGnssDateTimeFromUrc(const char *gpsUrc, SCsysTime_t *out)
+static int TryParseGnssDateTimeFromUrc(const char *gpsUrc, HalDateTime_t *out)
 {
     const char *p;
     if ((gpsUrc == NULL) || (out == NULL))
@@ -763,15 +761,14 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
     if (gpsUrc == NULL) return;
 
     if (TryParseCgnssInfoUrc(gpsUrc) || TryParseCgpsInfoUrc(gpsUrc)) {
-        SCsysTime_t utc = {0};
-        /* Bổ sung parse date/time nếu parser fix chưa lấy được */
+        HalDateTime_t utc = {0};
         if (!s_hasGnssTime && TryParseGnssDateTimeFromUrc(gpsUrc, &utc))
             StoreGnssUtcTime(&utc);
         return;
     }
 
     {
-        SCsysTime_t utc = {0};
+        HalDateTime_t utc = {0};
         if (TryParseGnssDateTimeFromUrc(gpsUrc, &utc))
             StoreGnssUtcTime(&utc);
     }
@@ -790,8 +787,8 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
         double speedRaw = (n >= 3) ? nums[2] * KNOTS_TO_KMH : 0.0;
         int isMoving = FilterMovingStatus(speedRaw, nums[0], nums[1]);
 
-        sAPI_Debug("[GPS-Fallback] Dung fallback parser, raw=%s", gpsUrc);
-        if (s_gpsDataMutex) sAPI_MutexLock(s_gpsDataMutex, SC_SUSPEND);
+        HAL_LOG("[GPS-Fallback] Dung fallback parser, raw=%s", gpsUrc);
+        HAL_OS_MutexLock(s_gpsDataMutex);
         s_lastLat = nums[0];
         s_lastLon = nums[1];
 
@@ -812,88 +809,26 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
         UpdateOdometer(nums[0], nums[1]);
         ApplyStationaryAnchor(isMoving);
         s_lastFixTick = GetTickNow();
-        if (s_gpsDataMutex) sAPI_MutexUnLock(s_gpsDataMutex);
+        if (s_gpsDataMutex) HAL_OS_MutexUnlock(s_gpsDataMutex);
     }
 }
 
 /**
- * @brief Task RTOS lắng nghe và xử lý sự kiện URC GNSS từ modem theo cơ chế Queue Event-Driven.
- * Rate-limit log URC 30s để giảm dung lượng UART log.
+ * @brief GNSS URC task -- nay duoc quan ly boi HAL_GNSS_UrcListenerStart().
+ * App_gps.c khong can biet chi tiet RTOS/SDK: chi goi callback TryUpdateGpsFromUrcString.
+ *
+ * HAL_GNSS_UrcListenerStart() trong hal_impl_simcom.c se:
+ *   1. Tao MsgQ
+ *   2. Register URC mask
+ *   3. Power on GNSS + Hot start
+ *   4. Spawn task goi HAL_GNSS_SetUrcCallback(TryUpdateGpsFromUrcString)
  */
-static void sTask_GnssUrcListener(void *argv) 
+void GPS_OnUrcString(const char *gpsUrc)
 {
-    (void)argv;
-    for (;;)
-    {
-        SIM_MSG_T msg = {0};
-        if (s_gnssUrcMsgQ == NULL)
-        {
-            sAPI_TaskSleep(200);
-            continue;
-        }
-        if (sAPI_MsgQRecv(s_gnssUrcMsgQ, &msg, SC_SUSPEND) != SC_SUCCESS)
-        {
-            continue;
-        }
-        if ((msg.msg_id == SRV_URC) && (msg.arg1 == SC_URC_GNSS_MASK) && (msg.arg3 != NULL))
-        {
-            static uint32_t lastUrcLogTick = 0;
-            uint32_t nowUrcTick = GetTickNow();
-            if (lastUrcLogTick == 0 || (nowUrcTick - lastUrcLogTick) >= (uint32_t)(30 * SC_TICKS_PER_SECOND)) {
-                lastUrcLogTick = nowUrcTick;
-                sAPI_Debug("[GPS URC] msg_id=%u arg1=%d arg2=%d raw=%s",
-                           (unsigned)msg.msg_id,
-                           (int)msg.arg1,
-                           (int)msg.arg2,
-                           (const char *)msg.arg3);
-            }
-            if ((msg.arg2 == SC_URC_GPS_INFO) || (msg.arg2 == SC_URC_GNSS_INFO))
-            {
-                TryUpdateGpsFromUrcString((const char *)msg.arg3);
-            }
-        }
-        if (msg.arg3 != NULL)
-        {
-            sAPI_Free(msg.arg3);
-            msg.arg3 = NULL;
-        }
-    }
+    TryUpdateGpsFromUrcString(gpsUrc);
 }
 
-/**
- * @brief Khởi tạo và khởi chạy GNSS Hardware (Hot Start) cùng Task URC Listener.
- */
 void GnssUrcListenerEnsureStarted(void)
 {
-    if (s_gnssUrcTaskRef != NULL) return;
-
-    static int is_initialized = 0;
-    if (!is_initialized)
-    {
-        GPS_Init();
-
-        if (sAPI_MsgQCreate(&s_gnssUrcMsgQ, "nasa_gnss_q", sizeof(SIM_MSG_T), 10, SC_FIFO) != SC_SUCCESS)
-            return;
-        
-        sAPI_UrcRefRegister(s_gnssUrcMsgQ, SC_URC_GNSS_MASK);
-        is_initialized = 1;
-    }
-
-    if (sAPI_GnssPowerStatusSet(SC_GNSS_POWER_ON) == SC_GNSS_RETURN_CODE_OK) 
-    {
-        static int first_boot = 1;
-        if (first_boot) {
-            /* Hot start: dùng ephemeris/almanac đã lưu, TTFF nhanh hơn nhiều
-             * so với cold start; cold start chỉ dành cho chẩn đoán */
-            sAPI_GnssStartMode(SC_GNSS_START_HOT);
-            first_boot = 0;
-        }
-        sAPI_GnssInfoGet(1);
-    }
-
-    if (sAPI_TaskCreate(&s_gnssUrcTaskRef, s_gnssUrcTaskStack, sizeof(s_gnssUrcTaskStack), 
-                        125, (char *)"nasa_gnss_urc", sTask_GnssUrcListener, NULL) == SC_SUCCESS)
-    {
-        sAPI_Debug("[GPS API] GNSS URC Task started.");
-    }
+    HAL_GNSS_UrcListenerStart();
 }

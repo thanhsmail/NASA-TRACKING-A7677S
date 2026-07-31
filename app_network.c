@@ -1,6 +1,13 @@
-#include "simcom_api.h"
-#include "simcom_common.h"
-#include "simcom_tcpip.h"
+/**
+ * @file app_network.c
+ * @brief TCP Network module -- NASA Tracking
+ *
+ * Luu y: File nay KHONG #include simcom_api.h / simcom_tcpip.h truc tiep.
+ * Moi tuong tac mang di qua HAL_NET_*.
+ */
+#include "hal/hal_log.h"
+#include "hal/hal_os.h"
+#include "hal/hal_net.h"
 #include "app_config.h"
 #include "app_cmd.h"
 #include "app_nasa.h"
@@ -12,8 +19,11 @@
 
 char *strtok_r(char *str, const char *delim, char **saveptr);
 
-static INT32 s_tcpSocketFd = -1;
-static int s_sockNonBlockSet = 0;
+/*
+ * Socket fd noi bo -- trang thai ket noi.
+ * HAL_NET_* quan ly fd thuc, day chi track trang thai.
+ */
+static int s_isConnected = 0;
 
 /* Buffer tích luỹ: TCP là stream, một dòng lệnh/ACK có thể bị chia nhiều segment */
 static char s_rxAcc[NASA_SERVER_CMD_BUF_SIZE * 2];
@@ -21,7 +31,7 @@ static int  s_rxAccLen = 0;
 
 static void DispatchRecvLines(char *recvbuf);
 
-/* Server đôi khi gửi na,/sa, không kèm \r\n — flush buffer còn treo khi idle */
+/* Server doi khi gui na,/sa, khong kem \r\n -- flush buffer con treo khi idle */
 static void FlushAccAsCompleteLine(void)
 {
     static char lineBuf[sizeof(s_rxAcc)];
@@ -33,7 +43,7 @@ static void FlushAccAsCompleteLine(void)
     lineBuf[len] = '\0';
     s_rxAccLen = 0;
     s_rxAcc[0] = '\0';
-    sAPI_Debug("[Network] Flush unterminated CMD (%d): %s", len, lineBuf);
+    HAL_LOG("[Network] Flush unterminated CMD (%d): %s", len, lineBuf);
     DispatchRecvLines(lineBuf);
 }
 
@@ -44,93 +54,60 @@ static void ServerCmdReply(const char *reply, void *ctx)
     int ret;
 
     (void)ctx;
-    if (!reply || s_tcpSocketFd < 0) return;
+    if (!reply || !s_isConnected) return;
 
     n = snprintf(out, sizeof(out), "%s\r\n", reply);
     if (n <= 0) return;
     if (n >= (int)sizeof(out)) n = (int)sizeof(out) - 1;
 
     ret = Network_Send(out, (uint32_t)n);
-    sAPI_Debug("[Network] Reply ret=%d len=%d: %s", ret, n, reply);
+    HAL_LOG("[Network] Reply ret=%d len=%d: %s", ret, n, reply);
 }
 
 static void EnsureNonBlocking(void)
 {
-    UINT32 on = 1;
-    if (s_tcpSocketFd < 0 || s_sockNonBlockSet) return;
-    if (sAPI_TcpipIoctlsocket(s_tcpSocketFd, SC_FIONBIO, &on) == SC_SOCKET_ERROR) {
-        sAPI_Debug("[Network] FIONBIO fail (continue with select)");
-    } else {
-        s_sockNonBlockSet = 1;
-        sAPI_Debug("[Network] socket non-blocking OK");
-    }
+    /* Non-blocking duoc thiet lap trong HAL_NET_Connect qua HAL_NET_SetNonBlocking */
+    HAL_NET_SetNonBlocking();
 }
 
-int Network_ActivatePdp(INT32 pdp_id)
+int Network_ActivatePdp(int pdp_id)
 {
-    sAPI_Debug("[Network] Deactivating PDP %d prior to activation...", (int)pdp_id);
-    (void)sAPI_TcpipPdpActive(pdp_id, 0); /* Hủy PDP context cũ kẹt do rớt sóng / tháo SIM */
-    sAPI_TaskSleep(100);
-
-    sAPI_Debug("[Network] Activating PDP %d...", (int)pdp_id);
-    if (sAPI_TcpipPdpActive(pdp_id, 1) == SC_TCPIP_SUCCESS) {
-        sAPI_Debug("[Network] PDP OK");
+    HAL_LOG("[Network] Activating PDP %d...", pdp_id);
+    if (HAL_NET_ActivatePdp(pdp_id) == 0) {
+        HAL_LOG("[Network] PDP OK");
         return 0;
     }
-    sAPI_Debug("[Network] PDP fail");
+    HAL_LOG("[Network] PDP fail");
     return -1;
 }
 
 int Network_Connect(const char *host, int port)
 {
-    UINT32 ip;
-    SCsockAddrIn srv;
+    HAL_LOG("[Network] Connect %s:%d", host, port);
 
-    sAPI_Debug("[Network] Connect %s:%d", host, port);
-
-    ip = sAPI_TcpipInetAddr((INT8 *)(void *)host);
-    if (ip == 0xFFFFFFFFu) {
-        SChostent *h = sAPI_TcpipGethostbyname((INT8 *)(void *)host);
-        if (!h || !h->h_addr_list || !h->h_addr_list[0]) {
-            sAPI_Debug("[Network] DNS fail");
-            return -1;
-        }
-        ip = *(UINT32 *)h->h_addr_list[0];
+    /* Dong ket noi cu neu con ton tai */
+    if (s_isConnected) {
+        HAL_NET_Disconnect();
+        s_isConnected = 0;
+        s_rxAccLen = 0;
     }
 
-    if (s_tcpSocketFd >= 0) {
-        sAPI_TcpipClose(s_tcpSocketFd);
-        s_tcpSocketFd = -1;
-    }
-    s_sockNonBlockSet = 0;
-    s_rxAccLen = 0;
-
-    s_tcpSocketFd = sAPI_TcpipSocket(SC_AF_INET, SC_SOCK_STREAM, 0);
-    if (s_tcpSocketFd < 0) return -1;
-
-    memset(&srv, 0, sizeof(srv));
-    srv.sin_family = SC_AF_INET;
-    srv.sin_port = sAPI_TcpipHtons((UINT16)port);
-    srv.sin_addr.s_addr = ip;
-
-    if (sAPI_TcpipConnect(s_tcpSocketFd, (SCsockAddr *)&srv, sizeof(srv)) != 0) {
-        sAPI_TcpipClose(s_tcpSocketFd);
-        s_tcpSocketFd = -1;
+    if (HAL_NET_Connect(host, port) != 0) {
+        HAL_LOG("[Network] Connect fail");
         return -1;
     }
 
+    s_isConnected = 1;
+    s_rxAccLen = 0;
     EnsureNonBlocking();
-    sAPI_Debug("[Network] Connected fd=%d", (int)s_tcpSocketFd);
+    HAL_LOG("[Network] Connected OK");
     return 0;
 }
 
 void Network_Disconnect(void)
 {
-    if (s_tcpSocketFd >= 0) {
-        sAPI_TcpipClose(s_tcpSocketFd);
-        s_tcpSocketFd = -1;
-    }
-    s_sockNonBlockSet = 0;
+    HAL_NET_Disconnect();
+    s_isConnected = 0;
     s_rxAccLen = 0;
 }
 
@@ -139,26 +116,23 @@ int Network_Send(const char *data, uint32_t len)
     uint32_t sent = 0;
     int retry = 0;
 
-    if (s_tcpSocketFd < 0 || !data || len == 0) return -1;
+    if (!s_isConnected || !data || len == 0) return -1;
 
-    /* Socket non-blocking: TcpipSend có thể trả partial / WOULDBLOCK */
+    /* Socket non-blocking: HAL_NET_Send co the tra partial / WOULDBLOCK */
     while (sent < len) {
-        INT32 ret = sAPI_TcpipSend(s_tcpSocketFd,
-                                   (INT8 *)(data + sent),
-                                   (INT32)(len - sent), 0);
+        int ret = HAL_NET_Send((const uint8_t *)(data + sent), len - sent);
         if (ret > 0) {
             sent += (uint32_t)ret;
             retry = 0;
             continue;
         }
         if (++retry > 40) {
-            /* Partial send = stream TCP đã hỏng khung — báo lỗi để caller
-             * ngắt kết nối và đẩy bản ghi vào backup thay vì mất dữ liệu */
-            sAPI_Debug("[Network] Send fail after retry sent=%u/%u",
-                       (unsigned)sent, (unsigned)len);
+            /* Partial send -- stream TCP hong khung, caller ngat ket noi */
+            HAL_LOG("[Network] Send fail after retry sent=%u/%u",
+                    (unsigned)sent, (unsigned)len);
             return -1;
         }
-        sAPI_TaskSleep(5); /* ~25ms */
+        HAL_OS_TaskSleep(5); /* ~25ms */
     }
     return (int)len;
 }
@@ -176,10 +150,10 @@ static void DispatchRecvLines(char *recvbuf)
         }
         if (*line != '\0') {
             if (strncmp(line, "!NASA", 5) == 0) {
-                sAPI_Debug("[Network] Route !NASA line");
+                HAL_LOG("[Network] Route !NASA line");
                 NASA_OnServerProtocolLine(line);
             } else {
-                sAPI_Debug("[Network] Route CMD line: %s", line);
+                HAL_LOG("[Network] Route CMD line: %s", line);
                 CMD_Execute(line, "SERVER", NULL, ServerCmdReply, NULL);
             }
         }
@@ -197,8 +171,8 @@ static void AccumulateAndDispatch(const char *data, int len)
     int lastTerm;
 
     if (len > (int)sizeof(s_rxAcc) - 1 - s_rxAccLen) {
-        /* Tràn buffer mà không có kết thúc dòng — dữ liệu bất thường, xả hết */
-        sAPI_Debug("[Network] rx acc overflow (%d+%d), flush", s_rxAccLen, len);
+        /* Tran buffer -- du lieu bat thuong, xa het */
+        HAL_LOG("[Network] rx acc overflow (%d+%d), flush", s_rxAccLen, len);
         s_rxAccLen = 0;
         if (len > (int)sizeof(s_rxAcc) - 1) len = (int)sizeof(s_rxAcc) - 1;
     }
@@ -236,59 +210,43 @@ static void AccumulateAndDispatch(const char *data, int len)
 
 int Network_RecvPoll(void)
 {
-    /* static: tránh chiếm 1KB stack khi RecvPoll → CMD → CFG_Save lồng nhau */
+    /* static: tranh chiem 1KB stack khi RecvPoll -> CMD -> CFG_Save long nhau */
     static char recvbuf[NASA_SERVER_CMD_BUF_SIZE];
     int recv_len;
-    SCfdSet readfds;
-    SCtimeval tv;
-    int sel_ret;
 
-    if (s_tcpSocketFd < 0) return 1;
+    if (!s_isConnected) return 1;
 
     EnsureNonBlocking();
 
     /*
-     * Ưu tiên recv non-blocking trực tiếp — trên một số firmware SIMCom,
-     * select(timeout=0) + FD_ISSET đôi khi không báo dữ liệu dù đã có trong buffer.
+     * Trong SIMCom OpenSDK API sAPI_TcpipRecv:
+     *   > 0 : So byte doc duoc
+     *     0 : Res OK, khong co du lieu moi
+     *   < 0 : Socket error / closed
      */
-    recv_len = sAPI_TcpipRecv(s_tcpSocketFd, recvbuf, sizeof(recvbuf) - 1, 0);
+    recv_len = HAL_NET_Recv((uint8_t *)recvbuf, sizeof(recvbuf) - 1,
+                             NASA_SERVER_RECV_TIMEOUT_US);
     if (recv_len > 0) {
         recvbuf[recv_len] = '\0';
-        sAPI_Debug("[Network] Recv %d bytes: %s", recv_len, recvbuf);
+        HAL_LOG("[Network] Recv %d bytes: %s", recv_len, recvbuf);
         AccumulateAndDispatch(recvbuf, recv_len);
         return 0;
     }
+
     if (recv_len == 0) {
-        sAPI_Debug("[Network] peer closed");
-        return 1;
-    }
-
-    /* Không còn byte mới: nếu còn dòng lệnh thiếu \\r\\n thì xử lý luôn */
-    if (s_rxAccLen > 0)
-        FlushAccAsCompleteLine();
-
-    /* recv_len < 0: thường là WOULDBLOCK, kiểm tra errno trước */
-#ifdef EWOULDBLOCK
-    if (errno == EWOULDBLOCK || errno == EAGAIN) {
+        /* Binh thuong: Khong co byte mới, neu con dong lenh thieu \r\n thì flush */
+        if (s_rxAccLen > 0)
+            FlushAccAsCompleteLine();
         return 0;
     }
-#endif
 
-    /* Fallback cho trường hợp errno không đồng bộ: select với timeout 0 (không block) */
-    tv.tv_sec = 0;
-    tv.tv_usec = 0;
-    SC_FD_ZERO(&readfds);
-    SC_FD_SET(s_tcpSocketFd, &readfds);
-    sel_ret = sAPI_TcpipSelect(s_tcpSocketFd + 1, &readfds, NULL, NULL, &tv);
-    if (sel_ret == 0) {
-        return 0; /* Không có dữ liệu, socket vẫn bình thường */
-    }
-
-    sAPI_Debug("[Network] recv/select err, sel_ret=%d, errno=%d", sel_ret, errno);
+    /* recv_len < 0: Socket loi hoac ngat ket noi */
+    HAL_LOG("[Network] Socket error/closed (%d)", recv_len);
+    s_isConnected = 0;
     return 1;
 }
 
 int Network_IsConnected(void)
 {
-    return (s_tcpSocketFd >= 0) ? 1 : 0;
+    return (HAL_NET_IsConnected() && s_isConnected) ? 1 : 0;
 }

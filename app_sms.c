@@ -1,5 +1,13 @@
-#include "simcom_api.h"
-#include "simcom_common.h"
+/**
+ * @file app_sms.c
+ * @brief SMS management module -- NASA Tracking
+ *
+ * Luu y: File nay KHONG #include simcom_api.h / simcom_common.h truc tiep.
+ * Moi tuong tac SMS di qua HAL_SMS_*.
+ */
+#include "hal/hal_log.h"
+#include "hal/hal_os.h"
+#include "hal/hal_sms.h"
 #include "app_config.h"
 #include "app_cmd.h"
 #include "app_sms.h"
@@ -7,35 +15,27 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* Giữ API cũ để tương thích; config thật nằm ở app_cfg */
-
-static sMsgQRef s_smsSendRspQ = NULL;
-
 /* CNMI (1,2,1,0,0,0) → SC_URC_NEW_MSG_IND + index; khớp SmsReceiverTask */
+/* CNMI (1,2,1,0,0,0) -> SC_URC_NEW_MSG_IND + index; khop SmsReceiverTask */
 static int SMS_ConfigureModem(void)
 {
-    SC_SMSReturnCode ret;
-
-    ret = sAPI_SmsSetFormat(1); /* text mode */
-    if (ret != SC_SMS_SUCESS) {
-        sAPI_Debug("[SMS] SetFormat(1) fail=%d", (int)ret);
+    if (HAL_SMS_SetFormat(1) != 0) {
+        HAL_LOG("[SMS] SetFormat(1) fail");
         return -1;
     }
 
-    /* mode,mt,bm,ds,bfr = 1,2,1,0,0 — lưu SIM, báo index qua URC */
-    ret = sAPI_SmsSetNewMsgInd(1, 2, 1, 0, 0, 0);
-    if (ret != SC_SMS_SUCESS) {
-        sAPI_Debug("[SMS] SetNewMsgInd fail=%d", (int)ret);
+    if (HAL_SMS_SetNewMsgInd(1, 2, 1, 0, 0, 0) != 0) {
+        HAL_LOG("[SMS] SetNewMsgInd fail");
         return -1;
     }
 
-    sAPI_Debug("[SMS] CNMI text+store OK");
+    HAL_LOG("[SMS] CNMI text+store OK");
     return 0;
 }
 
 void SMS_Init(void)
 {
-    /* Có thể fail nếu SIM chưa ready — SmsReceiverTask sẽ retry */
+    /* Co the fail neu SIM chua ready -- SmsReceiverTask se retry */
     (void)SMS_ConfigureModem();
 }
 
@@ -44,7 +44,7 @@ int SMS_EnsureReady(void)
     int i;
     for (i = 0; i < 10; i++) {
         if (SMS_ConfigureModem() == 0) return 0;
-        sAPI_TaskSleep(SC_TICKS_PER_SECOND);
+        HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
     }
     return -1;
 }
@@ -59,14 +59,6 @@ void SMS_SetFotaDownloadHandled(void)
     CMD_SetFotaHandled();
 }
 
-int SMS_GetPeriodMoving(void) { return 0; } /* deprecated — dùng CFG_ */
-int SMS_GetPeriodStopped(void) { return 0; }
-const char *SMS_GetLicensePlate(void) { return ""; }
-const char *SMS_GetDriverName(void) { return ""; }
-const char *SMS_GetDriverLicense(void) { return ""; }
-void SMS_SetLicensePlate(const char *val) { (void)val; }
-void SMS_SetDriverName(const char *val) { (void)val; }
-void SMS_SetDriverLicense(const char *val) { (void)val; }
 
 typedef struct {
     char phone[20];
@@ -75,35 +67,15 @@ typedef struct {
 static void SmsReply(const char *reply, void *ctx)
 {
     SmsReplyCtx *c = (SmsReplyCtx *)ctx;
-    SC_SMSReturnCode ret;
 
     if (!reply) return;
-    sAPI_Debug("[SMS/Reply] phone=%s msg=%s",
-               (c && c->phone[0]) ? c->phone : "(none)", reply);
+    HAL_LOG("[SMS/Reply] phone=%s msg=%s",
+            (c && c->phone[0]) ? c->phone : "(none)", reply);
 
     if (!c || !c->phone[0]) return;
 
-    if (s_smsSendRspQ == NULL) {
-        if (sAPI_MsgQCreate(&s_smsSendRspQ, "smsSendRspQ",
-                            sizeof(SIM_MSG_T), 4, SC_FIFO) != SC_SUCCESS) {
-            sAPI_Debug("[SMS/Reply] create msgQ fail");
-            s_smsSendRspQ = NULL;
-            return;
-        }
-    }
-
-    ret = sAPI_SmsSendMsg(1, (UINT8 *)reply, (UINT16)strlen(reply),
-                          (UINT8 *)c->phone, s_smsSendRspQ);
-    if (ret != SC_SMS_SUCESS) {
-        sAPI_Debug("[SMS/Reply] SendMsg fail=%d", (int)ret);
-        return;
-    }
-    {
-        /* 2000 tick = 10s; 15000 tick (75s) chặn queue SMS quá lâu gây tràn */
-        SIM_MSG_T rsp = {0};
-        if (sAPI_MsgQRecv(s_smsSendRspQ, &rsp, 2000) == SC_SUCCESS) {
-            if (rsp.arg3) sAPI_Free(rsp.arg3);
-        }
+    if (HAL_SMS_Send(c->phone, reply) != 0) {
+        HAL_LOG("[SMS/Reply] SendMsg fail");
     }
 }
 
@@ -183,7 +155,7 @@ void SMS_ExtractAndExecuteSmsBody(const char *payload, const char *source)
         *--end = '\0';
 
     if (body[0] != '\0') {
-        sAPI_Debug("[SMS] body from %s phone=%s: %s", source, ctx.phone, body);
+        HAL_LOG("[SMS] body from %s phone=%s: %s", source, ctx.phone, body);
         CMD_Execute(body, source, ctx.phone, SmsReply, &ctx);
     }
 }

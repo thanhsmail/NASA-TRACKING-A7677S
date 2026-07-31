@@ -1,7 +1,7 @@
 #ifndef APP_GPS_H
 #define APP_GPS_H
 
-#include "simcom_api.h"
+#include <stdint.h>
 
 typedef struct {
     double   lat;          /* Vi do (do thap phan, 0.0 = khong hop le) */
@@ -16,7 +16,6 @@ typedef struct {
 
 void GPS_Init(void);
 void GPS_Snapshot(GpsSnapshot_t *out);
-/* Trạng thái dây ACC (đã debounce) từ GPIO task — dùng khoá trạng thái đỗ */
 void GPS_SetAccOn(int on);
 void GPS_ResetOdometer(void);
 int GPS_GetSatellitesCount(void);
@@ -24,8 +23,8 @@ double GPS_GetLastSpeedKph(void);
 double GPS_GetTotalKm(void);
 int GPS_IsMoving(void);
 int GPS_IsParked(void);
-/* Format giờ local từ GNSS (UTC + offset). Trả 1 nếu có thời gian hợp lệ. */
 int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize);
 void GnssUrcListenerEnsureStarted(void);
+void GPS_OnUrcString(const char *gpsUrc);
 
 #endif /* APP_GPS_H */

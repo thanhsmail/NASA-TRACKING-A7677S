@@ -1,4 +1,13 @@
-#include "simcom_api.h"
+/**
+ * @file app_cfg.c
+ * @brief Config save/load -- NASA Tracking
+ *
+ * Luu y: File nay KHONG #include simcom_api.h truc tiep.
+ * File system -> HAL_FS_*, Mutex -> HAL_OS_*, Debug -> HAL_LOG.
+ */
+#include "hal/hal_log.h"
+#include "hal/hal_os.h"
+#include "hal/hal_fs.h"
 #include "app_config.h"
 #include "app_cfg.h"
 #include <stdio.h>
@@ -8,17 +17,17 @@
 static AppConfig_t s_cfg;
 static int s_cfgDirty = 0; /* deferred save (driver login/identity) */
 
-/* Bảo vệ ghi/đọc file config: CFG_Save gọi từ cả task SMS lẫn task NASA (lệnh server) */
-static sMutexRef s_cfgMutex = NULL;
+/* Bao ve ghi/doc file config: CFG_Save goi tu ca task SMS lan task NASA */
+static HalMutexRef_t s_cfgMutex = NULL;
 
 static void CfgLock(void)
 {
-    if (s_cfgMutex) sAPI_MutexLock(s_cfgMutex, SC_SUSPEND);
+    HAL_OS_MutexLock(s_cfgMutex);
 }
 
 static void CfgUnlock(void)
 {
-    if (s_cfgMutex) sAPI_MutexUnLock(s_cfgMutex);
+    HAL_OS_MutexUnlock(s_cfgMutex);
 }
 
 static void CFG_SetDefaults(void)
@@ -165,7 +174,7 @@ static void CFG_EnsureDefaultDriver(void)
 void CFG_Init(void)
 {
     if (s_cfgMutex == NULL) {
-        sAPI_MutexCreate(&s_cfgMutex, SC_FIFO);
+        HAL_OS_MutexCreate(&s_cfgMutex);
     }
     CFG_SetDefaults();
     CFG_Load();
@@ -189,7 +198,7 @@ void CFG_Load(void)
                     primaryOk = 1;
                     memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
                     memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
-                    sAPI_Debug("[CFG] Loaded from SPI Flash Sector 0 (Primary) OK");
+                    HAL_LOG("[CFG] Loaded from SPI Flash Sector 0 (Primary) OK");
                 }
             }
         }
@@ -202,7 +211,7 @@ void CFG_Load(void)
                         mirrorOk = 1;
                         memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
                         memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
-                        sAPI_Debug("[CFG] Loaded from SPI Flash Sector 1 (Mirror Backup) OK");
+                        HAL_LOG("[CFG] Loaded from SPI Flash Sector 1 (Mirror Backup) OK");
                     }
                 }
             }
@@ -214,80 +223,80 @@ void CFG_Load(void)
         return;
     }
 
-    /* 2. Fallback: Đọc từ file hệ thống EFS nếu Flash chưa ghi hoặc lỗi CRC */
-    SCFILE *fp = sAPI_fopen(NASA_CFG_FILE, "rb");
-    if (!fp) {
-        sAPI_Debug("[CFG] No config file or Flash config, using defaults");
-        CfgUnlock();
-        return;
-    }
+    /* 2. Fallback: Doc tu file he thong EFS neu Flash chua ghi hoac loi CRC */
+    {
+        HalFile_t fp = HAL_FS_Open(NASA_CFG_FILE, "rb");
+        static char fileBuf[1024];
+        int bytesRead;
+        char *lineStart, *next = NULL;
+        char line[160];
 
-    static char fileBuf[1024];
-    int bytesRead = sAPI_fread(fileBuf, 1, sizeof(fileBuf) - 1, fp);
-    sAPI_fclose(fp);
-
-    if (bytesRead <= 0) {
-        sAPI_Debug("[CFG] Empty config file or read error");
-        CfgUnlock();
-        return;
-    }
-    fileBuf[bytesRead] = '\0';
-
-    char *lineStart = fileBuf;
-    char *next = NULL;
-    char line[160];
-
-    while (lineStart && *lineStart) {
-        char *lineEnd = strchr(lineStart, '\n');
-        if (lineEnd) {
-            next = lineEnd + 1;
-            *lineEnd = '\0';
-        } else {
-            next = NULL;
+        if (!fp) {
+            HAL_LOG("[CFG] No config file or Flash config, using defaults");
+            CfgUnlock();
+            return;
         }
 
-        size_t len = strlen(lineStart);
-        if (len > 0 && lineStart[len - 1] == '\r') {
-            lineStart[len - 1] = '\0';
-        }
+        bytesRead = HAL_FS_Read(fp, fileBuf, sizeof(fileBuf) - 1);
+        HAL_FS_Close(fp);
 
-        if (strlen(lineStart) < sizeof(line)) {
-            strcpy(line, lineStart);
-        } else {
-            strncpy(line, lineStart, sizeof(line) - 1);
-            line[sizeof(line) - 1] = '\0';
+        if (bytesRead <= 0) {
+            HAL_LOG("[CFG] Empty config file or read error");
+            CfgUnlock();
+            return;
         }
+        fileBuf[bytesRead] = '\0';
+        lineStart = fileBuf;
 
-        TrimInPlace(line);
-        if (line[0] && line[0] != '#') {
-            char *eq = strchr(line, '=');
-            if (eq) {
-                *eq = '\0';
-                TrimInPlace(line);
-                TrimInPlace(eq + 1);
-                ApplyKeyValue(line, eq + 1);
+        while (lineStart && *lineStart) {
+            char *lineEnd = strchr(lineStart, '\n');
+            if (lineEnd) {
+                next = lineEnd + 1;
+                *lineEnd = '\0';
+            } else {
+                next = NULL;
             }
+            {
+                size_t len = strlen(lineStart);
+                if (len > 0 && lineStart[len - 1] == '\r') lineStart[len - 1] = '\0';
+                if (strlen(lineStart) < sizeof(line)) {
+                    strcpy(line, lineStart);
+                } else {
+                    strncpy(line, lineStart, sizeof(line) - 1);
+                    line[sizeof(line) - 1] = '\0';
+                }
+            }
+            TrimInPlace(line);
+            if (line[0] && line[0] != '#') {
+                char *eq = strchr(line, '=');
+                if (eq) {
+                    *eq = '\0';
+                    TrimInPlace(line);
+                    TrimInPlace(eq + 1);
+                    ApplyKeyValue(line, eq + 1);
+                }
+            }
+            lineStart = next;
         }
-
-        lineStart = next;
+        HAL_LOG("[CFG] Loaded from EFS host=%s port=%d plate=%s",
+                s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate);
     }
-    sAPI_Debug("[CFG] Loaded from EFS file host=%s port=%d plate=%s", s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate);
     CfgUnlock();
 }
 
 int CFG_Save(void)
 {
-    /* static: tránh cộng ~1.2KB stack khi gọi từ CMD trong task NASA */
+    /* static: tranh ~1.2KB stack khi goi tu CMD trong task NASA */
     static char s_saveBuf[768];
     static CfgFlashSector_t s_flashSec;
     int len;
-    SCFILE *fp;
+    HalFile_t fp;
     int flashOk = 0;
     int efsOk = 0;
 
     CfgLock();
 
-    /* 1. SPI Flash chỉ khi EN25 sẵn sàng — tránh erase/write khi init fail */
+    /* 1. SPI Flash chi khi EN25 san sang */
     memset(&s_flashSec, 0, sizeof(s_flashSec));
     s_flashSec.magic = CFG_FLASH_MAGIC;
     s_flashSec.version = 1;
@@ -308,7 +317,7 @@ int CFG_Save(void)
         }
     }
 
-    /* 2. EFS luôn ghi (fallback khi SPI không sẵn sàng) */
+    /* 2. EFS luon ghi (fallback khi SPI khong san sang) */
     len = snprintf(s_saveBuf, sizeof(s_saveBuf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
@@ -321,23 +330,23 @@ int CFG_Save(void)
                    s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn,
                    s_cfg.lastMday);
     if (len > 0) {
-        sAPI_remove(NASA_CFG_FILE);
-        fp = sAPI_fopen(NASA_CFG_FILE, "wb");
+        HAL_FS_Delete(NASA_CFG_FILE);
+        fp = HAL_FS_Open(NASA_CFG_FILE, "wb");
         if (fp) {
-            sAPI_fwrite(s_saveBuf, 1, (size_t)len, fp);
-            sAPI_fclose(fp);
+            HAL_FS_Write(fp, s_saveBuf, (size_t)len);
+            HAL_FS_Close(fp);
             efsOk = 1;
         }
     }
 
     if (flashOk && efsOk)
-        sAPI_Debug("[CFG] Saved to SPI Flash & EFS OK");
+        HAL_LOG("[CFG] Saved to SPI Flash & EFS OK");
     else if (efsOk)
-        sAPI_Debug("[CFG] Saved to EFS only (SPI Flash not ready)");
+        HAL_LOG("[CFG] Saved to EFS only (SPI Flash not ready)");
     else if (flashOk)
-        sAPI_Debug("[CFG] Saved to SPI Flash only (EFS failed)");
+        HAL_LOG("[CFG] Saved to SPI Flash only (EFS failed)");
     else
-        sAPI_Debug("[CFG] Save FAILED (SPI+EFS)");
+        HAL_LOG("[CFG] Save FAILED (SPI+EFS)");
 
     s_cfgDirty = 0;
     CfgUnlock();
@@ -349,7 +358,7 @@ void CFG_FactoryReset(void)
     CfgLock();
     CFG_SetDefaults();
     CFG_SetFactoryDefaults();
-    sAPI_remove(NASA_CFG_FILE);
+    HAL_FS_Delete(NASA_CFG_FILE);
     if (EN25_IsReady()) {
         EN25_EraseSector(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE);
         EN25_EraseSector(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE);

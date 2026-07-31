@@ -1,8 +1,7 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
-/* Số lượng tick hệ thống mỗi giây (SIMCom OpenCPU) */
-#define SC_TICKS_PER_SECOND 200
+#include "hal/hal_os.h"
 
 /* ---- Chu kỳ báo cáo mặc định (Config cmd 4) ---- */
 #define TRACKING_PERIOD_MOVING_DEFAULT 10   // 10 giây khi xe di chuyển
@@ -29,7 +28,7 @@
 
 #define ERROR_RETRY_DELAY_SEC 30 // Thời gian retry khi báo cáo thất bại
 #define APP_STARTUP_DELAY_SEC 5  // Thời gian delay sau khi khởi động
-#define TASK_BASE_SLEEP_TICKS (SC_TICKS_PER_SECOND) // Số tick cơ bản
+#define TASK_BASE_SLEEP_TICKS (HAL_TICKS_PER_SEC) // Số tick cơ bản
 
 /* Login ACK timeout */
 #define NASA_LOGIN_ACK_TIMEOUT_SEC 30 // Thời gian chờ ACK khi đăng nhập
@@ -83,13 +82,13 @@
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "NASA4G"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.0.260724e"
+#define NASA_FW_CODE "v1.0.260731"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1
 
 /* Điện áp acquy: ngưỡng bình yếu (Volt) */
-#define NASA_BATTERY_LOW_VOLT 11.5f
+#define NASA_BATTERY_LOW_VOLT 10.5f
 #define NASA_SPEED_LIMIT_KPH    120 
 
 /* Khóa cấu hình / SĐT trung tâm — 0 = tắt (chưa dùng) */

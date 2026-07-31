@@ -218,8 +218,11 @@ if(NOT DEFINED MODULE_LIST)
         if(CONFIG_SIMCOM_PROTOCOL_V1)
             SET(app_src
                 sc_application.c
+                app_indication.c
                 drv_en25qh64a.c
                 app_nasa.c
+                app_park_rules.c
+                app_lxlt_rules.c
                 app_network.c
                 app_gps.c
                 app_sms.c
@@ -227,8 +230,12 @@ if(NOT DEFINED MODULE_LIST)
                 app_cfg.c
                 app_backup.c
                 app_utils.c
+                # HAL Abstraction Layer -- chi doi file nay khi doi chip
+                hal/impl/hal_impl_simcom.c
             )
             INCLUDE_DIRECTORIES(.)
+            # Them hal/ vao include path de app_*.c tim duoc hal/*.h
+            INCLUDE_DIRECTORIES(./hal)
         elseif(CONFIG_SIMCOM_PROTOCOL_V2)
             SET(app_src sc_main.c)
             INCLUDE_DIRECTORIES(
