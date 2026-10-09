@@ -23,6 +23,7 @@
 #include "hal_fs.h"
 #include "hal_sms.h"
 #include "hal_adc.h"
+#include "hal_fota.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -609,3 +610,33 @@ uint32_t HAL_ADC_ReadMv(int channel)
     return (uint32_t)mv;
 }
 
+
+/* ========================== HAL_FOTA ====================================== */
+
+int HAL_FOTA_AppDownload(const char *url, uint32_t recvTimeoutMs)
+{
+    SCAppDownloadPram pram;
+
+    if (!url) return -1;
+
+    if (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0) {
+        pram.mod = SC_APP_DOWNLOAD_HTTP_MOD;
+    } else if (strncmp(url, "ftp://", 6) == 0 || strncmp(url, "ftps://", 7) == 0) {
+        pram.mod = SC_APP_DOWNLOAD_FTP_MOD;
+    } else {
+        return -1;
+    }
+    pram.url = (char *)url;
+    pram.recvtimeout = recvTimeoutMs;
+
+    return (int)sAPI_AppDownload(&pram);
+}
+
+int HAL_FOTA_AppPackageVerify(uint32_t *outSize)
+{
+    SCAppPackageInfo info = {0};
+    int ret = sAPI_AppPackageCrc(&info);
+
+    if (outSize) *outSize = (uint32_t)info.binSize;
+    return ret;
+}
