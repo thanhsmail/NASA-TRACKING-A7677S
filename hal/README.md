@@ -21,6 +21,7 @@ Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tác
 |                                                                   |
 |  hal_log.h | hal_os.h  | hal_gpio.h | hal_net.h                   |
 |  hal_gnss.h| hal_spi.h | hal_fs.h   | hal_sms.h                   |
+|  hal_adc.h                                                        |
 +-------------------------------------------------------------------+
                                   |
                +------------------+------------------+
@@ -46,12 +47,13 @@ Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tác
 | `hal/hal_spi.h` | SPI Bus | Cấu hình SPI, Truyền/Nhận buffer cho Flash NOR |
 | `hal/hal_fs.h` | File System | Đọc/Ghi/Xóa file trên bộ nhớ Flash nội (EFS) |
 | `hal/hal_sms.h` | Short Message | Cấu hình CNMI, Đọc/Xóa/Gửi SMS, Nhận URC SMS |
+| `hal/hal_adc.h` | ADC | Đọc điện áp thực tế tại chân ADC (mV), ví dụ ADC1/ADC.PWR |
 
 ---
 
 ## 🔄 Hướng Dẫn Chi Tiết Khi Chuyển Sang Chip Mới (Porting Guide)
 
-Khi chuyển từ **SIMCom A7677S** sang bất kỳ dòng Chip / Modem khác (ví dụ: Quectel EC600S, FibocomL610, ESP32, STM32 Cellular...):
+Khi chuyển từ **SIMCom A7677S** sang bất kỳ dòng Chip / Modem khác (ví dụ: Quectel EC600S, Fibocom L610, ESP32, STM32 Cellular...):
 
 ### ⚠️ QUY TẮC VÀNG:
 1. **KHÔNG** chỉnh sửa bất kỳ file `hal/*.h` nào (trừ khi bổ sung API mới cho toàn bộ dự án).
