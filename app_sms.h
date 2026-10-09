@@ -22,15 +22,4 @@ void SMS_Command_Execute(const char *body, const char *src);
  */
 void SMS_ExtractAndExecuteSmsBody(const char *payload, const char *source);
 
-/**
- * Kiểm tra trạng thái tải bản cập nhật FOTA đã sẵn sàng để nâng cấp chưa.
- * @return 1 nếu đã sẵn sàng, 0 nếu chưa, 2 nếu đang xử lý reset.
- */
-int SMS_IsFotaDownloadReady(void);
-
-/**
- * Đánh dấu trạng thái FOTA đang được xử lý nâng cấp (chuẩn bị reset).
- */
-void SMS_SetFotaDownloadHandled(void);
-
 #endif /* APP_SMS_H */

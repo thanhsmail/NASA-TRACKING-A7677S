@@ -87,6 +87,13 @@
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1
 
+/* FOTA — cập nhật customer_app.bin từ URL (Config cmd 33) */
+#define FOTA_URL_MAX_LEN 200       // Độ dài URL tối đa (kể cả scheme)
+#define FOTA_MAX_ATTEMPTS 3        // Số lần thử tải lại khi lỗi
+#define FOTA_RETRY_DELAY_SEC 10    // Thời gian chờ giữa các lần thử
+#define FOTA_RECV_TIMEOUT_MS 5000  // Timeout chờ dữ liệu từ server
+#define FOTA_ERR_CRC (-100)        // Tải xong nhưng gói sai CRC
+
 /* Điện áp acquy: ngưỡng bình yếu (Volt) */
 #define NASA_BATTERY_LOW_VOLT 10.5f
 #define NASA_SPEED_LIMIT_KPH    120 

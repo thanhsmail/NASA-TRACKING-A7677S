@@ -218,7 +218,7 @@ Module `app_cmd.c` hỗ trợ 21 mã lệnh điều khiển qua tin nhắn SMS h
 * **`code 27`**: Truy vấn tọa độ GPS hiện tại qua link Google Maps (`sa,27`)
 * **`code 29`**: Truy vấn thông tin thiết bị tổng hợp (IMEI, ICCID, CSQ, Sắt, Server, ACC) (`sa,29`)
 * **`code 32`**: Lịch tự động reset thiết bị theo ngày/giờ (`na,32,days,hour`)
-* **`code 33`**: Nâng cấp phần mềm FOTA từ URL (`na,33,URL`)
+* **`code 33`**: Nâng cấp phần mềm FOTA từ URL (`na,33,URL` / `sa,33` đọc phiên bản FW). `app_fota.c` tải `customer_app.bin` (HTTP/HTTPS/FTP) trong task riêng, kiểm CRC rồi reset để bootloader nạp bản mới
 * **`code 34/35`**: Xóa bộ nhớ đệm hành trình / Xóa toàn bộ dữ liệu (`na,34`, `na,35`)
 * **`code 37`**: Chuyển tiếp tin nhắn SMS (`na,37,phone,msg`)
 * **`code 40`**: Khóa / Mở khóa bảo vệ cấu hình (`na,40,open|close`)

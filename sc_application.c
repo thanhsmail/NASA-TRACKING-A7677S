@@ -56,14 +56,6 @@ static void SmsReceiverTask(void *argv)
     HAL_OS_TaskSleep(200);
 
     while (1) {
-        /* Kiem tra FOTA truoc khi block recv */
-        if (SMS_IsFotaDownloadReady() == 1) {
-            SMS_SetFotaDownloadHandled();
-            HAL_OS_TaskSleep(200);
-            HAL_OS_SysReset();
-        }
-
-        /* Timeout 1s de vong lap van kiem tra duoc co FOTA */
         if (HAL_SMS_RecvUrc(gSmsMsgQueue, &evt, HAL_TICKS_PER_SEC) != 0) continue;
 
         if (evt.type == HAL_SMS_URC_NEW_MSG && evt.index > 0) {

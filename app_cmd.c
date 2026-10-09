@@ -26,31 +26,28 @@
 #include "app_backup.h"
 #include "app_utils.h"
 #include "app_nasa.h"
+#include "app_fota.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 char *strtok_r(char *str, const char *delim, char **saveptr);
 
-/* Trạng thái tải FOTA */
-static volatile int g_fota_download_ready = 0;
-
-/** Callback thông báo tiến độ FOTA */
-static int FotaCb(int isok)
+/**
+ * Khởi động FOTA từ phần còn lại của câu lệnh (URL có thể chứa dấu phẩy).
+ * @return 1 nếu đã nhận yêu cầu; 0 nếu từ chối (lý do ghi vào resp)
+ */
+static int StartFota(const char *url, const char *fromPhone, char *resp, int respsz)
 {
-    HAL_LOG("[FOTA] status=%d", isok);
-    g_fota_download_ready = (isok == 100) ? 1 : 0;
+    int ret = FOTA_Request(url, fromPhone);
+
+    HAL_LOG("[FOTA] Update requested via URL: %s ret=%d", url ? url : "", ret);
+    if (ret == FOTA_REQ_OK) return 1;
+    snprintf(resp, respsz, "%s",
+             (ret == FOTA_REQ_BUSY)    ? "dang update firmware, vui long cho" :
+             (ret == FOTA_REQ_BAD_URL) ? "ERROR url khong hop le" : "ERROR");
     return 0;
 }
-
-/** Kiểm tra file FOTA đã sẵn sàng nạp hay chưa */
-int CMD_IsFotaReady(void) {
-    (void)FotaCb;
-    return g_fota_download_ready;
-}
-
-/** Đánh dấu đã xử lý xong FOTA */
-void CMD_SetFotaHandled(void) { g_fota_download_ready = 2; }
 
 /* Mutex bảo vệ luồng phản hồi lệnh */
 static HalMutexRef_t s_cmdReplyMutex = NULL;
@@ -184,10 +181,10 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
 
     /* Lệnh cập nhật phần mềm FOTA cũ */
     if (strcmp(tag, "update") == 0) {
-        if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
-        HAL_LOG("[FOTA] Update requested via URL: %s", a);
-        snprintf(resp, sizeof(resp), "Update Firmware ok");
-        if (resp[0]) Reply(reply, ctx, src, resp);
+        if (!CFG_CanChangeProtected(src, fromPhone)) { Deny(reply, ctx, src); return; }
+        if (StartFota(save, fromPhone, resp, sizeof(resp)))
+            snprintf(resp, sizeof(resp), "Update Firmware ok");
+        Reply(reply, ctx, src, resp);
         return;
     }
 
@@ -446,9 +443,12 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     /* --- Mã 33: Lệnh Nâng cấp Phần mềm Từ xa (FOTA qua URL) --- */
     case 33:
         if (isSet) {
-            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
-            HAL_LOG("[FOTA] Update requested via URL: %s", a);
-            snprintf(resp, sizeof(resp), "dang update firmware");
+            if (!CFG_CanChangeProtected(src, fromPhone)) { Deny(reply, ctx, src); return; }
+            if (StartFota(save, fromPhone, resp, sizeof(resp)))
+                snprintf(resp, sizeof(resp), "dang update firmware");
+        } else {
+            snprintf(resp, sizeof(resp), "sa,33 firmware: %s%s", NASA_FW_CODE,
+                     FOTA_IsBusy() ? " (dang update)" : "");
         }
         break;
 

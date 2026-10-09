@@ -49,16 +49,6 @@ int SMS_EnsureReady(void)
     return -1;
 }
 
-int SMS_IsFotaDownloadReady(void)
-{
-    return CMD_IsFotaReady();
-}
-
-void SMS_SetFotaDownloadHandled(void)
-{
-    CMD_SetFotaHandled();
-}
-
 
 typedef struct {
     char phone[20];
