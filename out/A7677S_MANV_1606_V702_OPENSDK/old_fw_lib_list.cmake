@@ -1,0 +1,3 @@
+SET(OLD_FW_LIB_LIST
+E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/lib/cuslibold_fw_demo.a
+)

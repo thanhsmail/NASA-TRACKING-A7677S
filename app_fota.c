@@ -1,13 +1,16 @@
 /**
  * @file app_fota.c
- * @brief CẬP NHẬT FIRMWARE ỨNG DỤNG TỪ XA (FOTA) -- NASA Tracking
+ * @brief CẬP NHẬT FIRMWARE TỪ XA (FOTA) -- NASA Tracking
  *
  * Luồng xử lý:
  * 1. Lệnh "na,33,<URL>" (SMS / Server) gọi FOTA_Request() -- trả về ngay.
- * 2. Task FOTA tải customer_app.bin về phân vùng cập nhật (HTTP/HTTPS/FTP),
- *    thử lại tối đa FOTA_MAX_ATTEMPTS lần.
- * 3. Kiểm CRC gói vừa tải. Đạt → reset, bootloader nạp ứng dụng mới.
- *    Không đạt → giữ nguyên firmware đang chạy, báo lỗi.
+ * 2. Task FOTA chọn loại cập nhật theo tên file trong URL:
+ *    - customer_app.bin → cập nhật ỨNG DỤNG: tải về phân vùng cập nhật
+ *      (HTTP/HTTPS/FTP), kiểm CRC. Đạt → reset, bootloader nạp ứng dụng mới.
+ *    - tên khác (vd system_patch.bin) → cập nhật HỆ THỐNG: SDK tải gói vi sai
+ *      (adiff), báo tiến trình qua callback. Đạt 100% → reset để nạp.
+ *    Thử lại tối đa FOTA_MAX_ATTEMPTS lần.
+ * 3. Lỗi → giữ nguyên firmware đang chạy, báo lỗi.
  *
  * Trong lúc tải, task nasa_reporter vẫn chạy bình thường (vẫn nuôi watchdog).
  *
@@ -34,6 +37,10 @@ static volatile FotaState_t s_state = FOTA_STATE_IDLE;
 static char s_url[FOTA_URL_MAX_LEN];
 static char s_notifyPhone[20];
 
+/* Trạng thái FOTA hệ thống do callback của SDK cập nhật */
+static volatile int      s_sysStatus = 0;
+static volatile uint32_t s_sysCbCount = 0;
+
 static HalTaskRef_t s_fotaTaskRef = NULL;
 static uint8_t      s_fotaTaskStack[1024 * 10];
 
@@ -46,14 +53,106 @@ static void Notify(const char *msg)
     }
 }
 
+/** @return 1 nếu URL trỏ tới gói ứng dụng (customer_app.bin), 0 nếu là gói hệ thống */
+static int IsAppPackageUrl(const char *url)
+{
+    size_t ulen = strlen(url);
+    size_t nlen = strlen(FOTA_APP_FILE_NAME);
+
+    return (ulen > nlen && url[ulen - nlen - 1] == '/' &&
+            strcmp(url + ulen - nlen, FOTA_APP_FILE_NAME) == 0) ? 1 : 0;
+}
+
+/** Tải customer_app.bin + kiểm CRC. @return 0 nếu gói sẵn sàng để nạp */
+static int DoAppUpdate(uint32_t *size)
+{
+    int attempt;
+    int ret = -1;
+
+    for (attempt = 1; attempt <= FOTA_MAX_ATTEMPTS; attempt++) {
+        HAL_LOG("[FOTA] download %d/%d: %s", attempt, FOTA_MAX_ATTEMPTS, s_url);
+        ret = HAL_FOTA_AppDownload(s_url, FOTA_RECV_TIMEOUT_MS);
+        if (ret != 0) {
+            HAL_LOG("[FOTA] download fail ret=%d", ret);
+        } else {
+            ret = HAL_FOTA_AppPackageVerify(size);
+            if (ret == 0) break;
+            HAL_LOG("[FOTA] package CRC fail ret=%d size=%u", ret, (unsigned)*size);
+            ret = FOTA_ERR_CRC;
+        }
+        if (attempt < FOTA_MAX_ATTEMPTS) {
+            HAL_OS_TaskSleep(FOTA_RETRY_DELAY_SEC * HAL_TICKS_PER_SEC);
+        }
+    }
+    return ret;
+}
+
+/* Callback chạy trong task của SDK: chỉ ghi nhận, xử lý ở sTask_Fota */
+static int SysFotaCb(int status)
+{
+    s_sysStatus = status;
+    s_sysCbCount++;
+    return 0;
+}
+
+/** Tải gói vi sai hệ thống (system_patch.bin). @return 0 nếu tải + kiểm tra xong */
+static int DoSysUpdate(void)
+{
+    int attempt;
+    int ret = -1;
+
+    for (attempt = 1; attempt <= FOTA_MAX_ATTEMPTS; attempt++) {
+        uint32_t lastCount = 0;
+        int lastPct = -1;
+        int idleSec = 0;
+
+        s_sysStatus = 0;
+        s_sysCbCount = 0;
+        HAL_LOG("[FOTA] system download %d/%d: %s", attempt, FOTA_MAX_ATTEMPTS, s_url);
+        ret = HAL_FOTA_SysStart(s_url, SysFotaCb);
+        if (ret != 0) {
+            HAL_LOG("[FOTA] system start fail ret=%d", ret);
+        } else {
+            for (;;) {
+                int st;
+
+                HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
+                st = s_sysStatus;
+                if (s_sysCbCount != lastCount) {
+                    lastCount = s_sysCbCount;
+                    idleSec = 0;
+                    if (st == 100) return 0;
+                    if (st < 0 || st > 100) {
+                        HAL_LOG("[FOTA] system download fail status=%d", st);
+                        ret = FOTA_ERR_SYS_FAIL;
+                        break;
+                    }
+                    if (st != lastPct) {
+                        lastPct = st;
+                        HAL_LOG("[FOTA] system download %d%%", st);
+                    }
+                } else if (++idleSec >= FOTA_SYS_STALL_SEC) {
+                    /* Phiên của SDK có thể còn treo → không thử lại chồng lên */
+                    HAL_LOG("[FOTA] system download stalled (last status=%d)", st);
+                    return FOTA_ERR_SYS_TIMEOUT;
+                }
+            }
+        }
+        if (attempt < FOTA_MAX_ATTEMPTS) {
+            HAL_OS_TaskSleep(FOTA_RETRY_DELAY_SEC * HAL_TICKS_PER_SEC);
+        }
+    }
+    return ret;
+}
+
 static void sTask_Fota(void *argv)
 {
     char msg[64];
     (void)argv;
 
     for (;;) {
-        int attempt;
-        int ret = -1;
+        int ret;
+        int isApp;
         uint32_t size = 0;
 
         if (s_state != FOTA_STATE_PENDING) {
@@ -62,21 +161,8 @@ static void sTask_Fota(void *argv)
         }
         s_state = FOTA_STATE_DOWNLOADING;
 
-        for (attempt = 1; attempt <= FOTA_MAX_ATTEMPTS; attempt++) {
-            HAL_LOG("[FOTA] download %d/%d: %s", attempt, FOTA_MAX_ATTEMPTS, s_url);
-            ret = HAL_FOTA_AppDownload(s_url, FOTA_RECV_TIMEOUT_MS);
-            if (ret != 0) {
-                HAL_LOG("[FOTA] download fail ret=%d", ret);
-            } else {
-                ret = HAL_FOTA_AppPackageVerify(&size);
-                if (ret == 0) break;
-                HAL_LOG("[FOTA] package CRC fail ret=%d size=%u", ret, (unsigned)size);
-                ret = FOTA_ERR_CRC;
-            }
-            if (attempt < FOTA_MAX_ATTEMPTS) {
-                HAL_OS_TaskSleep(FOTA_RETRY_DELAY_SEC * HAL_TICKS_PER_SEC);
-            }
-        }
+        isApp = IsAppPackageUrl(s_url);
+        ret = isApp ? DoAppUpdate(&size) : DoSysUpdate();
 
         if (ret != 0) {
             snprintf(msg, sizeof(msg), "update firmware loi: %d", ret);
@@ -86,8 +172,12 @@ static void sTask_Fota(void *argv)
         }
 
         s_state = FOTA_STATE_REBOOTING;
-        snprintf(msg, sizeof(msg), "update firmware ok (%u byte), khoi dong lai",
-                 (unsigned)size);
+        if (isApp) {
+            snprintf(msg, sizeof(msg), "update firmware ok (%u byte), khoi dong lai",
+                     (unsigned)size);
+        } else {
+            snprintf(msg, sizeof(msg), "tai firmware he thong ok, khoi dong lai de nap");
+        }
         Notify(msg);
         HAL_OS_TaskSleep(HAL_TICKS_PER_SEC * 5);
         HAL_OS_SysReset();

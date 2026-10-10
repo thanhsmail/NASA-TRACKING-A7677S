@@ -8,8 +8,9 @@
 #define FOTA_REQ_NO_TASK -3  /* Không tạo được task FOTA */
 
 /**
- * Yêu cầu cập nhật firmware ứng dụng (customer_app.bin) từ URL.
- * Hàm trả về ngay; việc tải + kiểm CRC + reset chạy trong task riêng.
+ * Yêu cầu cập nhật firmware từ URL. Tên file customer_app.bin → cập nhật ứng
+ * dụng; tên khác (vd system_patch.bin) → cập nhật hệ thống (gói vi sai adiff).
+ * Hàm trả về ngay; việc tải + kiểm tra + reset chạy trong task riêng.
  * @param url http:// | https:// | ftp:// | ftps:// (thiếu scheme → mặc định http://)
  * @param notifyPhone SĐT nhận SMS báo kết quả (NULL/"" nếu không cần)
  * @return FOTA_REQ_*

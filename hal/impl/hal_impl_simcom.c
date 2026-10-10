@@ -629,6 +629,10 @@ int HAL_FOTA_AppDownload(const char *url, uint32_t recvTimeoutMs)
     pram.url = (char *)url;
     pram.recvtimeout = recvTimeoutMs;
 
+    /* Theo demo SDK (demo_app_download.c): phai mo khoa bao ve flash truoc khi
+     * tai, neu khong goi ghi xuong flash khong co hieu luc. */
+    sAPI_FBF_Disable();
+
     return (int)sAPI_AppDownload(&pram);
 }
 
@@ -639,4 +643,55 @@ int HAL_FOTA_AppPackageVerify(uint32_t *outSize)
 
     if (outSize) *outSize = (uint32_t)info.binSize;
     return ret;
+}
+
+int HAL_FOTA_SysStart(const char *url, HalFotaSysCb_t cb)
+{
+    /* static: SDK co the con tham chieu param sau khi ham tra ve */
+    static struct SC_FotaApiParam param;
+    const char *rest;
+    const char *at;
+    const char *colon;
+    const char *slash;
+
+    if (!url || !cb) return -1;
+    memset(&param, 0, sizeof(param));
+
+    if (strncmp(url, "http://", 7) == 0) {
+        /* Theo demo SDK: HTTP truyen host khong kem scheme */
+        param.mode = 1;
+        rest = url + 7;
+    } else if (strncmp(url, "https://", 8) == 0) {
+        param.mode = 1;
+        rest = url;
+    } else if (strncmp(url, "ftp://", 6) == 0) {
+        param.mode = 0;
+        rest = url + 6;
+        /* Tach user:pass@ (neu co) nam truoc dau '/' dau tien */
+        slash = strchr(rest, '/');
+        at = strchr(rest, '@');
+        if (at && (!slash || at < slash)) {
+            size_t ulen, plen = 0;
+            colon = memchr(rest, ':', (size_t)(at - rest));
+            ulen = (size_t)((colon ? colon : at) - rest);
+            if (colon) plen = (size_t)(at - colon - 1);
+            if (ulen >= sizeof(param.username) || plen >= sizeof(param.password)) return -1;
+            memcpy(param.username, rest, ulen);
+            if (colon) memcpy(param.password, colon + 1, plen);
+            rest = at + 1;
+        }
+    } else {
+        return -1;
+    }
+
+    if (rest[0] == '\0' || strlen(rest) >= sizeof(param.host)) return -1;
+    strcpy(param.host, rest);
+    /* SDK dung lenh AT+CFOTA=0,<mode>,"<host>",<user>,<pass>: de trong user/pass
+     * thi AT parser bao "Missing AT command parameter", FOTA khong chay ma
+     * sAPI_FotaServiceBegin van tra ve 0 → luon dien gia tri mac dinh. */
+    if (param.username[0] == '\0') strcpy(param.username, "anonymous");
+    if (param.password[0] == '\0') strcpy(param.password, "anonymous");
+    param.sc_fota_cb = (sc_fota_callback)cb;
+
+    return sAPI_FotaServiceBegin((void *)&param);
 }

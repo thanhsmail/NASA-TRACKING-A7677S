@@ -1,6 +1,6 @@
 /**
  * @file    hal_fota.h
- * @brief   HAL - FOTA Abstraction (cập nhật customer_app.bin từ xa)
+ * @brief   HAL - FOTA Abstraction (cập nhật customer_app.bin / firmware hệ thống từ xa)
  */
 #ifndef HAL_FOTA_H
 #define HAL_FOTA_H
@@ -28,6 +28,23 @@ int HAL_FOTA_AppDownload(const char *url, uint32_t recvTimeoutMs);
  * @return 0 nếu gói hợp lệ, khác 0 nếu lỗi
  */
 int HAL_FOTA_AppPackageVerify(uint32_t *outSize);
+
+/**
+ * Callback tiến trình FOTA hệ thống, được SDK gọi từ task của nó (không block
+ * trong callback): 0..99 = phần trăm đã tải, 100 = tải + kiểm tra xong (cần
+ * reset để nạp), giá trị khác = lỗi.
+ */
+typedef int (*HalFotaSysCb_t)(int status);
+
+/**
+ * @brief  Bắt đầu FOTA hệ thống (gói vi sai system_patch.bin tạo bằng adiff).
+ *         Hàm trả về ngay; kết quả báo qua callback.
+ * @param  url http:// | https:// | ftp://[user:pass@]host[:port]/path
+ * @param  cb  Callback tiến trình
+ * @return 0 nếu dịch vụ FOTA đã khởi động, <0 nếu lỗi (-1 tham số sai, các mã
+ *         âm khác là của sAPI_FotaServiceBegin)
+ */
+int HAL_FOTA_SysStart(const char *url, HalFotaSysCb_t cb);
 
 #ifdef __cplusplus
 }

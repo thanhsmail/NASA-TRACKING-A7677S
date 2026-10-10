@@ -87,12 +87,20 @@
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1
 
-/* FOTA — cập nhật customer_app.bin từ URL (Config cmd 33) */
+/* FOTA — cập nhật firmware từ URL (Config cmd 33): tên file customer_app.bin
+ * → cập nhật ứng dụng; tên khác (vd system_patch.bin) → cập nhật hệ thống */
+#define FOTA_APP_FILE_NAME "customer_app.bin"
+/* FOTA hệ thống: hết giờ nếu không có tiến triển. Phải đủ dài: sau khi nhận
+ * ~64 KB đầu, SDK tạm ngừng nhận để kiểm tra firmware cũ (nhiều phút, không
+ * gọi callback) rồi mới tải tiếp. */
+#define FOTA_SYS_STALL_SEC 1200
 #define FOTA_URL_MAX_LEN 200       // Độ dài URL tối đa (kể cả scheme)
 #define FOTA_MAX_ATTEMPTS 3        // Số lần thử tải lại khi lỗi
 #define FOTA_RETRY_DELAY_SEC 10    // Thời gian chờ giữa các lần thử
 #define FOTA_RECV_TIMEOUT_MS 5000  // Timeout chờ dữ liệu từ server
 #define FOTA_ERR_CRC (-100)        // Tải xong nhưng gói sai CRC
+#define FOTA_ERR_SYS_FAIL (-101)   // FOTA hệ thống: SDK báo tải/kiểm tra lỗi
+#define FOTA_ERR_SYS_TIMEOUT (-102) // FOTA hệ thống: không có tiến triển
 
 /* Điện áp acquy: ngưỡng bình yếu (Volt) */
 #define NASA_BATTERY_LOW_VOLT 10.5f
