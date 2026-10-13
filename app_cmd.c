@@ -37,9 +37,10 @@ char *strtok_r(char *str, const char *delim, char **saveptr);
  * Khởi động FOTA từ phần còn lại của câu lệnh (URL có thể chứa dấu phẩy).
  * @return 1 nếu đã nhận yêu cầu; 0 nếu từ chối (lý do ghi vào resp)
  */
-static int StartFota(const char *url, const char *fromPhone, char *resp, int respsz)
+static int StartFota(const char *url, const char *src, const char *fromPhone,
+                     char *resp, int respsz)
 {
-    int ret = FOTA_Request(url, fromPhone);
+    int ret = FOTA_Request(url, fromPhone, (src && strcmp(src, "SERVER") == 0) ? 1 : 0);
 
     HAL_LOG("[FOTA] Update requested via URL: %s ret=%d", url ? url : "", ret);
     if (ret == FOTA_REQ_OK) return 1;
@@ -121,6 +122,11 @@ static void Reply(CmdReplyFn reply, void *ctx, const char *src, const char *msg)
     HAL_OS_MutexUnlock(s_cmdReplyMutex);
 }
 
+void CMD_ReplyServer(const char *msg, CmdReplyFn reply, void *ctx)
+{
+    Reply(reply, ctx, "SERVER", msg);
+}
+
 /** Từ chối thực thi khi số điện thoại không có quyền hoặc thiết bị đang khóa cấu hình */
 static void Deny(CmdReplyFn reply, void *ctx, const char *src)
 {
@@ -182,7 +188,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     /* Lệnh cập nhật phần mềm FOTA cũ */
     if (strcmp(tag, "update") == 0) {
         if (!CFG_CanChangeProtected(src, fromPhone)) { Deny(reply, ctx, src); return; }
-        if (StartFota(save, fromPhone, resp, sizeof(resp)))
+        if (StartFota(save, src, fromPhone, resp, sizeof(resp)))
             snprintf(resp, sizeof(resp), "Update Firmware ok");
         Reply(reply, ctx, src, resp);
         return;
@@ -444,7 +450,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     case 33:
         if (isSet) {
             if (!CFG_CanChangeProtected(src, fromPhone)) { Deny(reply, ctx, src); return; }
-            if (StartFota(save, fromPhone, resp, sizeof(resp)))
+            if (StartFota(save, src, fromPhone, resp, sizeof(resp)))
                 snprintf(resp, sizeof(resp), "dang update firmware");
         } else {
             snprintf(resp, sizeof(resp), "sa,33 firmware: %s%s", NASA_FW_CODE,

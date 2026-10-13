@@ -89,8 +89,7 @@ static void sTask_NasaReport(void *argv)
 void userSpace_Main(void *arg)
 {
     ApiMapInit(arg);
-    HAL_LOG("ApiMapInit OK (A7677S)");
-
+    HAL_LOG(" NASA_TRACKING VS1.04.261013");
     HAL_OS_TaskSleep(APP_STARTUP_DELAY_SEC * HAL_TICKS_PER_SEC);
     HAL_LOG("==== NASA FW %s HW %s A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 

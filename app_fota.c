@@ -37,6 +37,12 @@ static volatile FotaState_t s_state = FOTA_STATE_IDLE;
 static char s_url[FOTA_URL_MAX_LEN];
 static char s_notifyPhone[20];
 
+/* Kết quả chờ gửi lên Server (khi lệnh đến từ Server). Task FOTA chỉ ghi vào
+ * đây; task NASA lấy ra và gửi qua socket để không ghi socket từ 2 task. */
+static volatile int s_notifyServer = 0;
+static volatile int s_serverMsgReady = 0;
+static char s_serverMsg[64];
+
 /* Trạng thái FOTA hệ thống do callback của SDK cập nhật */
 static volatile int      s_sysStatus = 0;
 static volatile uint32_t s_sysCbCount = 0;
@@ -44,10 +50,15 @@ static volatile uint32_t s_sysCbCount = 0;
 static HalTaskRef_t s_fotaTaskRef = NULL;
 static uint8_t      s_fotaTaskStack[1024 * 10];
 
-/** Báo kết quả cho người gửi lệnh qua SMS (nếu lệnh đến từ SMS) */
+/** Báo kết quả cho nguồn gửi lệnh: SMS (lệnh từ SMS) hoặc Server (lệnh từ Server) */
 static void Notify(const char *msg)
 {
     HAL_LOG("[FOTA] %s", msg);
+    if (s_notifyServer) {
+        strncpy(s_serverMsg, msg, sizeof(s_serverMsg) - 1);
+        s_serverMsg[sizeof(s_serverMsg) - 1] = '\0';
+        s_serverMsgReady = 1;
+    }
     if (s_notifyPhone[0]) {
         HAL_SMS_Send(s_notifyPhone, msg);
     }
@@ -161,6 +172,10 @@ static void sTask_Fota(void *argv)
         }
         s_state = FOTA_STATE_DOWNLOADING;
 
+        /* Chờ task nhận lệnh gửi xong phản hồi "dang update firmware" (qua
+         * socket Server hoặc SMS) rồi mới để SDK đụng tới PDP/flash. */
+        HAL_OS_TaskSleep(FOTA_START_DELAY_SEC * HAL_TICKS_PER_SEC);
+
         isApp = IsAppPackageUrl(s_url);
         ret = isApp ? DoAppUpdate(&size) : DoSysUpdate();
 
@@ -189,7 +204,16 @@ int FOTA_IsBusy(void)
     return (s_state != FOTA_STATE_IDLE) ? 1 : 0;
 }
 
-int FOTA_Request(const char *url, const char *notifyPhone)
+int FOTA_TakeServerResult(char *out, int outsz)
+{
+    if (!s_serverMsgReady || !out || outsz <= 0) return 0;
+    strncpy(out, s_serverMsg, (size_t)outsz - 1);
+    out[outsz - 1] = '\0';
+    s_serverMsgReady = 0;
+    return 1;
+}
+
+int FOTA_Request(const char *url, const char *notifyPhone, int notifyServer)
 {
     const char *p;
     const char *prefix = "";
@@ -221,6 +245,8 @@ int FOTA_Request(const char *url, const char *notifyPhone)
     }
 
     snprintf(s_url, sizeof(s_url), "%s%s", prefix, url);
+    s_notifyServer = notifyServer ? 1 : 0;
+    s_serverMsgReady = 0;
     s_notifyPhone[0] = '\0';
     if (notifyPhone && notifyPhone[0]) {
         strncpy(s_notifyPhone, notifyPhone, sizeof(s_notifyPhone) - 1);
