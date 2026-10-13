@@ -375,18 +375,35 @@ void HAL_GNSS_UrcListenerStart(void)
 
 /* ========================== HAL_SPI ======================================= */
 
+/*
+ * Cau hinh SPI that su truyen cho SDK. HalSpiDev_t (8 byte) KHONG cung bo cuc
+ * voi SC_SPI_DEV (index/clock/mode/csMode) nen khong duoc ep kieu truc tiep:
+ * SDK se doc clock/mode/csMode tu vung nho ngoai handle.
+ */
+static SC_SPI_DEV s_spiCfg;
+
 int HAL_SPI_Init(HalSpiDev_t *dev, int spiIndex)
 {
-    SC_SPI_DEV *d = (SC_SPI_DEV *)dev;
-    d->index = spiIndex;
-    SC_SPI_ReturnCode rc = sAPI_SpiConfigInitEx(d);
+    SC_SPI_ReturnCode rc;
+
+    if (!dev) return -1;
+    dev->index = spiIndex;
+
+    memset(&s_spiCfg, 0, sizeof(s_spiCfg));
+    s_spiCfg.index = (unsigned char)spiIndex;
+    /* Clock thap: bus di qua IC chuyen muc dung dien tro keo len nen suon len cham */
+    s_spiCfg.clock = SPI_CLOCK_812KHz;
+    s_spiCfg.mode = SPI_MODE_PH0_PO0;   /* SPI mode 0: NOR flash lay mau o canh len */
+    s_spiCfg.csMode = GPIO_MODE;        /* CS cua SDK giu suot chuoi byte; CS flash do driver tu lai */
+    rc = sAPI_SpiConfigInitEx(&s_spiCfg);
     return (rc == SC_SPI_RC_OK) ? 0 : -1;
 }
 
 int HAL_SPI_Write(HalSpiDev_t *dev, const uint8_t *data, uint32_t len)
 {
-    SC_SPI_DEV *d = (SC_SPI_DEV *)dev;
-    SC_SPI_ReturnCode rc = sAPI_SpiWriteBytesEx(d, (unsigned char *)data, (unsigned int)len);
+    SC_SPI_ReturnCode rc;
+    (void)dev;
+    rc = sAPI_SpiWriteBytesEx(&s_spiCfg, (unsigned char *)data, (unsigned int)len);
     return (rc == SC_SPI_RC_OK) ? 0 : -1;
 }
 
@@ -394,16 +411,18 @@ int HAL_SPI_Read(HalSpiDev_t *dev,
                  const uint8_t *cmd, uint32_t cmdLen,
                  uint8_t *rxBuf, uint32_t rxLen)
 {
-    SC_SPI_DEV *d = (SC_SPI_DEV *)dev;
-    SC_SPI_ReturnCode rc = sAPI_SpiReadBytesEx(d, (unsigned char *)cmd, (unsigned int)cmdLen,
-                                                (unsigned char *)rxBuf, (unsigned int)rxLen);
+    SC_SPI_ReturnCode rc;
+    (void)dev;
+    rc = sAPI_SpiReadBytesEx(&s_spiCfg, (unsigned char *)cmd, (unsigned int)cmdLen,
+                             (unsigned char *)rxBuf, (unsigned int)rxLen);
     return (rc == SC_SPI_RC_OK) ? 0 : -1;
 }
 
 int HAL_SPI_CustomCsSetLevel(HalSpiDev_t *dev, int level)
 {
-    SC_SPI_DEV *d = (SC_SPI_DEV *)dev;
-    SC_SPI_ReturnCode rc = sAPI_SpiCustomCsSetLevel(d->index, level);
+    SC_SPI_ReturnCode rc;
+    if (!dev) return -1;
+    rc = sAPI_SpiCustomCsSetLevel(dev->index, level);
     return (rc == SC_SPI_RC_OK) ? 0 : -1;
 }
 

@@ -138,13 +138,28 @@ static void BuildTrackPayload(char *payload, size_t size, int msgCode,
                    (unsigned int)totalKm10m, gps->headingDeg, (double)voltage);
 }
 
+/**
+ * Gửi bản tin sự kiện (5 / 6). Chưa có phiên với Server hoặc gửi lỗi thì lưu
+ * vào bộ đệm điểm mù để phát bù sau, đúng thứ tự thời gian với bản tin vị trí.
+ */
+static void SendOrStoreEventFrame(const char *frame)
+{
+    if (Network_IsConnected() && s_loginAcked && NetworkSendFrame(frame) == 0) {
+        s_messageIdNum++;
+        return;
+    }
+    if (Backup_PushText(frame) == 0) {
+        s_messageIdNum++;
+        HAL_LOG("[NASA] offline -> event frame stored");
+    }
+}
+
 static void NASA_WorkSendEvent(const LxltEvent_t *evt)
 {
     static char frame[480];
     char msgIdStr[16] = {0};
 
     if (!evt || evt->type == LXLT_EVENT_NONE) return;
-    if (!Network_IsConnected() || !s_loginAcked) return;
 
     frame[0] = '\0';
     (void)snprintf(msgIdStr, sizeof(msgIdStr), "%lu", (unsigned long)s_messageIdNum);
@@ -153,7 +168,7 @@ static void NASA_WorkSendEvent(const LxltEvent_t *evt)
                           &s_lxltState, GetTickNow(), (uint32_t)HAL_TICKS_PER_SEC,
                           GPS_GetTotalKm(), evt->dateTime, evt->lat, evt->lon);
     HAL_LOG("[NASA/Work] type=%d %s", (int)evt->type, frame);
-    if (NetworkSendFrame(frame) == 0) s_messageIdNum++;
+    SendOrStoreEventFrame(frame);
 }
     
 static void NASA_WorkUpdate(const char *dateTime, double lat, double lon, double speed)
@@ -230,7 +245,6 @@ static void NASA_ParkSendEvent(const ParkEvent_t *evt)
     char msgIdStr[16] = {0};
 
     if (!evt || evt->type == PARK_EVENT_NONE) return;
-    if (!Network_IsConnected() || !s_loginAcked) return;
 
     (void)snprintf(msgIdStr, sizeof(msgIdStr), "%lu", (unsigned long)s_messageIdNum);
     BuildParkingFramePayload(frame, sizeof(frame), msgIdStr, evt->dateTime, (int)evt->type,
@@ -239,7 +253,7 @@ static void NASA_ParkSendEvent(const ParkEvent_t *evt)
                               s_parkState.parkStartDateTime, evt->lat, evt->lon,
                               evt->stopSec, evt->dailyCount);
     HAL_LOG("[NASA/Park] type=%d %s", (int)evt->type, frame);
-    if (NetworkSendFrame(frame) == 0) s_messageIdNum++;
+    SendOrStoreEventFrame(frame);
 }
 
 static void NASA_ParkUpdate(const char *dateTime, double lat, double lon, double speed)
@@ -328,12 +342,16 @@ static int SendTrackOrBackup(int msgCode, const char *dateTime, uint8_t csq)
 
     if (!Network_IsConnected() || !s_loginAcked) {
         Backup_Push(&bak);
+        s_lastTrackingTick = GetTickNow();
+        s_prevSentHeadingDeg = gps.headingDeg;
         return -1;
     }
 
     HAL_LOG("[NASA] msg=%d %s", msgCode, frame);
     if (NetworkSendFrame(frame) < 0) {
         Backup_Push(&bak);
+        s_lastTrackingTick = GetTickNow();
+        s_prevSentHeadingDeg = gps.headingDeg;
         return -1;
     }
     s_prevSentHeadingDeg = gps.headingDeg;
@@ -352,6 +370,23 @@ static int ReplayOneBackup(void)
 
     /* Peek trước — chỉ CommitPop sau khi gửi TCP thành công. */
     if (!Backup_Peek(&rec)) return 0;
+
+    /* Bản tin sự kiện 5 / 6 lưu khi mất mạng: gửi lại nguyên khung đã đóng gói */
+    if (rec.used == BACKUP_KIND_TEXT) {
+        static char text[BACKUP_TEXT_MAX + 1];
+        int slots = 0;
+        int r = Backup_PeekText(text, sizeof(text), &slots);
+
+        if (r < 0) return -1;
+        if (r == 1) {
+            HAL_LOG("[NASA/Replay] %s", text);
+            if (NetworkSendFrame(text) < 0) return -1;
+        } else {
+            HAL_LOG("[NASA/Replay] drop broken event frame (%d slot)", slots);
+        }
+        Backup_CommitPopN(slots);
+        return 1;
+    }
 
     memset(&gps, 0, sizeof(gps));
     gps.lat = rec.lat;
@@ -417,15 +452,61 @@ void NASA_OnServerProtocolLine(const char *line)
         HAL_LOG("[NASA] Unhandled protocol line: %s", line);
     }
 }
+/**
+ * Lấy mẫu khi chưa có phiên với Server (đang kết nối lại / chờ ACK / chờ thử
+ * lại): chạy quy tắc dừng đỗ + lái xe và lưu vị trí vào bộ đệm điểm mù theo
+ * chu kỳ, để hành trình không bị thủng trong lúc mất mạng.
+ */
+static void OfflineSample(void)
+{
+    char dtBuf[40] = {0};
+    GpsSnapshot_t gps = {0};
+    uint8_t csq = 0;
+    float voltage;
+    uint32_t status;
+    BackupRecord_t bak;
+
+    GPS_Snapshot(&gps);
+    BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
+    NASA_ParkUpdate(dtBuf, gps.lat, gps.lon, gps.speedKph);
+    NASA_WorkUpdate(dtBuf, gps.lat, gps.lon, gps.speedKph);
+
+    voltage = NASA_GetVoltage();
+    status = BuildDeviceStatus(&gps, voltage);
+    HAL_NET_GetCsq(&csq);
+    FillBackupFromGps(&bak, &gps, dtBuf, csq, status, voltage);
+
+    /* Cùng chu kỳ với lúc gửi trực tiếp (theo ACC + góc cua), để mật độ điểm
+     * trong điểm mù giống hệt lúc có mạng. */
+    {
+        uint32_t nowTick = GetTickNow();
+        int periodSec = IsAccOn() ? GetAdaptivePeriodSec(gps.speedKph, gps.headingDeg)
+                                  : CFG_GetPeriodStopped();
+
+        if (s_lastTrackingTick == 0) {
+            /* Vừa khởi động: chỉ đặt mốc, không lưu bản ghi thừa khi kết nối bình thường */
+            s_lastTrackingTick = (nowTick != 0) ? nowTick : 1;
+        } else if ((nowTick - s_lastTrackingTick) >= (uint32_t)periodSec * (uint32_t)HAL_TICKS_PER_SEC) {
+            Backup_Push(&bak);
+            s_lastTrackingTick = nowTick;
+            s_prevSentHeadingDeg = gps.headingDeg;
+        }
+    }
+}
+
 // Xử lý trạng thái ban đầu
 static NasaState_t Handle_StateInit(int pdp_id)
 {
+    int ret;
+
     if (!CFG_IsDeviceEnabled()) {
         HAL_LOG("[NASA] Device disabled (cmd38), sleeping...");
         HAL_OS_TaskSleep(10 * HAL_TICKS_PER_SEC);
         return STATE_INIT;
     }
-    if (Network_ActivatePdp(pdp_id) == 0) {
+    ret = Network_ActivatePdp(pdp_id);
+    OfflineSample();
+    if (ret == 0) {
         TriggerNtpSyncIfNeeded();
         return STATE_CONNECT;
     }
@@ -435,9 +516,10 @@ static NasaState_t Handle_StateInit(int pdp_id)
 // Xử lý trạng thái kết nối
 static NasaState_t Handle_StateConnect(void)
 {
-    if (Network_Connect(CFG_GetServerHost(), CFG_GetServerPort()) == 0)
-        return STATE_LOGIN;
-    return STATE_ERROR_RETRY;
+    int ret = Network_Connect(CFG_GetServerHost(), CFG_GetServerPort());
+
+    OfflineSample();
+    return (ret == 0) ? STATE_LOGIN : STATE_ERROR_RETRY;
 }
 // Xử lý trạng thái đăng nhập
 static NasaState_t Handle_StateLogin(void)
@@ -446,6 +528,7 @@ static NasaState_t Handle_StateLogin(void)
     char msgId[16] = {0};
     char frame[360] = {0};
     uint32_t startTick;
+    uint32_t lastSampleTick;
     uint32_t timeoutTicks = NASA_LOGIN_ACK_TIMEOUT_SEC * HAL_TICKS_PER_SEC;
 
     s_loginAcked = 0;
@@ -460,12 +543,17 @@ static NasaState_t Handle_StateLogin(void)
     s_messageIdNum++;
 
     startTick = GetTickNow();
+    lastSampleTick = startTick;
     while (!s_loginAcked) {
         NASA_FeedWatchdog();
         if (Network_RecvPoll() != 0) return STATE_ERROR_RETRY;
         if ((GetTickNow() - startTick) >= timeoutTicks) {
             HAL_LOG("[NASA/Login] ACK timeout");
             return STATE_ERROR_RETRY;
+        }
+        if ((GetTickNow() - lastSampleTick) >= (uint32_t)HAL_TICKS_PER_SEC) {
+            lastSampleTick = GetTickNow();
+            OfflineSample();
         }
         HAL_OS_TaskSleep(HAL_TICKS_PER_SEC / 5);
     }
@@ -554,16 +642,6 @@ static NasaState_t Handle_StateTracking(void)
                         return STATE_ERROR_RETRY;
                     s_lastTrackingTick = nowTick;
                     HAL_LOG("[NASA/Tracking] Report sent OK (type=%d, acc=%d, next_in=%ds)", msg, accOn, periodSec);
-                } else {
-                    if (!Network_IsConnected() || !s_loginAcked) {
-                        uint8_t csq = 0;
-                        float voltage = NASA_GetVoltage();
-                        uint32_t status = BuildDeviceStatus(&gpsTemp, voltage);
-                        BackupRecord_t bak;
-                        HAL_NET_GetCsq(&csq);
-                        FillBackupFromGps(&bak, &gpsTemp, dtBuf, csq, status, voltage);
-                        Backup_OnTick(&bak, nowTick);
-                    }
                 }
             }
         }
@@ -583,6 +661,8 @@ void NASA_Init(void)
     LxltRules_Init(&s_lxltState);
 
     DetectResetReason();
+    /* Flash rời khởi tạo lỗi lúc bật nguồn → thử lại trước khi chọn nơi lưu backup */
+    if (!EN25_IsReady()) EN25_Init();
     Backup_Init();
 
     if (CFG_IsDriverLoggedIn()) {
@@ -680,22 +760,7 @@ void NASA_RunStep(void)
                 NASA_FeedWatchdog();
                 CheckNetworkDisconnTimeout();
                 HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
-                {
-                    char dtBuf[40] = {0};
-                    GpsSnapshot_t gps = {0};
-                    uint8_t csq = 0;
-                    float voltage;
-                    uint32_t status;
-                    BackupRecord_t bak;
-
-                    GPS_Snapshot(&gps);
-                    BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
-                    voltage = NASA_GetVoltage();
-                    status = BuildDeviceStatus(&gps, voltage);
-                    HAL_NET_GetCsq(&csq);
-                    FillBackupFromGps(&bak, &gps, dtBuf, csq, status, voltage);
-                    Backup_OnTick(&bak, GetTickNow());
-                }
+                OfflineSample();
             }
         }
         s_nasaState = STATE_INIT;

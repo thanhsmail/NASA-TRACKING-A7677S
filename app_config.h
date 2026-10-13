@@ -144,14 +144,14 @@
 
 /*
  * SPI flash rời EN25QH64A trên A7677S MANS (SC_SPI_1606_PIN):
- *  - SPI channel 1 = SSP0 data: pin11 CLK (pad16), pin13 MOSI (pad19), pin14 MISO (pad18)
+ *  - SPI channel 0 = SSP0 data (da xac nhan tren board: JEDEC ID EF 40 17): pin11 CLK (pad16), pin13 MOSI (pad19), pin14 MISO (pad18)
  *  - CS# Flash: GPIO_05 (pad 120, pin19) → NPN C1815 đảo logic
  *      MCU HIGH → transistor dẫn → CS# = 0V (Active)
  *      MCU LOW  → transistor ngắt → CS# kéo lên 3.3V (Inactive)
  *  - Không dùng SSP0_CS (pin12/pad17) cho CS — schematic đấu GPIO riêng
  */
 #ifndef FLASH_SPI_INDEX
-#define FLASH_SPI_INDEX 1
+#define FLASH_SPI_INDEX 0
 #endif
 #ifndef FLASH_SPI_CS_PIN
 #define FLASH_SPI_CS_PIN 120 /* SC_MODULE_GPIO_05 / pin19 — lái CS# qua C1815 */
