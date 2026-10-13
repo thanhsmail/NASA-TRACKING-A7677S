@@ -12,6 +12,7 @@
 #include "app_cmd.h"
 #include "app_nasa.h"
 #include "app_network.h"
+#include "app_fota.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -217,6 +218,14 @@ int Network_RecvPoll(void)
     if (!s_isConnected) return 1;
 
     EnsureNonBlocking();
+
+    /* Kết quả FOTA của lệnh na,33 gửi từ Server (đồng bộ với báo kết quả qua SMS) */
+    {
+        char fotaMsg[64];
+        if (FOTA_TakeServerResult(fotaMsg, sizeof(fotaMsg))) {
+            CMD_ReplyServer(fotaMsg, ServerCmdReply, NULL);
+        }
+    }
 
     /*
      * Trong SIMCom OpenSDK API sAPI_TcpipRecv:

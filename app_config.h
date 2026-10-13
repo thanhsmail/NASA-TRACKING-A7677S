@@ -17,8 +17,8 @@
 #define WORK_PERIODIC_SEC 60
 #define WORK_LOGOUT_STOP_SEC 900   /* dừng >= 15 phút → đăng xuất (5-3) */
 #define WORK_LXLT_LIMIT_MIN 240    /* LXLT quá 4 giờ */
-#define NASA_DEFAULT_DRIVER_NAME    "LAI XE"
-#define NASA_DEFAULT_DRIVER_LICENSE "000000"
+#define NASA_DEFAULT_DRIVER_NAME    "HO VA TEN LAI XE"
+#define NASA_DEFAULT_DRIVER_LICENSE "GIAYPHEPXE"
 
 /* Ngưỡng vận tốc phân biệt chạy/dừng (km/h) — Config cmd 10 */
 #define TRACKING_SPEED_THRESHOLD_DEFAULT 3
@@ -80,9 +80,9 @@
  */
 
 /* Phiên bản thiết bị RV26 / A7677S */
-#define NASA_DEVICE_NAME "NASA4G"
+#define NASA_DEVICE_NAME "NASA4G_TRACKING"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.0.260731"
+#define NASA_FW_CODE "v1.04.261013"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1
@@ -95,6 +95,7 @@
  * gọi callback) rồi mới tải tiếp. */
 #define FOTA_SYS_STALL_SEC 1200
 #define FOTA_URL_MAX_LEN 200       // Độ dài URL tối đa (kể cả scheme)
+#define FOTA_START_DELAY_SEC 3     // Chờ gửi xong phản hồi lệnh rồi mới bắt đầu tải
 #define FOTA_MAX_ATTEMPTS 3        // Số lần thử tải lại khi lỗi
 #define FOTA_RETRY_DELAY_SEC 10    // Thời gian chờ giữa các lần thử
 #define FOTA_RECV_TIMEOUT_MS 5000  // Timeout chờ dữ liệu từ server
