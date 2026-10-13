@@ -24,6 +24,7 @@
 #include "app_gps.h"
 #include "app_network.h"
 #include "app_backup.h"
+#include "drv_en25qh64a.h"
 #include "app_utils.h"
 #include "app_nasa.h"
 #include "app_fota.h"
@@ -414,6 +415,9 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             uint8_t csq = 0;
             GpsSnapshot_t gps = {0};
             int acc = 0;
+            int bakFlash = 0;
+            int bakCount = 0;
+            uint32_t bakErr = 0;
             const char *conn_str = "";
 
             HAL_NET_GetImei(imei, sizeof(imei));
@@ -425,11 +429,15 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             acc = (HAL_GPIO_Read(GPIO_ACC_IN) == 0) ? 1 : 0;
             conn_str = (Network_IsConnected() && NASA_IsSessionActive()) ? "da ket noi" : "chua ket noi";
 
+            /* FL: flash rời nhận được (1/0); BK: nơi lưu backup (F = flash, E = EFS)
+             * + số ô đang chờ phát bù; ERR: số lần ghi flash lỗi từ lúc khởi động */
+            Backup_GetStatus(&bakFlash, &bakCount, &bakErr);
             snprintf(resp, sizeof(resp),
-                     "NASA4G %s %s GSM: %u GPS: %d %s %d %s %d",
+                     "NASA4G %s %s GSM: %u GPS: %d %s %d %s %d FL:%d BK:%c%d ERR:%lu",
                      imei, iccid, (unsigned)csq, gps.satellites,
                      CFG_GetServerHost(), CFG_GetServerPort(),
-                     conn_str, acc);
+                     conn_str, acc,
+                     EN25_IsReady(), bakFlash ? 'F' : 'E', bakCount, (unsigned long)bakErr);
         }
         break;
 

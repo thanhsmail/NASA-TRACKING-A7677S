@@ -25,16 +25,27 @@ static HalMutexRef_t s_spiMutex = NULL;
  *
  * Dung HAL_GPIO_Write (khong goi sAPI_GpioSetValue truc tiep).
  */
+static int s_csActiveLevel = 1; /* muc GPIO de chon flash (1 = qua NPN dao) */
+
 static void EN25_CS_Assert(void)
 {
-    HAL_GPIO_Write(FLASH_SPI_CS_PIN, 1);
-    HAL_SPI_CustomCsSetLevel(&s_spiDev, 1);
+    HAL_GPIO_Write(FLASH_SPI_CS_PIN, s_csActiveLevel);
 }
 
 static void EN25_CS_Deassert(void)
 {
-    HAL_GPIO_Write(FLASH_SPI_CS_PIN, 0);
-    HAL_SPI_CustomCsSetLevel(&s_spiDev, 0);
+    HAL_GPIO_Write(FLASH_SPI_CS_PIN, !s_csActiveLevel);
+}
+
+static int EN25_ReadStatus(uint8_t *sr1)
+{
+    uint8_t cmd = EN25_CMD_READ_STATUS1;
+    int rc;
+
+    EN25_CS_Assert();
+    rc = HAL_SPI_Read(&s_spiDev, &cmd, 1, sr1, 1);
+    EN25_CS_Deassert();
+    return rc;
 }
 
 static void EN25_Lock(void)
@@ -47,24 +58,34 @@ static void EN25_Unlock(void)
     HAL_OS_MutexUnlock(s_spiMutex);
 }
 
+/*
+ * Gui lenh Write Enable va kiem tra bit WEL. CS# di qua transistor dao nen len
+ * muc cao cham; neu flash chua nhan WREN thi lenh ghi/xoa ke tiep bi bo qua ma
+ * khong bao loi -> gui lai toi da 3 lan. Van khong thay WEL thi chi canh bao va
+ * de lop tren phat hien bang doc lai (khong chan han viec ghi).
+ */
 static void EN25_WriteEnable(void)
 {
     uint8_t cmd = EN25_CMD_WRITE_ENABLE;
-    EN25_CS_Assert();
-    HAL_SPI_Write(&s_spiDev, &cmd, 1);
-    EN25_CS_Deassert();
+    uint8_t sr1 = 0;
+    int attempt;
+
+    for (attempt = 0; attempt < 3; attempt++) {
+        EN25_CS_Assert();
+        HAL_SPI_Write(&s_spiDev, &cmd, 1);
+        EN25_CS_Deassert();
+
+        if (EN25_ReadStatus(&sr1) != 0) sr1 = 0;
+        if (sr1 & EN25_SR1_WEL_BIT) return;
+    }
+    HAL_LOG("[EN25] WriteEnable: WEL not set (SR1=0x%02X)", sr1);
 }
 
 int EN25_IsBusy(void)
 {
-    uint8_t cmd = EN25_CMD_READ_STATUS1;
     uint8_t sr1 = 0xFF;
-    int rc;
 
-    EN25_CS_Assert();
-    rc = HAL_SPI_Read(&s_spiDev, &cmd, 1, &sr1, 1);
-    EN25_CS_Deassert();
-    if (rc != 0) return -1;
+    if (EN25_ReadStatus(&sr1) != 0) return -1;
     return (sr1 & EN25_SR1_WIP_BIT) ? 1 : 0;
 }
 
@@ -117,47 +138,69 @@ static int EN25_IdLooksValid(uint8_t mfrId, uint16_t devId)
     return 1;
 }
 
+/**
+ * Thu doc JEDEC ID tren 1 kenh SPI voi 1 muc CS.
+ * @return 0 neu flash tra loi ID hop le
+ */
+static int EN25_Probe(int spiIndex, int csActiveLevel, uint8_t *mfrId, uint16_t *devId)
+{
+    int attempt;
+
+    if (HAL_SPI_Init(&s_spiDev, spiIndex) != 0) {
+        HAL_LOG("[EN25] HAL_SPI_Init failed! index=%d", spiIndex);
+        return -1;
+    }
+
+    s_csActiveLevel = csActiveLevel;
+    HAL_GPIO_Config(FLASH_SPI_CS_PIN, HAL_GPIO_OUT,
+                    csActiveLevel ? HAL_GPIO_PULL_DOWN : HAL_GPIO_PULL_UP);
+    EN25_CS_Deassert();
+    HAL_OS_TaskSleep(HAL_TICKS_PER_SEC / 50); /* ~20 ms */
+
+    for (attempt = 0; attempt < 2; attempt++) {
+        *mfrId = 0;
+        *devId = 0;
+        if (EN25_ReadID(mfrId, devId) == 0 && EN25_IdLooksValid(*mfrId, *devId)) return 0;
+        HAL_OS_TaskSleep(HAL_TICKS_PER_SEC / 20); /* ~50 ms */
+    }
+    HAL_LOG("[EN25] Probe spi=%d csActive=%d: no flash (MfrID=0x%02X DevID=0x%04X)",
+            spiIndex, csActiveLevel, *mfrId, *devId);
+    return -1;
+}
+
 int EN25_Init(void)
 {
+    /* Kenh cau hinh truoc, sau do cac kenh con lai (SDK khong ghi ro chi so nao la SSP0) */
+    static const int spiCandidates[] = { FLASH_SPI_INDEX, 0, 1, 2 };
     uint8_t  mfrId = 0;
     uint16_t devId = 0;
-    int      attempt;
+    int      csLevel;
+    unsigned i;
 
     if (s_spiMutex == NULL) {
         HAL_OS_MutexCreate(&s_spiMutex);
     }
 
-    /* Cau hinh SPI qua HAL_SPI_Init */
-    if (HAL_SPI_Init(&s_spiDev, FLASH_SPI_INDEX) != 0) {
-        HAL_LOG("[EN25] HAL_SPI_Init failed! index=%d", FLASH_SPI_INDEX);
-        s_isInitialized = 0;
-        return -1;
+    /* Muc CS theo schematic (1) truoc; muc nguoc lai chi de chan doan mach */
+    for (csLevel = 1; csLevel >= 0; csLevel--) {
+        for (i = 0; i < sizeof(spiCandidates) / sizeof(spiCandidates[0]); i++) {
+            if (i > 0 && spiCandidates[i] == FLASH_SPI_INDEX) continue;
+            if (EN25_Probe(spiCandidates[i], csLevel, &mfrId, &devId) == 0) {
+                uint8_t sr1 = 0xFF;
+                (void)EN25_ReadStatus(&sr1);
+                HAL_LOG("[EN25/Flash] Flash Init OK! MfrID=0x%02X DevID=0x%04X SR1=0x%02X (spi=%d cs=%d csActive=%d)",
+                        mfrId, devId, sr1, spiCandidates[i], FLASH_SPI_CS_PIN, csLevel);
+                s_isInitialized = 1;
+                return 0;
+            }
+        }
     }
 
-    /* GPIO_05 output, idle LOW = flash bo chon (NPN ngat, CS# = 3.3V) */
+    HAL_LOG("[EN25/Flash] Flash Init Failed on all SPI channels (csPin=%d)", FLASH_SPI_CS_PIN);
+    /* Tra CS ve muc nghi theo schematic */
+    s_csActiveLevel = 1;
     HAL_GPIO_Config(FLASH_SPI_CS_PIN, HAL_GPIO_OUT, HAL_GPIO_PULL_DOWN);
     EN25_CS_Deassert();
-
-    /* Cho flash on dinh nguon sau khi CS idle */
-    HAL_OS_TaskSleep(HAL_TICKS_PER_SEC / 50); /* ~20 ms */
-
-    for (attempt = 0; attempt < 6; attempt++) {
-        mfrId = 0;
-        devId = 0;
-
-        if (EN25_ReadID(&mfrId, &devId) == 0 && EN25_IdLooksValid(mfrId, devId)) {
-            HAL_LOG("[EN25/Flash] Flash Init OK! MfrID=0x%02X DevID=0x%04X (spi=%d cs=%d)",
-                    mfrId, devId, FLASH_SPI_INDEX, FLASH_SPI_CS_PIN);
-            s_isInitialized = 1;
-            return 0;
-        }
-        HAL_LOG("[EN25] ReadID attempt %d fail MfrID=0x%02X DevID=0x%04X",
-                attempt + 1, mfrId, devId);
-        HAL_OS_TaskSleep(HAL_TICKS_PER_SEC / 20); /* ~50 ms */
-    }
-
-    HAL_LOG("[EN25/Flash] Flash Init Failed (MfrID=0x%02X, DevID=0x%04X) spi=%d csPin=%d",
-            mfrId, devId, FLASH_SPI_INDEX, FLASH_SPI_CS_PIN);
     s_isInitialized = 0;
     return -1;
 }
@@ -197,7 +240,8 @@ out:
 
 static int EN25_WritePageInternal(uint32_t addr, const uint8_t *buf, uint32_t len)
 {
-    uint8_t cmdBlock[4];
+    /* Lenh + dia chi + du lieu gui trong 1 lan truyen SPI duy nhat (goi khi da giu khoa) */
+    static uint8_t txBuf[4 + EN25_PAGE_SIZE];
 
     if (!buf || len == 0 || len > EN25_PAGE_SIZE || (addr + len) > EN25_FLASH_SIZE) return -1;
     if ((addr % EN25_PAGE_SIZE) + len > EN25_PAGE_SIZE) return -1;
@@ -205,18 +249,14 @@ static int EN25_WritePageInternal(uint32_t addr, const uint8_t *buf, uint32_t le
 
     EN25_WriteEnable();
 
-    cmdBlock[0] = EN25_CMD_PAGE_PROGRAM;
-    cmdBlock[1] = (uint8_t)((addr >> 16) & 0xFF);
-    cmdBlock[2] = (uint8_t)((addr >> 8) & 0xFF);
-    cmdBlock[3] = (uint8_t)(addr & 0xFF);
+    txBuf[0] = EN25_CMD_PAGE_PROGRAM;
+    txBuf[1] = (uint8_t)((addr >> 16) & 0xFF);
+    txBuf[2] = (uint8_t)((addr >> 8) & 0xFF);
+    txBuf[3] = (uint8_t)(addr & 0xFF);
+    memcpy(&txBuf[4], buf, len);
 
-    /* Giu CS lien tuc qua ca lenh + data -- bat buoc voi Page Program */
     EN25_CS_Assert();
-    if (HAL_SPI_Write(&s_spiDev, cmdBlock, 4) != 0) {
-        EN25_CS_Deassert();
-        return -1;
-    }
-    if (HAL_SPI_Write(&s_spiDev, (const uint8_t *)buf, len) != 0) {
+    if (HAL_SPI_Write(&s_spiDev, txBuf, 4 + len) != 0) {
         EN25_CS_Deassert();
         return -1;
     }
