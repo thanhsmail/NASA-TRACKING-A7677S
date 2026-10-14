@@ -3,7 +3,7 @@
 Firmware giám sát hành trình chạy trên module 4G SIMCom **A7677S** (ASR1606, OpenSDK V702).
 Thiết bị đọc GNSS, gửi vị trí lên Server theo giao thức `!NASA`, nhận lệnh cấu hình qua SMS hoặc Server, lưu bù dữ liệu khi mất mạng và tự cập nhật firmware từ xa (FOTA).
 
-- Tên thiết bị: `NASA4G_TRACKING`
+- Tên thiết bị: `RV4G` (`NASA_DEVICE_NAME`, xuất hiện ở đầu câu trả lời lệnh `sa,29`)
 - Phiên bản firmware: `v1.04.261013` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
 - Server mặc định: `103.57.209.16:2590`
 
@@ -39,8 +39,9 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 | [app_cmd.c](app_cmd.c) | Phân tích và thực thi lệnh `na,<mã>,...` / `sa,<mã>` |
 | [app_sms.c](app_sms.c) | Cấu hình modem SMS, tách nội dung SMS rồi chuyển cho `app_cmd` |
 | [app_cfg.c](app_cfg.c) | Cấu hình thiết bị, lưu vào file `C:/rv26.cfg` |
-| [app_backup.c](app_backup.c) | Bộ đệm điểm mù: hàng đợi vị trí và bản tin 5/6 chưa gửi được, lưu trên flash rời (xem mục 9) |
+| [app_backup.c](app_backup.c) | Bộ đệm điểm mù: hàng đợi vị trí chưa gửi được, lưu trên flash rời (xem mục 9) |
 | [app_fota.c](app_fota.c) | Cập nhật firmware từ URL (lệnh 33) |
+| [app_sim.c](app_sim.c) | Phát hiện rút / cắm / đổi SIM bằng cách hỏi định kỳ (module không báo URC) |
 | [app_indication.c](app_indication.c) | LED, lọc nhiễu ACC, ngõ ra DOUT, giám sát watchdog |
 | [app_utils.c](app_utils.c) | Tiện ích thời gian, đồng bộ NTP |
 | [drv_en25qh64a.c](drv_en25qh64a.c) | Driver flash SPI rời 8 MB (W25Q64JV / EN25QH64A), tự dò kênh SPI lúc khởi động |
@@ -84,13 +85,13 @@ Chỉ task `nasa_reporter` được ghi vào socket Server. Task khác muốn g�
 Mỗi vòng `STATE_TRACKING` làm lần lượt:
 
 1. `Network_RecvPoll()`: gửi kết quả FOTA đang chờ, đọc và thực thi lệnh từ Server.
-2. Phát bù hàng đợi backup: vị trí thành bản tin 7, bản tin 5/6 gửi lại nguyên khung (mỗi lượt tối đa 5 mục).
+2. Phát bù hàng đợi backup thành bản tin 7 (mỗi lượt tối đa 5 mục).
 3. Kiểm tra đổi ngày (xóa bộ đếm ngày) và lịch tự reset (lệnh 32).
 4. Lấy snapshot GPS, chạy quy tắc dừng đỗ và quy tắc lái xe.
 5. Tính chu kỳ gửi: ACC tắt dùng chu kỳ dừng; ACC bật dùng chu kỳ chạy, rút ngắn khi xe đổi hướng (≥15° còn một nửa, ≥30° còn 2 giây, áp dụng từ 8 km/h).
 6. Đến hạn hoặc có yêu cầu gửi ngay thì gửi bản tin; gửi lỗi thì ghi vào backup.
 
-Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong lúc chờ ACK đăng nhập, trong `STATE_ERROR_RETRY`), thiết bị vẫn chạy quy tắc dừng đỗ / lái xe và ghi vị trí vào backup theo đúng chu kỳ ở bước 5. Bản tin 5 và 6 phát sinh lúc này cũng được lưu để phát bù.
+Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong lúc chờ ACK đăng nhập, trong `STATE_ERROR_RETRY`), thiết bị vẫn chạy quy tắc dừng đỗ / lái xe và ghi vị trí vào backup theo đúng chu kỳ ở bước 5. Bản tin 5 và 6 phát sinh lúc này không được lưu (bỏ), nhưng trạng thái phiên lái và dừng đỗ vẫn được cập nhật nên bản tin kế tiếp sau khi có mạng vẫn đúng.
 
 ## 6. Bản tin giao thức
 
@@ -148,33 +149,23 @@ Cách hoạt động:
 - Mỗi ô chứa dữ liệu, số thứ tự và CRC32. Ô không qua được CRC bị bỏ qua khi phát bù, không gửi lên Server.
 - Header chỉ là điểm mốc, lưu sau mỗi 16 bản ghi và sau mỗi lượt phát bù. Khi khởi động, thiết bị dò tiếp từ điểm mốc theo số thứ tự để nhận các bản ghi ghi sau đó.
 - Trước khi ghi, ô được kiểm tra còn trống; sau khi ghi, đọc lại để so. Ô hỏng bị bỏ, bản ghi ghi sang ô kế.
-- Bản tin 5 và 6 được cắt thành các mảnh 92 byte nằm trong cùng vòng, nên phát bù đúng thứ tự thời gian với vị trí.
+- Chỉ lưu bản tin vị trí. Bản tin 5 và 6 hiện không lưu. Code vẫn còn khả năng lưu chúng thành các mảnh 92 byte trong cùng vòng (`Backup_PushText`), và vẫn phát bù được các mảnh còn sót trên flash từ bản firmware trước.
 - Khi vòng đầy, sector cũ nhất (32 ô) bị xóa để ghi tiếp.
 - Mất header ở cả hai sector thì hàng đợi được dựng lại bằng cách quét các ô.
 
 ### Dung lượng lưu
 
-Mỗi loại bản tin tốn số ô khác nhau:
-
-| Loại | Số ô | Chu kỳ lưu khi mất mạng |
-|---|---|---|
-| Vị trí (bản tin 2, phát bù thành 7) | 1 | 10 giây khi ACC bật (2 giây khi vào cua), 300 giây khi ACC tắt |
-| Bản tin 5 (thời gian lái) | 2 | 60 giây khi đang trong phiên lái |
-| Bản tin 6 (dừng đỗ) | 2 | 60 giây khi đang đỗ |
-
-Bản tin 5 và 6 dài khoảng 140–170 ký tự nên chiếm 2 mảnh 92 byte; tên lái xe dài (gần 63 ký tự) có thể làm thành 3 ô.
+Mỗi bản tin vị trí chiếm 1 ô. Chu kỳ lưu khi mất mạng giống chu kỳ gửi trực tiếp: 10 giây khi ACC bật (2 giây khi vào cua), 300 giây khi ACC tắt.
 
 | Tình huống mất mạng | Ô / phút | Thời gian tới khi đầy |
 |---|---|---|
-| Xe chạy liên tục, ACC bật | khoảng 8 | khoảng 5,5 ngày |
-| Xe đỗ, ACC tắt | khoảng 2,2 | khoảng 20 ngày |
-| Một ngày 10 giờ chạy + 14 giờ đỗ | khoảng 6.650 ô/ngày | khoảng 9–10 ngày |
+| Xe chạy liên tục, ACC bật | khoảng 6 | khoảng 7,5 ngày |
+| Xe đỗ, ACC tắt | 0,2 | hơn 200 ngày |
+| Một ngày 10 giờ chạy + 14 giờ đỗ | khoảng 3.770 ô/ngày | khoảng 17 ngày |
 
 Vào cua nhiều thì số ô khi chạy tăng. Khi đầy, dữ liệu mới nhất luôn được giữ, phần cũ nhất bị ghi đè theo từng sector 32 ô.
 
-Lúc đỗ, bản tin 6-2 chiếm phần lớn dung lượng (2 ô mỗi phút so với 0,2 ô cho vị trí).
-
-Nếu flash rời không khởi tạo được, thiết bị lưu tạm vào file `C:/rv26_bak.dat` trong module, tối đa 2.000 ô (khoảng 4 giờ xe chạy hoặc 15 giờ xe đỗ); header lưu sau mỗi bản ghi.
+Nếu flash rời không khởi tạo được, thiết bị lưu tạm vào file `C:/rv26_bak.dat` trong module, tối đa 2.000 ô (khoảng 5,5 giờ xe chạy hoặc gần 7 ngày xe đỗ); header lưu sau mỗi bản ghi.
 
 Kiểm tra nhanh bằng lệnh `sa,29`; cuối câu trả lời có `FL:1 BK:F12 ERR:0`:
 
@@ -194,6 +185,8 @@ Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản c�
 | Mất kết nối Server liên tục 15 phút | Reset thiết bị |
 | Gọi `abort()` | Reset thiết bị |
 | Đến giờ trong lịch reset (lệnh 32) | Reset thiết bị |
+| SIM không sẵn sàng 2 lần hỏi liên tiếp (mỗi 5 giây), kéo dài quá 30 giây | Tắt / bật sóng (CFUN 0/1) mỗi 60 giây để module đọc lại khe SIM |
+| SIM sẵn sàng trở lại, hoặc ICCID đổi | Cấu hình lại SMS, ngắt kết nối và đăng nhập lại Server với ICCID mới |
 
 ## 11. Phần cứng
 

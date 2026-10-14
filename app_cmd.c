@@ -25,6 +25,7 @@
 #include "app_network.h"
 #include "app_backup.h"
 #include "drv_en25qh64a.h"
+#include "app_sim.h"
 #include "app_utils.h"
 #include "app_nasa.h"
 #include "app_fota.h"
@@ -433,11 +434,12 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
              * + số ô đang chờ phát bù; ERR: số lần ghi flash lỗi từ lúc khởi động */
             Backup_GetStatus(&bakFlash, &bakCount, &bakErr);
             snprintf(resp, sizeof(resp),
-                     "NASA4G %s %s GSM: %u GPS: %d %s %d %s %d FL:%d BK:%c%d ERR:%lu",
+                     NASA_DEVICE_NAME " %s %s GSM: %u GPS: %d %s %d %s %d FL:%d BK:%c%d ERR:%lu SIM:%d",
                      imei, iccid, (unsigned)csq, gps.satellites,
                      CFG_GetServerHost(), CFG_GetServerPort(),
                      conn_str, acc,
-                     EN25_IsReady(), bakFlash ? 'F' : 'E', bakCount, (unsigned long)bakErr);
+                     EN25_IsReady(), bakFlash ? 'F' : 'E', bakCount, (unsigned long)bakErr,
+                     SIM_IsReady());
         }
         break;
 
