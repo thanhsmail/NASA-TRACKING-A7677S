@@ -209,6 +209,9 @@ void GPS_Init(void)
  * Tự động vô hiệu hóa cờ valid nếu số vệ tinh < 5 hoặc vị trí lat/lon = 0.
  * @param out Con trỏ tới cấu trúc GpsSnapshot_t nhận dữ liệu.
  */
+static double s_holdLat = 0.0;   /* vị trí hợp lệ gần nhất */
+static double s_holdLon = 0.0;
+
 void GPS_Snapshot(GpsSnapshot_t *out)
 {
     if (out == NULL) return;
@@ -221,7 +224,15 @@ void GPS_Snapshot(GpsSnapshot_t *out)
     out->totalKm    = s_totalKm;
     out->fixTick    = s_lastFixTick;
     out->valid      = (out->satellites >= 5 && out->lat != 0.0 && out->lon != 0.0);
-    if (!out->valid) { out->lat = 0.0; out->lon = 0.0; }
+    if (out->valid) {
+        s_holdLat = out->lat;
+        s_holdLon = out->lon;
+    } else {
+        /* Mất GPS: giữ vị trí hợp lệ gần nhất (valid = 0, cờ GPS trong bản tin tắt).
+         * Chưa từng có GPS từ lúc bật nguồn thì vẫn là 0. */
+        out->lat = s_holdLat;
+        out->lon = s_holdLon;
+    }
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
@@ -330,7 +341,17 @@ static int FilterMovingStatus(double speed, double lat, double lon)
         s_isMovingNow = 0;
         s_speedAboveThresholdTick = 0;
 
-        if (speed <= thresh) {
+        if (s_isParkedNow) {
+            /* Đang đỗ, ACC tắt: tốc độ nhiễu không được làm mất điểm neo (trước
+             * đây 1 mẫu nhiễu > ngưỡng là thoát đỗ rồi neo lại ở vị trí trôi).
+             * Chỉ thoát khi xe bị dời thật xa điểm neo (kéo / chở xe). */
+            if (speed > thresh && lat != 0.0 && lon != 0.0 &&
+                !(s_anchorLat == 0.0 && s_anchorLon == 0.0) &&
+                CalculateDistanceKm(s_anchorLat, s_anchorLon, lat, lon) >= PARKED_ACC_OFF_MIN_DISPLACEMENT_KM) {
+                s_isParkedNow = 0;
+                s_isCoastingToPark = 1;
+            }
+        } else if (speed <= thresh) {
             /* Xe đã dừng hẳn -> Chuyển sang PARKED */
             s_isCoastingToPark = 0;
             s_isParkedNow = 1;

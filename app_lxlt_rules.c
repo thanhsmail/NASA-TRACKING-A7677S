@@ -24,10 +24,14 @@ void LxltRules_ResetDailyCount(LxltState_t *state)
 // Xử lý đếm số km và thời gian 
 int LxltRules_WorkLxltMinutes(const LxltState_t *state, uint32_t nowTick, uint32_t ticksPerSec)
 {
-    if (!state || !state->workActive || state->workLoginTick == 0) return 0;
+    uint32_t endTick;
+
+    if (!state || state->workLoginTick == 0) return 0;
     if (ticksPerSec == 0) ticksPerSec = 1;
-    if (nowTick < state->workLoginTick) return 0;
-    return (int)((nowTick - state->workLoginTick) / (ticksPerSec * 60u));
+    /* Phiên vừa kết thúc: tính tới lúc kết thúc để bản tin 5-3 báo đúng số phút */
+    endTick = state->workActive ? nowTick : state->workEndTick;
+    if (endTick < state->workLoginTick) return 0;
+    return (int)((endTick - state->workLoginTick) / (ticksPerSec * 60u));
 }
 // Xử lý đếm số km
 int LxltRules_WorkLxltDistMeters(const LxltState_t *state, double currentTotalKm)
@@ -79,6 +83,7 @@ void LxltRules_StartSession(LxltState_t *state, const char *dateTime, double lat
         state->workOdomStartKm = totalKm;
         state->lxltCounted4h   = 0;
     }
+    state->workEndTick       = 0;
     state->workActive        = 1;
     state->workStopPending   = 0;
     state->workLastReportTick = nowTick;
@@ -96,7 +101,10 @@ void LxltRules_StartSession(LxltState_t *state, const char *dateTime, double lat
 void LxltRules_EndSession(LxltState_t *state, const char *dateTime, double lat, double lon,
                            uint32_t nowTick, uint32_t ticksPerSec, LxltEvent_t *outEvent)
 {
+    uint32_t endTick = nowTick;
+
     if (!state || !state->workActive) return;
+    if (ticksPerSec == 0) ticksPerSec = 1;
 
     LxltRules_WorkAccumDriveTime(state, nowTick, ticksPerSec);
 
@@ -108,9 +116,26 @@ void LxltRules_EndSession(LxltState_t *state, const char *dateTime, double lat, 
         if (dateTime) strncpy(outEvent->dateTime, dateTime, sizeof(outEvent->dateTime) - 1);
     }
 
+    /* Đang chờ xác nhận dừng: phiên kết thúc tại lúc xe bắt đầu dừng, thời gian
+     * chờ không tính là thời gian lái */
+    if (state->workStopPending && state->workStopStartTick != 0 &&
+        nowTick >= state->workStopStartTick) {
+        uint32_t waitSec = (nowTick - state->workStopStartTick) / ticksPerSec;
+
+        endTick = state->workStopStartTick;
+        state->driveAccumSecToday = (state->driveAccumSecToday > waitSec)
+                                  ? (state->driveAccumSecToday - waitSec) : 0;
+        state->driveMinToday = (int)(state->driveAccumSecToday / 60u);
+        if (outEvent && state->workStopDT[0] != '\0') {
+            strncpy(outEvent->endDateTime, state->workStopDT, sizeof(outEvent->endDateTime) - 1);
+            outEvent->lat = state->workStopLat;
+            outEvent->lon = state->workStopLon;
+        }
+    }
+
     state->workActive      = 0;
     state->workStopPending = 0;
-    state->workLoginTick   = 0;
+    state->workEndTick     = endTick;
     state->lxltCounted4h   = 0;
 }
 // Xử lý quy tắc Lái xe liên tục LXLT / Phiên làm việc
@@ -140,6 +165,13 @@ int LxltRules_Process(LxltState_t *state, const GpsSnapshot_t *gps,
             if (!state->workStopPending) {
                 state->workStopPending = 1;
                 state->workStopStartTick = nowTick;
+                state->workStopLat = lat;
+                state->workStopLon = lon;
+                state->workStopDT[0] = '\0';
+                if (dateTime) {
+                    strncpy(state->workStopDT, dateTime, sizeof(state->workStopDT) - 1);
+                    state->workStopDT[sizeof(state->workStopDT) - 1] = '\0';
+                }
             } else if ((nowTick - state->workStopStartTick) >=
                        (uint32_t)WORK_LOGOUT_STOP_SEC * ticksPerSec) {
                 LxltRules_EndSession(state, dateTime, lat, lon, nowTick, ticksPerSec, outEvent);
