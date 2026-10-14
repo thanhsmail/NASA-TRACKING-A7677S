@@ -21,6 +21,12 @@ void NASA_OnServerProtocolLine(const char *line);
 void NASA_DriverLogin(void);
 void NASA_DriverLogout(void);
 
+/**
+ * SIM vừa cắm lại / đổi SIM (gọi từ task khác). Task NASA cập nhật ICCID và
+ * đăng nhập lại để Server nhận ICCID mới.
+ */
+void NASA_OnSimChanged(const char *iccid);
+
 uint32_t NASA_GetNextMessageId(void);
 void NASA_FeedWatchdog(void);
 int  NASA_IsWatchdogTimeout(void);

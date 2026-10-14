@@ -46,6 +46,10 @@ static char s_serverLastPacket[40] = {0};
 static uint32_t s_lastWatchdogFeedTick = 0;
 static uint32_t s_disconnStartTick = 0;
 
+/* ICCID mới do task SIM báo; task NASA áp dụng ở đầu NASA_RunStep */
+static char         s_pendingIccid[32] = {0};
+static volatile int s_simChanged = 0;
+
 /* Bộ Quy tắc đỗ xe & LXLT */
 static ParkState_t s_parkState;
 static LxltState_t s_lxltState;
@@ -139,8 +143,9 @@ static void BuildTrackPayload(char *payload, size_t size, int msgCode,
 }
 
 /**
- * Gửi bản tin sự kiện (5 / 6). Chưa có phiên với Server hoặc gửi lỗi thì lưu
- * vào bộ đệm điểm mù để phát bù sau, đúng thứ tự thời gian với bản tin vị trí.
+ * Gửi bản tin sự kiện (5 / 6). Chưa có phiên với Server hoặc gửi lỗi thì bỏ:
+ * bản tin 5 / 6 hiện không lưu vào bộ đệm điểm mù (chỉ lưu vị trí).
+ * Muốn lưu lại thì gọi Backup_PushText(frame) ở nhánh bỏ.
  */
 static void SendOrStoreEventFrame(const char *frame)
 {
@@ -148,10 +153,7 @@ static void SendOrStoreEventFrame(const char *frame)
         s_messageIdNum++;
         return;
     }
-    if (Backup_PushText(frame) == 0) {
-        s_messageIdNum++;
-        HAL_LOG("[NASA] offline -> event frame stored");
-    }
+    HAL_LOG("[NASA] offline -> event frame dropped (not backed up)");
 }
 
 static void NASA_WorkSendEvent(const LxltEvent_t *evt)
@@ -748,6 +750,32 @@ static void CheckNetworkDisconnTimeout(void)
     }
 }
 
+void NASA_OnSimChanged(const char *iccid)
+{
+    if (!iccid || !iccid[0]) return;
+    strncpy(s_pendingIccid, iccid, sizeof(s_pendingIccid) - 1);
+    s_pendingIccid[sizeof(s_pendingIccid) - 1] = '\0';
+    s_simChanged = 1;
+}
+
+/** Áp dụng ICCID mới: nếu khác ICCID đang dùng thì đăng nhập lại */
+static void ApplySimChange(void)
+{
+    if (!s_simChanged) return;
+    s_simChanged = 0;
+    if (strcmp(s_pendingIccid, s_devIccid) == 0) return;
+
+    HAL_LOG("[NASA] SIM changed %s -> %s, re-login", s_devIccid, s_pendingIccid);
+    strncpy(s_devIccid, s_pendingIccid, sizeof(s_devIccid) - 1);
+    s_devIccid[sizeof(s_devIccid) - 1] = '\0';
+    if (s_nasaState == STATE_TRACKING || s_nasaState == STATE_LOGIN) {
+        Network_Disconnect();
+        s_loginAcked = 0;
+    }
+    /* Kết nối lại ngay, không chờ hết vòng thử lại */
+    s_nasaState = STATE_INIT;
+}
+
 // Xử lý logic chính của NASA
 void NASA_RunStep(void)
 {
@@ -755,6 +783,7 @@ void NASA_RunStep(void)
     uint32_t nowFlush = GetTickNow();
 
     NASA_FeedWatchdog();
+    ApplySimChange();
     CheckNetworkDisconnTimeout();
     if (s_lastCfgFlushTick == 0 ||
         (nowFlush - s_lastCfgFlushTick) >= (uint32_t)(10 * HAL_TICKS_PER_SEC)) {

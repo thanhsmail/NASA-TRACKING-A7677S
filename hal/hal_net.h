@@ -24,6 +24,18 @@ void HAL_NET_SetNonBlocking(void);
 int  HAL_NET_GetImei(char *outImei, uint32_t bufLen);
 int  HAL_NET_GetIccid(char *outIccid, uint32_t bufLen);
 
+/* Trạng thái SIM (HAL_NET_GetSimState) */
+#define HAL_SIM_READY     0   /* SIM sẵn sàng */
+#define HAL_SIM_LOCKED    1   /* Cần PIN / PUK / bị khóa */
+#define HAL_SIM_ABSENT    2   /* Không có SIM / đã rút / lỗi SIM */
+#define HAL_SIM_UNKNOWN  -1   /* Không hỏi được */
+
+/** Hỏi trạng thái SIM (+CPIN). @return HAL_SIM_* */
+int  HAL_NET_GetSimState(void);
+
+/** Bật (1) / tắt (0) sóng di động (CFUN 1 / 0). @return 0 nếu thành công */
+int  HAL_NET_SetRadio(int on);
+
 #ifdef __cplusplus
 }
 #endif

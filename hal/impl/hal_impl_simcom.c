@@ -194,6 +194,32 @@ int HAL_NET_GetIccid(char *outIccid, uint32_t bufLen)
     return -1;
 }
 
+int HAL_NET_GetSimState(void)
+{
+    UINT8 cpin = SC_SIM_UNKNOW;
+
+    if (sAPI_SimcardPinGet(&cpin) != SC_SIM_RETURN_SUCCESS) return HAL_SIM_UNKNOWN;
+    switch (cpin) {
+    case SC_SIM_READY:
+        return HAL_SIM_READY;
+    case SC_SIM_PIN:
+    case SC_SIM_PUK:
+    case SC_SIM_BLOCKED:
+        return HAL_SIM_LOCKED;
+    case SC_SIM_REMOVED:
+    case SC_SIM_CRASH:
+    case SC_SIM_NOINSRETED:
+        return HAL_SIM_ABSENT;
+    default:
+        return HAL_SIM_UNKNOWN;
+    }
+}
+
+int HAL_NET_SetRadio(int on)
+{
+    return (sAPI_NetworkSetCfun(on ? SC_CFUN_1 : SC_CFUN_0) == SC_NET_SUCCESS) ? 0 : -1;
+}
+
 int HAL_NET_ActivatePdp(int pdpId)
 {
     return (sAPI_TcpipPdpActive(pdpId, 1) == 0) ? 0 : -1;

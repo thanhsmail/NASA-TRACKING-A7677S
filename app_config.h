@@ -43,6 +43,14 @@
 #define NASA_NTP_MAX_ATTEMPTS 3
 #define NASA_NITZ_ENABLE_VALUE 1
 #define NASA_SERVER_CMD_BUF_SIZE 1024
+
+/* Rút / cắm SIM không có URC (app_sim.c) */
+#define SIM_POLL_SEC 5                 // Chu kỳ hỏi trạng thái SIM
+#define SIM_ABSENT_CONFIRM 2           // Số lần liên tiếp không sẵn sàng mới coi là rút SIM
+#define SIM_REDETECT_AFTER_SEC 30      // Mất SIM bao lâu thì bắt đầu tắt / bật sóng
+#define SIM_REDETECT_INTERVAL_SEC 60   // Chu kỳ tắt / bật sóng khi vẫn chưa thấy SIM
+#define SIM_RADIO_OFF_SEC 3            // Thời gian tắt sóng mỗi lần
+#define SIM_ICCID_CHECK_SEC 60         // Chu kỳ so ICCID để phát hiện đổi SIM nhanh
 #define NASA_SERVER_RECV_TIMEOUT_US 0
 
 #define PARK_STOP_CONFIRM_SEC 3 // Thời gian xác nhận dừng đỗ
@@ -82,7 +90,7 @@
  */
 
 /* Phiên bản thiết bị RV26 / A7677S */
-#define NASA_DEVICE_NAME "NASA4G_TRACKING"
+#define NASA_DEVICE_NAME "RV4G"
 #define NASA_HW_CODE "v1.0"
 #define NASA_FW_CODE "v1.05.261014"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"

@@ -30,6 +30,7 @@
 #include "app_cfg.h"
 #include "app_nasa.h"
 #include "app_indication.h"
+#include "app_sim.h"
 
 /* --- SMS URC task --- */
 static HalTaskRef_t gSmsRecvTask = NULL;
@@ -56,6 +57,9 @@ static void SmsReceiverTask(void *argv)
     HAL_OS_TaskSleep(200);
 
     while (1) {
+        /* Rút / cắm SIM không có URC: hỏi định kỳ (tự giới hạn tần suất) */
+        SIM_Poll();
+
         if (HAL_SMS_RecvUrc(gSmsMsgQueue, &evt, HAL_TICKS_PER_SEC) != 0) continue;
 
         if (evt.type == HAL_SMS_URC_NEW_MSG && evt.index > 0) {
