@@ -166,7 +166,9 @@ static void NASA_WorkSendEvent(const LxltEvent_t *evt)
     BuildWorkFramePayload(frame, sizeof(frame), msgIdStr, evt->dateTime, (int)evt->type,
                           CFG_GetDriverName(), CFG_GetDriverLicense(),
                           &s_lxltState, GetTickNow(), (uint32_t)HAL_TICKS_PER_SEC,
-                          GPS_GetTotalKm(), evt->dateTime, evt->lat, evt->lon);
+                          GPS_GetTotalKm(),
+                          evt->endDateTime[0] ? evt->endDateTime : evt->dateTime,
+                          evt->lat, evt->lon);
     HAL_LOG("[NASA/Work] type=%d %s", (int)evt->type, frame);
     SendOrStoreEventFrame(frame);
 }
@@ -321,6 +323,26 @@ static void FillBackupFromGps(BackupRecord_t *rec, const GpsSnapshot_t *gps,
     rec->voltage = voltage;
 }
 
+/**
+ * Bản ghi điểm mù chỉ có giá trị khi đặt được lên dòng thời gian và lên bản đồ:
+ * cần thời gian hợp lệ và đã từng có vị trí GPS.
+ */
+static int BackupRecordUsable(const BackupRecord_t *rec)
+{
+    if (rec->datetime[0] == '\0' || strncmp(rec->datetime, "0000-00-00", 10) == 0) return 0;
+    if (rec->lat == 0.0 && rec->lon == 0.0) return 0;
+    return 1;
+}
+
+static void PushBackupIfUsable(const BackupRecord_t *rec)
+{
+    if (BackupRecordUsable(rec)) {
+        Backup_Push(rec);
+    } else {
+        HAL_LOG("[Backup] skip record without valid time/position (dt=%s)", rec->datetime);
+    }
+}
+
 // Xử lý gửi dữ liệu Track hoặc Backup
 static int SendTrackOrBackup(int msgCode, const char *dateTime, uint8_t csq)
 {
@@ -341,7 +363,7 @@ static int SendTrackOrBackup(int msgCode, const char *dateTime, uint8_t csq)
     FillBackupFromGps(&bak, &gps, dateTime, csq, status, voltage);
 
     if (!Network_IsConnected() || !s_loginAcked) {
-        Backup_Push(&bak);
+        PushBackupIfUsable(&bak);
         s_lastTrackingTick = GetTickNow();
         s_prevSentHeadingDeg = gps.headingDeg;
         return -1;
@@ -349,7 +371,7 @@ static int SendTrackOrBackup(int msgCode, const char *dateTime, uint8_t csq)
 
     HAL_LOG("[NASA] msg=%d %s", msgCode, frame);
     if (NetworkSendFrame(frame) < 0) {
-        Backup_Push(&bak);
+        PushBackupIfUsable(&bak);
         s_lastTrackingTick = GetTickNow();
         s_prevSentHeadingDeg = gps.headingDeg;
         return -1;
@@ -388,6 +410,13 @@ static int ReplayOneBackup(void)
         return 1;
     }
 
+    /* Bản ghi cũ không có thời gian / vị trí hợp lệ: bỏ, không gán giờ hiện tại */
+    if (!BackupRecordUsable(&rec)) {
+        HAL_LOG("[NASA/Replay] drop record without valid time/position (dt=%.19s)", rec.datetime);
+        Backup_CommitPop();
+        return 1;
+    }
+
     memset(&gps, 0, sizeof(gps));
     gps.lat = rec.lat;
     gps.lon = rec.lon;
@@ -396,10 +425,6 @@ static int ReplayOneBackup(void)
     gps.totalKm = rec.totalKm;
     gps.headingDeg = rec.headingDeg;
     gps.valid = (rec.lat != 0.0 || rec.lon != 0.0);
-
-    if (rec.datetime[0] == '\0' || strncmp(rec.datetime, "0000-00-00", 10) == 0) {
-        BuildDateTimeAutoFallback(rec.datetime, sizeof(rec.datetime));
-    }
 
     (void)snprintf(msgId, sizeof(msgId), "%lu", (unsigned long)s_messageIdNum);
     BuildTrackPayload(payload, sizeof(payload), 7, msgId, rec.datetime, &gps,
@@ -487,7 +512,7 @@ static void OfflineSample(void)
             /* Vừa khởi động: chỉ đặt mốc, không lưu bản ghi thừa khi kết nối bình thường */
             s_lastTrackingTick = (nowTick != 0) ? nowTick : 1;
         } else if ((nowTick - s_lastTrackingTick) >= (uint32_t)periodSec * (uint32_t)HAL_TICKS_PER_SEC) {
-            Backup_Push(&bak);
+            PushBackupIfUsable(&bak);
             s_lastTrackingTick = nowTick;
             s_prevSentHeadingDeg = gps.headingDeg;
         }

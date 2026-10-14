@@ -39,11 +39,11 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 | [app_cmd.c](app_cmd.c) | Phân tích và thực thi lệnh `na,<mã>,...` / `sa,<mã>` |
 | [app_sms.c](app_sms.c) | Cấu hình modem SMS, tách nội dung SMS rồi chuyển cho `app_cmd` |
 | [app_cfg.c](app_cfg.c) | Cấu hình thiết bị, lưu vào file `C:/rv26.cfg` |
-| [app_backup.c](app_backup.c) | Hàng đợi bản tin chưa gửi được (tối đa 2000 bản ghi) |
+| [app_backup.c](app_backup.c) | Bộ đệm điểm mù: hàng đợi vị trí và bản tin 5/6 chưa gửi được, lưu trên flash rời (xem mục 9) |
 | [app_fota.c](app_fota.c) | Cập nhật firmware từ URL (lệnh 33) |
 | [app_indication.c](app_indication.c) | LED, lọc nhiễu ACC, ngõ ra DOUT, giám sát watchdog |
 | [app_utils.c](app_utils.c) | Tiện ích thời gian, đồng bộ NTP |
-| [drv_en25qh64a.c](drv_en25qh64a.c) | Driver flash SPI rời EN25QH64A |
+| [drv_en25qh64a.c](drv_en25qh64a.c) | Driver flash SPI rời 8 MB (W25Q64JV / EN25QH64A), tự dò kênh SPI lúc khởi động |
 | [app_config.h](app_config.h) | Toàn bộ hằng số: chu kỳ, ngưỡng, chân GPIO, phiên bản |
 
 ## 3. Khởi động
@@ -84,13 +84,13 @@ Chỉ task `nasa_reporter` được ghi vào socket Server. Task khác muốn g�
 Mỗi vòng `STATE_TRACKING` làm lần lượt:
 
 1. `Network_RecvPoll()`: gửi kết quả FOTA đang chờ, đọc và thực thi lệnh từ Server.
-2. Phát bù các bản ghi trong hàng đợi backup (mỗi lượt tối đa 5 bản ghi).
+2. Phát bù hàng đợi backup: vị trí thành bản tin 7, bản tin 5/6 gửi lại nguyên khung (mỗi lượt tối đa 5 mục).
 3. Kiểm tra đổi ngày (xóa bộ đếm ngày) và lịch tự reset (lệnh 32).
 4. Lấy snapshot GPS, chạy quy tắc dừng đỗ và quy tắc lái xe.
 5. Tính chu kỳ gửi: ACC tắt dùng chu kỳ dừng; ACC bật dùng chu kỳ chạy, rút ngắn khi xe đổi hướng (≥15° còn một nửa, ≥30° còn 2 giây, áp dụng từ 8 km/h).
 6. Đến hạn hoặc có yêu cầu gửi ngay thì gửi bản tin; gửi lỗi thì ghi vào backup.
 
-Trong `STATE_ERROR_RETRY`, thiết bị vẫn ghi vị trí vào backup trong lúc chờ.
+Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong lúc chờ ACK đăng nhập, trong `STATE_ERROR_RETRY`), thiết bị vẫn chạy quy tắc dừng đỗ / lái xe và ghi vị trí vào backup theo đúng chu kỳ ở bước 5. Bản tin 5 và 6 phát sinh lúc này cũng được lưu để phát bù.
 
 ## 6. Bản tin giao thức
 
@@ -112,7 +112,7 @@ Lệnh đến từ SMS hoặc Server đều vào `CMD_Execute()` trong [app_cmd.
 | 1 | IP và cổng Server | 25 | Tên lái xe, số GPLX |
 | 2 | Ngõ ra DOUT (rơ-le) | 26 | Chu kỳ báo dừng đỗ |
 | 4 | Chu kỳ gửi khi chạy / dừng | 27 | Vị trí hiện tại |
-| 8 | Chế độ ACC | 29 | Thông tin thiết bị |
+| 8 | Chế độ ACC | 29 | Thông tin thiết bị, kèm trạng thái flash và backup |
 | 9 | Khởi động lại | 32 | Lịch tự reset |
 | 10 | Ngưỡng tốc độ | 33 | Cập nhật firmware / đọc phiên bản |
 | 11 | Chế độ im lặng (tắt LED) | 34, 35 | Xóa backup / xóa toàn bộ dữ liệu |
@@ -131,7 +131,62 @@ Lệnh đến từ SMS hoặc Server đều vào `CMD_Execute()` trong [app_cmd.
 
 Mỗi lần lỗi sẽ thử lại, tối đa 3 lần, cách nhau 10 giây. Lỗi thì firmware đang chạy được giữ nguyên.
 
-## 9. Cơ chế tự phục hồi
+## 9. Bộ đệm điểm mù (backup)
+
+Dữ liệu chưa gửi được nằm trên flash rời và không mất khi reset hay mất nguồn.
+
+Bố cục flash (sector 4 KB):
+
+| Sector | Nội dung |
+|---|---|
+| 0, 1 | Cấu hình thiết bị (bản chính và bản sao) |
+| 2, 3 | Nhật ký header của hàng đợi, 256 ô, hai sector dùng luân phiên |
+| 4 trở đi | Vòng bản ghi: 65.408 ô, mỗi ô 128 byte |
+
+Cách hoạt động:
+
+- Mỗi ô chứa dữ liệu, số thứ tự và CRC32. Ô không qua được CRC bị bỏ qua khi phát bù, không gửi lên Server.
+- Header chỉ là điểm mốc, lưu sau mỗi 16 bản ghi và sau mỗi lượt phát bù. Khi khởi động, thiết bị dò tiếp từ điểm mốc theo số thứ tự để nhận các bản ghi ghi sau đó.
+- Trước khi ghi, ô được kiểm tra còn trống; sau khi ghi, đọc lại để so. Ô hỏng bị bỏ, bản ghi ghi sang ô kế.
+- Bản tin 5 và 6 được cắt thành các mảnh 92 byte nằm trong cùng vòng, nên phát bù đúng thứ tự thời gian với vị trí.
+- Khi vòng đầy, sector cũ nhất (32 ô) bị xóa để ghi tiếp.
+- Mất header ở cả hai sector thì hàng đợi được dựng lại bằng cách quét các ô.
+
+### Dung lượng lưu
+
+Mỗi loại bản tin tốn số ô khác nhau:
+
+| Loại | Số ô | Chu kỳ lưu khi mất mạng |
+|---|---|---|
+| Vị trí (bản tin 2, phát bù thành 7) | 1 | 10 giây khi ACC bật (2 giây khi vào cua), 300 giây khi ACC tắt |
+| Bản tin 5 (thời gian lái) | 2 | 60 giây khi đang trong phiên lái |
+| Bản tin 6 (dừng đỗ) | 2 | 60 giây khi đang đỗ |
+
+Bản tin 5 và 6 dài khoảng 140–170 ký tự nên chiếm 2 mảnh 92 byte; tên lái xe dài (gần 63 ký tự) có thể làm thành 3 ô.
+
+| Tình huống mất mạng | Ô / phút | Thời gian tới khi đầy |
+|---|---|---|
+| Xe chạy liên tục, ACC bật | khoảng 8 | khoảng 5,5 ngày |
+| Xe đỗ, ACC tắt | khoảng 2,2 | khoảng 20 ngày |
+| Một ngày 10 giờ chạy + 14 giờ đỗ | khoảng 6.650 ô/ngày | khoảng 9–10 ngày |
+
+Vào cua nhiều thì số ô khi chạy tăng. Khi đầy, dữ liệu mới nhất luôn được giữ, phần cũ nhất bị ghi đè theo từng sector 32 ô.
+
+Lúc đỗ, bản tin 6-2 chiếm phần lớn dung lượng (2 ô mỗi phút so với 0,2 ô cho vị trí).
+
+Nếu flash rời không khởi tạo được, thiết bị lưu tạm vào file `C:/rv26_bak.dat` trong module, tối đa 2.000 ô (khoảng 4 giờ xe chạy hoặc 15 giờ xe đỗ); header lưu sau mỗi bản ghi.
+
+Kiểm tra nhanh bằng lệnh `sa,29`; cuối câu trả lời có `FL:1 BK:F12 ERR:0`:
+
+| Trường | Ý nghĩa |
+|---|---|
+| `FL` | Flash rời có nhận không (1 / 0) |
+| `BK` | Nơi lưu (`F` = flash, `E` = file) và số ô đang chờ phát bù |
+| `ERR` | Số lần ghi flash lỗi từ lúc khởi động |
+
+Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản có CRC) bị bỏ khi nâng cấp.
+
+## 10. Cơ chế tự phục hồi
 
 | Điều kiện | Hành động |
 |---|---|
@@ -140,7 +195,7 @@ Mỗi lần lỗi sẽ thử lại, tối đa 3 lần, cách nhau 10 giây. Lỗ
 | Gọi `abort()` | Reset thiết bị |
 | Đến giờ trong lịch reset (lệnh 32) | Reset thiết bị |
 
-## 10. Phần cứng
+## 11. Phần cứng
 
 | Tín hiệu | Pad | Ghi chú |
 |---|---|---|
@@ -149,17 +204,20 @@ Mỗi lần lỗi sẽ thử lại, tối đa 3 lần, cách nhau 10 giây. Lỗ
 | LED GNSS | 74 | Nháy khi có từ 5 vệ tinh |
 | DOUT | 73 | Rơ-le |
 | ACC_IN | 37 | Mức thấp = ACC bật |
-| CS flash | 120 | Qua transistor đảo, không dùng chung với chân khác |
+| CS flash | 120 (chân 19) | Qua transistor đảo: GPIO mức cao = chọn flash; không dùng chung với chân khác |
 | ADC1 | — | Điện áp ắc-quy qua cầu chia 1/23 |
 
-Flash rời EN25QH64A nối SPI kênh 1.
+Flash rời 8 MB (trên board là W25Q64JV, mã `EF 40 17`) nối bus SPI ở chân 11, 13, 14 của module, qua IC chuyển mức 1,8 V ↔ 3,3 V (TC7MPB9307FT).
 
-## 11. Build và nạp
+- Phía phần mềm là **kênh SPI 0**, mode 0, 812 kHz (`FLASH_SPI_INDEX` trong [app_config.h](app_config.h)). Kênh 1 không đọc được flash.
+- Nếu kênh mặc định không trả mã chip hợp lệ, driver thử các kênh còn lại và in kết quả ra log (`[EN25/Flash] Flash Init OK! ... spi=N`).
 
-Build cho biến thể MANV từ thư mục gốc:
+## 12. Build và nạp
+
+Build cho biến thể MANV từ thư mục gốc, chạy trong `cmd` hoặc PowerShell (Makefile dùng lệnh của Windows, không chạy được trong Git Bash):
 
 ```bash
-GNUmake.exe A7677S_MANV_1606_V702_OPENSDK
+.\GNUmake.exe A7677S_MANV_1606_V702_OPENSDK
 ```
 
 Kết quả nằm trong `out/A7677S_MANV_1606_V702_OPENSDK/`:
@@ -167,4 +225,4 @@ Kết quả nằm trong `out/A7677S_MANV_1606_V702_OPENSDK/`:
 - `customer_app.bin`: file dùng cho FOTA ứng dụng.
 - `burn.zip`: gói nạp qua cáp bằng công cụ aboot; nên lưu lại cho từng bản phát hành vì `system.img` bên trong cần để tạo gói FOTA hệ thống.
 
-Unit test cho hai bộ quy tắc nằm trong [tests/](tests/), chạy trên PC với HAL giả lập ở `tests/mocks/`.
+Unit test cho hai bộ quy tắc (dừng đỗ, lái xe) nằm trong [tests/](tests/), chạy trên PC với HAL giả lập ở `tests/mocks/`. Bộ đệm điểm mù chưa có unit test; được kiểm tra trên board qua log.

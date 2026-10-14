@@ -71,6 +71,8 @@
  * GPS khi đỗ — nhiễu đô thị có thể báo tốc độ tới 26 km/h nhưng vị trí chỉ
  * quẩn quanh điểm đỗ) */
 #define MOVING_MIN_DISPLACEMENT_KM 0.015 // 15 m
+/* ACC tắt mà xe bị dời xa điểm neo hơn ngưỡng này (kéo / chở xe) mới thoát đỗ */
+#define PARKED_ACC_OFF_MIN_DISPLACEMENT_KM 0.150 // 150 m
 
 /*
  * Quy tắc accMode (Config cmd 8):
@@ -82,7 +84,7 @@
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "NASA4G_TRACKING"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.04.261013"
+#define NASA_FW_CODE "v1.05.261014"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1

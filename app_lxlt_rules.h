@@ -25,6 +25,7 @@ typedef struct {
     char            dateTime[40];
     double          lat;
     double          lon;
+    char            endDateTime[40]; /* 5-3: thời điểm xe bắt đầu dừng ("" = dùng dateTime) */
 } LxltEvent_t;
 
 typedef struct {
@@ -43,6 +44,10 @@ typedef struct {
     int      lxltCounted4h;
     double   workOdomStartKm;
     uint32_t workLastAccumTick;
+    uint32_t workEndTick;        /* tick kết thúc phiên vừa đóng (để 5-3 báo đúng số phút) */
+    char     workStopDT[40];     /* thời điểm / vị trí xe bắt đầu dừng */
+    double   workStopLat;
+    double   workStopLon;
 } LxltState_t;
 
 void LxltRules_Init(LxltState_t *state);
