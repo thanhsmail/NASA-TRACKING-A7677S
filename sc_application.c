@@ -93,7 +93,7 @@ static void sTask_NasaReport(void *argv)
 void userSpace_Main(void *arg)
 {
     ApiMapInit(arg);
-    HAL_LOG(" NASA_TRACKING VS1.05.261014");
+    HAL_LOG(" NASA_TRACKING VS1.00.261015");
     HAL_OS_TaskSleep(APP_STARTUP_DELAY_SEC * HAL_TICKS_PER_SEC);
     HAL_LOG("==== NASA FW %s HW %s A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 
@@ -105,6 +105,8 @@ void userSpace_Main(void *arg)
     /* Khoi tao mang qua HAL -- khong goi sAPI_NetworkInit truc tiep */
     HAL_NET_Init(); // Khoi tao mang
     HAL_NET_NitzEnable();// Khoi tao NITZ
+    HAL_GNSS_SetMode(CFG_GetGnssMode()); // He ve tinh da luu (lenh 3), ap dung khi bat GNSS
+    HAL_GNSS_SetStaticHold(GNSS_STATIC_HOLD_CMS); // Chip giu vi tri khi dung yen
     HAL_GNSS_UrcListenerStart(); // Khoi tao GPS URC
 
     INDICATION_TaskStart(); // Khoi tao LED

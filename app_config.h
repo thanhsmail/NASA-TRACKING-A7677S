@@ -79,6 +79,32 @@
  * GPS khi đỗ — nhiễu đô thị có thể báo tốc độ tới 26 km/h nhưng vị trí chỉ
  * quẩn quanh điểm đỗ) */
 #define MOVING_MIN_DISPLACEMENT_KM 0.015 // 15 m
+/* Chế độ vệ tinh (lệnh 3) — chip Unicorecomm bản trong nước, SDK chỉ có 3 chế độ */
+#define GNSS_MODE_MIN 1
+#define GNSS_MODE_MAX 3
+#define GNSS_MODE_DEFAULT 1 // 1 = GPS + BeiDou + QZSS (nhiều vệ tinh nhất)
+
+/* Chế độ giữ tĩnh của chip GNSS ($CFGDYN): tốc độ dưới ngưỡng thì chip giữ vị
+ * trí, chống trôi khi dừng. 100 cm/s = 3,6 km/h, khớp ngưỡng chạy/dừng 3 km/h. 0 = tắt */
+#define GNSS_STATIC_HOLD_CMS 100
+
+/* AGPS (tăng tốc bắt vệ tinh). Nhà sản xuất khuyến cáo <= 12 lần/ngày, gọi dày hơn có thể treo */
+#define AGPS_ENABLE 1
+#define AGPS_NO_FIX_WAIT_SEC 60      // Có mạng mà chưa có fix sau ngần này giây (từ lúc bật) thì tải AGPS
+#define AGPS_MIN_INTERVAL_SEC 7200   // Tối thiểu 2 giờ giữa 2 lần tải
+
+/* Log debug GNSS / AGPS: thời gian có fix, mất / có lại fix, lý do chưa tải AGPS,
+ * trạng thái định kỳ ([GNSS/Stat]). 0 = tắt khi phát hành nếu log quá nhiều */
+#define GNSS_DEBUG 1
+#define GNSS_DEBUG_STATUS_SEC 30     // Chu kỳ in [GNSS/Stat] và lý do bỏ qua AGPS
+
+/* Điểm neo khi đứng yên = trung bình các mẫu GPS tốt (app_gps.c ApplyStationaryAnchor) */
+#define ANCHOR_MAX_HDOP 2.5                // Mẫu HDOP lớn hơn không gộp vào điểm neo
+#define ANCHOR_OUTLIER_KM 0.025            // Mẫu cách trung bình hơn 25 m bị bỏ (nhiễu đa đường)
+#define ANCHOR_MIN_SAMPLES_FOR_REJECT 10   // Chưa đủ số mẫu này thì chưa loại mẫu xa
+#define ANCHOR_RESTART_REJECTS 30          // 30 mẫu tốt liên tiếp bị loại thì làm lại điểm neo
+#define ANCHOR_MAX_SAMPLES 900            // Đủ 15 phút mẫu (1 mẫu/giây) thì giữ cố định điểm neo
+
 /* ACC tắt mà xe bị dời xa điểm neo hơn ngưỡng này (kéo / chở xe) mới thoát đỗ */
 #define PARKED_ACC_OFF_MIN_DISPLACEMENT_KM 0.150 // 150 m
 

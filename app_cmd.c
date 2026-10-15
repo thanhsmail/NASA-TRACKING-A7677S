@@ -259,6 +259,30 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  CFG_GetPeriodMoving(), CFG_GetPeriodStopped());
         break;
 
+    /* --- Mã 3: Cài đặt / Đọc Chế độ vệ tinh GNSS --- */
+    case 3:
+    {
+        int applied = 0;
+        if (isSet) {
+            int m;
+            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
+            m = atoi(a);
+            if (m < GNSS_MODE_MIN || m > GNSS_MODE_MAX) { Reply(reply, ctx, src, "ERROR"); return; }
+            CFG_SetGnssMode(m);
+            CFG_Save();
+            applied = (HAL_GNSS_SetMode(m) == 0);
+        }
+        {
+            static const char *const names[] = { "?", "GPS+BDS+QZSS", "BDS", "GPS+QZSS" };
+            int m = CFG_GetGnssMode();
+            int now = HAL_GNSS_GetMode();
+            snprintf(resp, sizeof(resp), "sa,3 che do ve tinh: %d %s (dang chay: %d)%s",
+                     m, names[m], now,
+                     (isSet && !applied) ? " - chua ap dung, se ap dung sau reset" : "");
+        }
+        break;
+    }
+
     /* --- Mã 8: Cài đặt / Đọc Chế độ phát hiện ACC (Dây / Vận tốc) --- */
     case 8:
         if (isSet) {

@@ -370,15 +370,136 @@ static sMsgQRef s_gnssUrcMsgQ = NULL;
 static sTaskRef s_gnssTaskRef = NULL;
 static uint8_t  s_gnssTaskStack[1024 * 4];
 
+/*
+ * Che do ve tinh: chip Unicorecomm ban trong nuoc, SDK ban nay chi co
+ * 1 = GPS+BeiDou+QZSS, 2 = BeiDou, 3 = GPS+QZSS (khong co Galileo/GLONASS).
+ */
+static volatile int s_gnssWantMode = SC_GNSS_MODE_GPS_BDS_QZSS;
+static volatile int s_gnssStarted = 0;
+
+static int GnssApplyMode(void)
+{
+    SC_Gnss_Mode cur = sAPI_GnssModeGet();
+    SC_Gnss_Return_Code rc;
+
+    if ((int)cur == s_gnssWantMode) {
+        HAL_LOG_Print("[GNSS] mode %d", (int)cur);
+        return 0;
+    }
+    rc = sAPI_GnssModeSet((SC_Gnss_Mode)s_gnssWantMode);
+    HAL_LOG_Print("[GNSS] mode %d -> %d rc=%d now=%d",
+                  (int)cur, s_gnssWantMode, (int)rc, (int)sAPI_GnssModeGet());
+    return (rc == 0) ? 0 : -1;
+}
+
+int HAL_GNSS_SetMode(int mode)
+{
+    if (mode < SC_GNSS_MODE_GPS_BDS_QZSS || mode > SC_GNSS_MODE_GPS_QZSS) return -1;
+    s_gnssWantMode = mode;
+    if (!s_gnssStarted) return 0; /* ap dung khi task GNSS bat chip */
+    return GnssApplyMode();
+}
+
+int HAL_GNSS_GetMode(void)
+{
+    if (!s_gnssStarted) return -1;
+    return (int)sAPI_GnssModeGet();
+}
+
+/* Che do giu tinh (A76xx GNSS Application Note: chong troi khi dung yen) */
+static volatile int s_gnssStaticHoldCms = -1; /* -1 = khong gui lenh, de mac dinh chip */
+
+static int GnssApplyStaticHold(void)
+{
+    char cmd[40];
+    SC_Gnss_Return_Code rc;
+
+    if (s_gnssStaticHoldCms < 0) return 0;
+    snprintf(cmd, sizeof(cmd), "$CFGDYN,h02,1,%d", s_gnssStaticHoldCms);
+    rc = sAPI_SendCmd2Gnss(cmd);
+    HAL_LOG_Print("[GNSS] %s rc=%d", cmd, (int)rc);
+    return (rc == 0) ? 0 : -1;
+}
+
+int HAL_GNSS_SetStaticHold(int cmPerSec)
+{
+    if (cmPerSec < 0 || cmPerSec > 1000) return -1;
+    s_gnssStaticHoldCms = cmPerSec;
+    if (!s_gnssStarted) return 0;
+    return GnssApplyStaticHold();
+}
+
+/* AGPS: sAPI_GnssAgpsSeviceOpen mo socket toi may chu AGNSS va cho, nen chay
+ * trong task rieng de khong chan task GNSS (mat URC) hay task NASA (watchdog) */
+static sTaskRef s_agpsTaskRef = NULL;
+static uint8_t  s_agpsTaskStack[1024 * 4];
+static volatile int s_agpsRequested = 0;
+static volatile int s_agpsBusy = 0;
+
+static void sTask_Agps(void *argv)
+{
+    (void)argv;
+    for (;;) {
+        if (!s_agpsRequested) {
+            sAPI_TaskSleep(200);
+            continue;
+        }
+        s_agpsRequested = 0;
+        s_agpsBusy = 1;
+        HAL_LOG_Print("[GNSS/AGPS] download... (GNSS power=%d)", (int)sAPI_GnssPowerStatusGet());
+        {
+            UINT32 t0 = sAPI_GetTicks();
+            int rc = (int)sAPI_GnssAgpsSeviceOpen();
+            UINT32 ms = (sAPI_GetTicks() - t0) * 5u; /* 200 tick/s */
+            const char *txt =
+                (rc == 0)   ? "OK" :
+                (rc == -1)  ? "GNSS power off" :
+                (rc == 101) ? "open socket fail" :
+                (rc == 102) ? "fetch AGNSS server fail" :
+                (rc == 103) ? "connect AGNSS server fail" :
+                (rc == 104) ? "socket write fail" :
+                (rc == 105) ? "socket read fail" :
+                (rc == 106) ? "AGNSS data error" :
+                (rc == 107) ? "send data to GNSS chip fail" : "unknown";
+            HAL_LOG_Print("[GNSS/AGPS] done rc=%d (%s) in %lu ms", rc, txt, (unsigned long)ms);
+        }
+        s_agpsBusy = 0;
+    }
+}
+
+int HAL_GNSS_AgpsRequest(void)
+{
+    if (!s_gnssStarted || s_agpsBusy || s_agpsRequested) return -1;
+    if (s_agpsTaskRef == NULL) {
+        if (sAPI_TaskCreate(&s_agpsTaskRef, s_agpsTaskStack, sizeof(s_agpsTaskStack),
+                            25, "agps_task", sTask_Agps, NULL) != SC_SUCCESS) {
+            s_agpsTaskRef = NULL;
+            HAL_LOG_Print("[GNSS/AGPS] create task fail");
+            return -1;
+        }
+    }
+    s_agpsRequested = 1;
+    return 0;
+}
+
 static void sTask_GnssUrcListener(void *argv)
 {
     SIM_MSG_T msg;
     (void)argv;
 
     HAL_LOG("[GNSS] Task Listener Start");
+    /* Trinh tu theo A76xx GNSS Application Note: bat nguon 1 lan (bat 2 lan lam
+     * hong nap dong), moi lenh cach nhau ~100 ms de chip kip tra loi */
     sAPI_GnssPowerStatusSet(SC_GNSS_POWER_ON);
     sAPI_TaskSleep(100);
-    sAPI_GnssInfoGet(1); /* Bat URC dinh ky 1s (+CGPSINFO) */
+    s_gnssStarted = 1;
+    HAL_LOG_Print("[GNSS] hot start rc=%d", (int)sAPI_GnssStartMode(SC_GNSS_START_HOT));
+    sAPI_TaskSleep(20);
+    (void)GnssApplyMode();
+    sAPI_TaskSleep(20);
+    (void)GnssApplyStaticHold();
+    sAPI_TaskSleep(20);
+    sAPI_GnssInfoGet(1); /* Bat URC dinh ky 1s (+CGNSSINFO) */
 
     while (1) {
         memset(&msg, 0, sizeof(msg));

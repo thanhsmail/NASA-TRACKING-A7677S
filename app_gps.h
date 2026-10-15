@@ -27,4 +27,7 @@ int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize);
 void GnssUrcListenerEnsureStarted(void);
 void GPS_OnUrcString(const char *gpsUrc);
 
+/** Gọi mỗi vòng khi đang có phiên với Server: tải AGPS nếu lâu chưa có fix */
+void GPS_AgpsPoll(void);
+
 #endif /* APP_GPS_H */

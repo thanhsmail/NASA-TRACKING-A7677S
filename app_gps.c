@@ -29,6 +29,9 @@ static double   s_lastLon       = 0.0;
 static double   s_lastSpeedKph  = 0.0;
 static double   s_lastHeadingDeg= 0.0;
 static int      s_lastSatellites= 0;
+static double   s_lastHdop      = 0.0; /* 0 = URC không báo HDOP */
+static int      s_satSys[4]     = {0}; /* debug: số vệ tinh theo hệ GPS/GLONASS/GALILEO/BEIDOU */
+static uint32_t s_agpsReqTick   = 0;   /* debug: tick lúc yêu cầu AGPS, 0 = không chờ đo */
 static double   s_totalKm       = 0.0;
 static uint32_t s_lastFixTick   = 0;
 static HalMutexRef_t s_gpsDataMutex = NULL;
@@ -186,6 +189,11 @@ static int    s_isParkedNow = 0;
 static int    s_isCoastingToPark = 0;
 static double s_anchorLat = 0.0;
 static double s_anchorLon = 0.0;
+static double s_anchorSumLat = 0.0;  /* tổng các mẫu đã gộp vào điểm neo */
+static double s_anchorSumLon = 0.0;
+static int    s_anchorN = 0;         /* số mẫu trong điểm neo, 0 = chưa neo */
+static int    s_anchorGood = 0;      /* 1 = điểm neo dựa trên mẫu HDOP tốt */
+static int    s_anchorRejectRun = 0; /* số mẫu tốt liên tiếp bị loại vì xa trung bình */
 static volatile int s_accWireOn = 0;
 
 void GPS_SetAccOn(int on)
@@ -428,27 +436,134 @@ static int FilterMovingStatus(double speed, double lat, double lon)
 }
 
 /**
- * @brief Neo giữ vị trí đứng yên khi xe đỗ (Stationary Anchor).
- * Triệt tiêu 100% hiện tượng trôi vệt GPS xung quanh điểm dừng khi xe đỗ.
+ * @brief Neo giữ vị trí đứng yên khi xe dừng / đỗ (Stationary Anchor).
+ *
+ * Điểm neo là trung bình các mẫu tốt trong lúc đứng yên, không phải mẫu đầu
+ * tiên: một mẫu đơn lẻ ở đô thị lệch 30-40 m và trước đây giữ nguyên độ lệch
+ * đó suốt lần đỗ. Mẫu HDOP cao hoặc nhảy xa khỏi trung bình bị bỏ. Neo cả khi
+ * xe dừng với ACC bật (đèn đỏ, nổ máy chờ), trừ lúc đang trôi sau khi tắt ACC.
  */
 static void ApplyStationaryAnchor(int isMoving)
 {
-    (void)isMoving;
-    if (s_lastSatellites < 5 || (s_lastLat == 0.0 && s_lastLon == 0.0)) {
+    double rawLat = s_lastLat;
+    double rawLon = s_lastLon;
+    int good;
+
+    if (s_lastSatellites < 5 || (rawLat == 0.0 && rawLon == 0.0)) {
         return; /* chưa fix — không đụng anchor */
     }
-    if (!s_isParkedNow) {
+    if (!(s_isParkedNow || (!isMoving && !s_isCoastingToPark))) {
+        if (s_anchorN > 0) {
+            HAL_LOG("[GNSS/Anchor] release (n=%d)", s_anchorN);
+        }
         s_anchorLat = 0.0;
         s_anchorLon = 0.0;
+        s_anchorN = 0;
+        s_anchorGood = 0;
+        s_anchorRejectRun = 0;
         return;
     }
-    if (s_anchorLat == 0.0 && s_anchorLon == 0.0) {
-        s_anchorLat = s_lastLat;
-        s_anchorLon = s_lastLon;
-    } else {
-        s_lastLat = s_anchorLat;
-        s_lastLon = s_anchorLon;
+
+    /* HDOP 0 = không biết (URC không có trường này) -> coi là mẫu tốt */
+    good = (s_lastHdop <= 0.0 || s_lastHdop <= ANCHOR_MAX_HDOP);
+
+    if (s_anchorN == 0 || (!s_anchorGood && good)) {
+        /* Bắt đầu neo; neo đang dựa trên mẫu xấu thì thay bằng mẫu tốt đầu tiên */
+        s_anchorSumLat = rawLat;
+        s_anchorSumLon = rawLon;
+        s_anchorN = 1;
+        s_anchorGood = good;
+        s_anchorRejectRun = 0;
+        HAL_LOG("[GNSS/Anchor] start lat=%.6f lon=%.6f hdop=%.1f", rawLat, rawLon, s_lastHdop);
+    } else if (good && s_anchorN < ANCHOR_MAX_SAMPLES) {
+        double meanLat = s_anchorSumLat / s_anchorN;
+        double meanLon = s_anchorSumLon / s_anchorN;
+        /* Vài mẫu đầu chưa đủ tin để loại; sau đó bỏ mẫu nhảy xa (đa đường) */
+        if (s_anchorN >= ANCHOR_MIN_SAMPLES_FOR_REJECT &&
+            CalculateDistanceKm(meanLat, meanLon, rawLat, rawLon) > ANCHOR_OUTLIER_KM) {
+            /* Bị loại liên tục = vài mẫu đầu (lúc máy thu chưa ổn định) kéo
+             * trung bình lệch: làm lại điểm neo từ mẫu hiện tại */
+            if (++s_anchorRejectRun >= ANCHOR_RESTART_REJECTS) {
+                HAL_LOG("[GNSS/Anchor] %d samples off mean, restart (n=%d)",
+                        s_anchorRejectRun, s_anchorN);
+                s_anchorSumLat = rawLat;
+                s_anchorSumLon = rawLon;
+                s_anchorN = 1;
+                s_anchorRejectRun = 0;
+            }
+        } else {
+            s_anchorRejectRun = 0;
+            s_anchorSumLat += rawLat;
+            s_anchorSumLon += rawLon;
+            s_anchorN++;
+            if ((s_anchorN % 60) == 0) {
+                HAL_LOG("[GNSS/Anchor] n=%d lat=%.6f lon=%.6f",
+                        s_anchorN, s_anchorSumLat / s_anchorN, s_anchorSumLon / s_anchorN);
+            }
+        }
     }
+
+    s_anchorLat = s_anchorSumLat / s_anchorN;
+    s_anchorLon = s_anchorSumLon / s_anchorN;
+    s_lastLat = s_anchorLat;
+    s_lastLon = s_anchorLon;
+}
+
+/**
+ * @brief Log debug GNSS: thời gian có fix (TTFF), mất / có lại fix, thời gian
+ *        có fix sau AGPS, và trạng thái định kỳ. Gọi sau mỗi mẫu GNSS, ngoài khóa.
+ */
+static void GpsDebugOnSample(void)
+{
+#if GNSS_DEBUG
+    static int      s_hadFix = -1;      /* -1 = chưa có mẫu nào */
+    static int      s_everFix = 0;
+    static uint32_t s_fixChangeTick = 0;
+    static uint32_t s_statTick = 0;
+    uint32_t now = GetTickNow();
+    int hasFix, sats, anchorN;
+    double hdop, lat, lon, spd;
+
+    HAL_OS_MutexLock(s_gpsDataMutex);
+    sats = s_lastSatellites;
+    hdop = s_lastHdop;
+    lat = s_lastLat;
+    lon = s_lastLon;
+    spd = s_lastSpeedKph;
+    anchorN = s_anchorN;
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
+    hasFix = (sats >= 5 && !(lat == 0.0 && lon == 0.0));
+
+    if (hasFix != s_hadFix) {
+        if (hasFix) {
+            if (!s_everFix) {
+                HAL_LOG("[GNSS/Dbg] first fix %lus after boot (sats=%d hdop=%.1f)",
+                        (unsigned long)(now / HAL_TICKS_PER_SEC), sats, hdop);
+                s_everFix = 1;
+            } else {
+                HAL_LOG("[GNSS/Dbg] fix regained after %lus without fix (sats=%d hdop=%.1f)",
+                        (unsigned long)((now - s_fixChangeTick) / HAL_TICKS_PER_SEC), sats, hdop);
+            }
+            if (s_agpsReqTick != 0) {
+                HAL_LOG("[GNSS/AGPS] fix %lus after AGPS request",
+                        (unsigned long)((now - s_agpsReqTick) / HAL_TICKS_PER_SEC));
+                s_agpsReqTick = 0;
+            }
+        } else if (s_hadFix == 1) {
+            HAL_LOG("[GNSS/Dbg] fix lost (sats=%d hdop=%.1f)", sats, hdop);
+        }
+        s_hadFix = hasFix;
+        s_fixChangeTick = now;
+    }
+
+    if (s_statTick == 0 || (now - s_statTick) >= (uint32_t)GNSS_DEBUG_STATUS_SEC * HAL_TICKS_PER_SEC) {
+        s_statTick = now;
+        HAL_LOG("[GNSS/Stat] fix=%d sats=%d (GPS %d GLO %d GAL %d BDS %d) hdop=%.1f spd=%.1f "
+                "moving=%d parked=%d coast=%d accWire=%d anchorN=%d lat=%.6f lon=%.6f",
+                hasFix, sats, s_satSys[0], s_satSys[1], s_satSys[2], s_satSys[3], hdop, spd,
+                s_isMovingNow, s_isParkedNow, s_isCoastingToPark, s_accWireOn, anchorN, lat, lon);
+    }
+#endif
 }
 
 /**
@@ -598,6 +713,7 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
             s_lastSpeedKph = 0.0;
         }
         s_lastSatellites = (nf > 9) ? atoi(fields[9]) : 0;
+        s_lastHdop = 0.0; /* +CGPSINFO không có HDOP */
 
         if (s_lastSatellites < 5) {
             s_lastLat = 0.0;
@@ -608,6 +724,7 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
         ApplyStationaryAnchor(isMoving);
         s_lastFixTick = GetTickNow();
         HAL_OS_MutexUnlock(s_gpsDataMutex);
+        GpsDebugOnSample();
 
         StoreGnssUtcTime(&utc);
         static uint32_t lastGnssLogTick = 0;
@@ -645,10 +762,12 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
         uint32_t nowNoFix = GetTickNow();
         HAL_OS_MutexLock(s_gpsDataMutex);
         s_lastSatellites = 0;
+        memset(s_satSys, 0, sizeof(s_satSys));
         s_lastLat        = 0.0;
         s_lastLon        = 0.0;
         s_lastSpeedKph   = 0.0;
         HAL_OS_MutexUnlock(s_gpsDataMutex);
+        GpsDebugOnSample();
         if (lastNoFixLogTick == 0 ||
             (nowNoFix - lastNoFixLogTick) >= (uint32_t)(5 * HAL_TICKS_PER_SEC)) {
             lastNoFixLogTick = nowNoFix;
@@ -657,13 +776,21 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
         return 1;
     }
 
-    int satellites = (fields[1][0] != '\0') ? atoi(fields[1]) : 0;
-
     int ns_idx = -1;
     for (int i = 3; i < 7 && i < nf; i++) {
         if (fields[i][0] == 'N' || fields[i][0] == 'S') { ns_idx = i; break; }
     }
     if (ns_idx == -1) return 0;
+
+    /* <mode>,<GPS-SVs>,[<GLONASS-SVs>],[<GALILEO-SVs>],[<BEIDOU-SVs>],<lat>,<N/S>...
+     * Cộng số vệ tinh mọi hệ (trước đây chỉ đếm GPS, bỏ sót BeiDou) */
+    int satellites = 0;
+    memset(s_satSys, 0, sizeof(s_satSys));
+    for (int i = 1; i < ns_idx - 1; i++) {
+        int n = (fields[i][0] != '\0') ? atoi(fields[i]) : 0;
+        satellites += n;
+        if (i - 1 < 4) s_satSys[i - 1] = n;
+    }
 
     double latRaw = (ns_idx - 1 < nf) ? strtod(fields[ns_idx - 1], NULL) : 0.0;
     double lonRaw = (ns_idx + 1 < nf) ? strtod(fields[ns_idx + 1], NULL) : 0.0;
@@ -690,6 +817,10 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
         s_lastSpeedKph = 0.0;
     }
 
+    /* <PDOP>,<HDOP>,<VDOP> nằm sau course: HDOP = ns_idx+9 */
+    s_lastHdop = (ns_idx + 9 < nf && fields[ns_idx + 9][0] != '\0')
+                 ? strtod(fields[ns_idx + 9], NULL) : 0.0;
+
     s_lastFixTick = GetTickNow();
     if (s_lastSatellites < 5) s_lastLat = s_lastLon = 0.0;
 
@@ -697,6 +828,7 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     ApplyStationaryAnchor(isMoving);
 
     if (s_gpsDataMutex) HAL_OS_MutexUnlock(s_gpsDataMutex);
+    GpsDebugOnSample();
 
     /* date/UTC time nam ngay sau E/W: ns_idx+3, ns_idx+4 */
     if (ns_idx + 4 < nf && fields[ns_idx + 3][0] != '\0' && fields[ns_idx + 4][0] != '\0') {
@@ -820,6 +952,7 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
             s_lastSpeedKph = 0.0;
         }
         if (n >= 5) s_lastSatellites = (int)nums[4];
+        s_lastHdop = 0.0;
 
         if (s_lastSatellites < 5)
         {
@@ -831,6 +964,7 @@ static void TryUpdateGpsFromUrcString(const char *gpsUrc)
         ApplyStationaryAnchor(isMoving);
         s_lastFixTick = GetTickNow();
         if (s_gpsDataMutex) HAL_OS_MutexUnlock(s_gpsDataMutex);
+        GpsDebugOnSample();
     }
 }
 
@@ -852,4 +986,69 @@ void GPS_OnUrcString(const char *gpsUrc)
 void GnssUrcListenerEnsureStarted(void)
 {
     HAL_GNSS_UrcListenerStart();
+}
+
+/**
+ * @brief Tải dữ liệu AGPS khi có mạng mà chưa bắt được vệ tinh.
+ *
+ * Theo A76xx GNSS Application Note: cần giờ hệ thống hợp lệ trước khi tải, và
+ * không gọi quá 12 lần / ngày (gọi dày có thể làm treo hệ thống), nên mỗi lần
+ * cách nhau tối thiểu AGPS_MIN_INTERVAL_SEC.
+ */
+void GPS_AgpsPoll(void)
+{
+#if AGPS_ENABLE
+    static int      s_agpsDone = 0;
+    static uint32_t s_agpsLastTick = 0;
+    static const char *s_lastReason = NULL;
+    static uint32_t s_reasonLogTick = 0;
+    const char *reason = NULL;
+    uint32_t now = GetTickNow();
+    HalDateTime_t rtc;
+    int hasFix;
+    char why[64];
+
+    HAL_OS_MutexLock(s_gpsDataMutex);
+    hasFix = (s_lastSatellites >= 5 && !(s_lastLat == 0.0 && s_lastLon == 0.0));
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
+    if (hasFix) {
+        s_lastReason = NULL;
+        return;
+    }
+
+    /* Ly do chua tai AGPS (chi de debug, in khi doi ly do hoac moi 30 s) */
+    if (now < (uint32_t)AGPS_NO_FIX_WAIT_SEC * HAL_TICKS_PER_SEC) {
+        reason = "wait";
+        snprintf(why, sizeof(why), "uptime %lus < %ds",
+                 (unsigned long)(now / HAL_TICKS_PER_SEC), AGPS_NO_FIX_WAIT_SEC);
+    } else if (s_agpsDone &&
+               (now - s_agpsLastTick) < (uint32_t)AGPS_MIN_INTERVAL_SEC * HAL_TICKS_PER_SEC) {
+        reason = "interval";
+        snprintf(why, sizeof(why), "next AGPS in %lus",
+                 (unsigned long)(AGPS_MIN_INTERVAL_SEC - (now - s_agpsLastTick) / HAL_TICKS_PER_SEC));
+    } else if (HAL_GNSS_GetRtc(&rtc) != 0 || rtc.tm_year < 2020 || rtc.tm_year > 2100) {
+        reason = "time";
+        snprintf(why, sizeof(why), "system time invalid (year %d), no NITZ/NTP yet", (int)rtc.tm_year);
+    } else if (HAL_GNSS_AgpsRequest() == 0) {
+        s_agpsDone = 1;
+        s_agpsLastTick = now;
+        s_agpsReqTick = (now == 0) ? 1 : now;
+        s_lastReason = NULL;
+        HAL_LOG("[GNSS/AGPS] no fix after %lus, request AGPS (sats=%d)",
+                (unsigned long)(now / HAL_TICKS_PER_SEC), s_lastSatellites);
+        return;
+    } else {
+        reason = "busy";
+        snprintf(why, sizeof(why), "GNSS off or AGPS still running");
+    }
+
+#if GNSS_DEBUG
+    if (reason != s_lastReason ||
+        (now - s_reasonLogTick) >= (uint32_t)GNSS_DEBUG_STATUS_SEC * HAL_TICKS_PER_SEC) {
+        HAL_LOG("[GNSS/AGPS] skip: %s", why);
+        s_reasonLogTick = now;
+    }
+#endif
+    s_lastReason = reason;
+#endif
 }

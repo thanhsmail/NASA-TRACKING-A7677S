@@ -43,6 +43,34 @@ int HAL_GNSS_GetInfo(HalGnssInfo_t *out);
 void HAL_GNSS_RegisterUrc(HalGnssUrcCb_t cb, void *ctx);
 void HAL_GNSS_UrcListenerStart(void);
 
+/**
+ * @brief  Chon he ve tinh: 1 = GPS+BeiDou+QZSS, 2 = BeiDou, 3 = GPS+QZSS.
+ *         Goi truoc HAL_GNSS_UrcListenerStart thi ap dung luc bat GNSS;
+ *         goi khi GNSS dang chay thi ap dung ngay.
+ * @return 0 = OK (hoac da ghi nho de ap dung luc bat), -1 = sai gia tri / chip tu choi.
+ */
+int HAL_GNSS_SetMode(int mode);
+
+/** @return che do chip dang dung (1..3), -1 neu GNSS chua bat */
+int HAL_GNSS_GetMode(void);
+
+/**
+ * @brief  Che do giu tinh cua chip ($CFGDYN,h02,1,<nguong>): toc do duoi nguong
+ *         thi chip giu nguyen vi tri, chong troi khi dung yen. 0 = tat.
+ *         Chip UC6228CI khong luu lenh nay nen phai gui lai moi lan bat GNSS.
+ * @param  cmPerSec nguong toc do (cm/s), 0..1000
+ * @return 0 = OK / da ghi nho, -1 = sai gia tri hoac chip tu choi
+ */
+int HAL_GNSS_SetStaticHold(int cmPerSec);
+
+/**
+ * @brief  Yeu cau tai du lieu AGPS (chay nen, khong chan task goi).
+ *         Can co mang va gio he thong hop le. Nha san xuat khuyen khong qua
+ *         12 lan / ngay: goi day hon co the lam treo he thong.
+ * @return 0 = da dua vao hang doi, -1 = GNSS chua bat / dang tai
+ */
+int HAL_GNSS_AgpsRequest(void);
+
 int HAL_GNSS_GetRtc(HalDateTime_t *rtc);
 int HAL_GNSS_SetRtc(const HalDateTime_t *rtc);
 
