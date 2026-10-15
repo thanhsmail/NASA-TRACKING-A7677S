@@ -107,6 +107,7 @@ static uint32_t    s_lastStoreTick = 0;
 static int         s_inited = 0;
 static int         s_hdrDirty = 0;
 static int         s_useFlashStorage = 0;
+static int         s_mediaFail = 0;   /* 1 = lan ghi gan nhat vao noi luu dang dung bi loi */
 
 /* Rieng cho SPI flash */
 static uint32_t    s_recSeq = 1;
@@ -348,12 +349,14 @@ static void Backup_PushToFlash(const BackupRecord_t *rec)
             }
             if (EN25_EraseSector(addr) != 0) {
                 HAL_LOG("[Backup] EraseSector 0x%06X fail, skip push", (unsigned)addr);
+                s_mediaFail = 1;
                 return;
             }
         } else {
             /* NOR khong ghi de duoc: o da co du lieu (ghi do truoc do) thi bo qua */
             if (ReadSlot(s_head, &chk, &blank) != 0) {
                 HAL_LOG("[Backup] Read 0x%06X fail, skip push", (unsigned)addr);
+                s_mediaFail = 1;
                 return;
             }
             if (!blank) {
@@ -381,6 +384,7 @@ static void Backup_PushToFlash(const BackupRecord_t *rec)
                     (unsigned)addr, (unsigned long)s_head, (unsigned long)s_count,
                     (unsigned long)FLASH_MAX_RECORDS,
                     (rec->used == BACKUP_KIND_TEXT) ? "text" : rec->datetime);
+            s_mediaFail = 0;
             return;
         }
 
@@ -393,6 +397,7 @@ static void Backup_PushToFlash(const BackupRecord_t *rec)
         if (++badWrites >= BACKUP_WRITE_RETRIES) break;
     }
     HAL_LOG("[Backup] Push give up, record lost");
+    s_mediaFail = 1;
 }
 
 /* =============================== EFS ====================================== */
@@ -471,6 +476,7 @@ static void Backup_PushToEfs(const BackupRecord_t *rec)
     fp = EfsOpenRw();
     if (!fp) {
         HAL_LOG("[Backup] EFS open fail, skip push");
+        s_mediaFail = 1;
         return;
     }
 
@@ -478,16 +484,19 @@ static void Backup_PushToEfs(const BackupRecord_t *rec)
     if (HAL_FS_Seek(fp, offset, HAL_FS_SEEK_SET) != 0) {
         HAL_FS_Close(fp);
         HAL_LOG("[Backup] EFS seek fail off=%ld head=%lu", offset, (unsigned long)s_head);
+        s_mediaFail = 1;
         return;
     }
 
     if (HAL_FS_Write(fp, rec, sizeof(BackupRecord_t)) != (int)sizeof(BackupRecord_t)) {
         HAL_FS_Close(fp);
         HAL_LOG("[Backup] EFS write record fail off=%ld", offset);
+        s_mediaFail = 1;
         return;
     }
 
     HAL_FS_Close(fp);
+    s_mediaFail = 0;
     s_head = (s_head + 1) % NASA_BACKUP_MAX_RECORDS;
     s_count++;
     s_hdrDirty = 1;
@@ -566,6 +575,16 @@ static void Backup_SelectStorageEngine(void)
         s_tail = efs.tail;
         s_count = efs.count;
         s_efsRecBase = efsBase;
+    }
+    {
+        /* Thu mo file truoc: khong co flash ma EFS cung loi = ca 2 bo nho hong */
+        HalFile_t fp = EfsOpenRw();
+        if (fp) {
+            HAL_FS_Close(fp);
+        } else {
+            s_mediaFail = 1;
+            HAL_LOG("[Backup] EFS open fail -- no storage for backup");
+        }
     }
     HAL_LOG("[Backup] Use EFS (no SPI flash, count=%lu)", (unsigned long)s_count);
 }
@@ -813,6 +832,14 @@ void Backup_GetStatus(int *useFlash, int *count, uint32_t *writeErrors)
     if (count) *count = (int)s_count;
     if (writeErrors) *writeErrors = s_writeErrCount;
     BackupUnlock();
+}
+
+int Backup_GetMedia(void)
+{
+    /* Goi tu task LED moi 0,5 s: chi doc co, khong khoa / khong khoi tao */
+    if (!s_inited) return EN25_IsReady() ? BACKUP_MEDIA_FLASH : BACKUP_MEDIA_EFS;
+    if (s_mediaFail) return BACKUP_MEDIA_NONE;
+    return s_useFlashStorage ? BACKUP_MEDIA_FLASH : BACKUP_MEDIA_EFS;
 }
 
 void Backup_Flush(void)

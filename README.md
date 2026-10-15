@@ -193,7 +193,7 @@ Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản c�
 | Tín hiệu | Pad | Ghi chú |
 |---|---|---|
 | LED mạng | 80 | Nháy khi đã đăng nhập Server, sáng khi có sóng, tắt khi mất sóng |
-| LED nguồn | 32 | |
+| LED nguồn | 32 | Trạng thái bộ nhớ backup: sáng = bộ nhớ trong (file EFS), nháy = bộ nhớ ngoài (flash SPI), tắt = cả hai lỗi |
 | LED GNSS | 74 | Nháy khi có từ 5 vệ tinh |
 | DOUT | 28 (GPIO_09, pin 52) | Rơ-le |
 | ACC_IN | 37 | Mức thấp = ACC bật |

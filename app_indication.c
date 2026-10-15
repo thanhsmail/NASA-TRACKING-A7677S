@@ -15,6 +15,7 @@
 #include "app_network.h"
 #include "app_nasa.h"
 #include "app_indication.h"
+#include "app_backup.h"
 #include <stddef.h>
 
 static HalTaskRef_t s_gpioStatusTaskRef = NULL;
@@ -105,7 +106,14 @@ static void sTask_GpioStatusIndication(void *argv)
                 HAL_GPIO_Write(GPIO_LED_NET, 0);
             }
 
-            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) HAL_GPIO_Write(GPIO_LED_PWR, 1);
+            /* LED nguồn = trạng thái bộ nhớ backup: sáng = bộ nhớ trong (EFS),
+             * nháy = bộ nhớ ngoài (flash SPI), tắt = cả hai lỗi */
+            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) {
+                int media = Backup_GetMedia();
+                int pwrLed = (media == BACKUP_MEDIA_FLASH) ? blinkSlow :
+                             (media == BACKUP_MEDIA_EFS)   ? 1 : 0;
+                HAL_GPIO_Write(GPIO_LED_PWR, pwrLed);
+            }
         }
 
         if (NASA_IsWatchdogTimeout()) {
