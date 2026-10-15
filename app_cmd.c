@@ -427,7 +427,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             }
             HAL_NET_GetCsq(&csq);
             GPS_Snapshot(&gps);
-            acc = (HAL_GPIO_Read(GPIO_ACC_IN) == 0) ? 1 : 0;
+            acc = HAL_GPIO_Read(GPIO_ACC_IN);
+            acc = (acc < 0) ? -1 : (acc == 0) ? 1 : 0; /* -1 = đọc chân ACC lỗi */
             conn_str = (Network_IsConnected() && NASA_IsSessionActive()) ? "da ket noi" : "chua ket noi";
 
             /* FL: flash rời nhận được (1/0); BK: nơi lưu backup (F = flash, E = EFS)

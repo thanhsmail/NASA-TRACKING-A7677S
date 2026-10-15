@@ -25,6 +25,6 @@ int HAL_GPIO_Write(int pin, int val)
 
 int HAL_GPIO_Read(int pin)
 {
-    if (pin == 121) return s_mockAccPinState; /* GPIO_ACC_IN */
+    if (pin == 37) return s_mockAccPinState; /* GPIO_ACC_IN */
     return 1;
 }

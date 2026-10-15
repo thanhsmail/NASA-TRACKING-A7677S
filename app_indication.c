@@ -30,6 +30,7 @@ static void sTask_GpioStatusIndication(void *argv)
     int lastRawAcc    = -1;
     int accDebounce   = 0;
     int s_accVal      = 0;
+    int accReadErr    = 0;
 
     (void)argv;
 
@@ -46,17 +47,22 @@ static void sTask_GpioStatusIndication(void *argv)
 
     while (1) {
         int silent     = CFG_GetSilentMode();
+        int accLevel   = HAL_GPIO_Read(GPIO_ACC_IN);
         /* Active-low: GPIO_ACC_IN LOW = ACC ON */
-        int currentAcc = (HAL_GPIO_Read(GPIO_ACC_IN) == 0) ? 1 : 0;
+        int currentAcc = (accLevel == 0) ? 1 : 0;
 
-        if (lastRawAcc == -1) {
+        if (accLevel < 0) {
+            /* Đọc lỗi: giữ nguyên trạng thái ACC cũ, không coi là ACC OFF */
+            if (accReadErr++ % 20 == 0) {
+                HAL_LOG("[ACC] read pin %d fail (x%d)", GPIO_ACC_IN, accReadErr);
+            }
+        } else if (lastRawAcc == -1) {
             lastRawAcc = currentAcc;
             s_accVal   = currentAcc;
             NASA_SetAcc(s_accVal);
             GPS_SetAccOn(s_accVal);
-        }
-
-        if (currentAcc == lastRawAcc) {
+            HAL_LOG("[ACC] init %d (pin %d level %d)", s_accVal, GPIO_ACC_IN, accLevel);
+        } else if (currentAcc == lastRawAcc) {
             if (currentAcc != s_accVal) {
                 accDebounce++;
                 if (accDebounce >= ACC_DEBOUNCE_CYCLES) {

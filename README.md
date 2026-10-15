@@ -195,7 +195,7 @@ Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản c�
 | LED mạng | 80 | Nháy khi đã đăng nhập Server, sáng khi có sóng, tắt khi mất sóng |
 | LED nguồn | 32 | |
 | LED GNSS | 74 | Nháy khi có từ 5 vệ tinh |
-| DOUT | 73 | Rơ-le |
+| DOUT | 28 (GPIO_09, pin 52) | Rơ-le |
 | ACC_IN | 37 | Mức thấp = ACC bật |
 | CS flash | 120 (chân 19) | Qua transistor đảo: GPIO mức cao = chọn flash; không dùng chung với chân khác |
 | ADC1 | — | Điện áp ắc-quy qua cầu chia 1/23 |
