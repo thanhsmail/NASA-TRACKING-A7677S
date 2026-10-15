@@ -4,7 +4,7 @@ Firmware giám sát hành trình chạy trên module 4G SIMCom **A7677S** (ASR16
 Thiết bị đọc GNSS, gửi vị trí lên Server theo giao thức `!NASA`, nhận lệnh cấu hình qua SMS hoặc Server, lưu bù dữ liệu khi mất mạng và tự cập nhật firmware từ xa (FOTA).
 
 - Tên thiết bị: `RV4G` (`NASA_DEVICE_NAME`, xuất hiện ở đầu câu trả lời lệnh `sa,29`)
-- Phiên bản firmware: `v1.04.261013` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
+- Phiên bản firmware: `v1.05.261014` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
 - Server mặc định: `103.57.209.16:2590`
 
 Tài liệu chi tiết hơn: [NASA_Tracking_Analysis.md](NASA_Tracking_Analysis.md) (phân tích logic) và [hal/README.md](hal/README.md) (lớp HAL).
@@ -102,7 +102,8 @@ Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong 
 | `!NASA,5` | Thời gian làm việc của lái xe (5-1 bắt đầu, 5-2 định kỳ, 5-3 kết thúc) |
 | `!NASA,6` | Dừng đỗ (6-1 bắt đầu, 6-2 đang đỗ, 6-3 kết thúc) |
 | `!NASA,7` | Dữ liệu phát bù từ backup |
-| `!NASA,13` | Phản hồi lệnh |
+
+Trả lời lệnh từ Server là một dòng văn bản thường kết thúc bằng CR LF (không phải bản tin `!NASA`).
 
 ## 7. Lệnh điều khiển
 
