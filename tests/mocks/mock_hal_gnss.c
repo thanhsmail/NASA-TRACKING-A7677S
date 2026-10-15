@@ -42,3 +42,23 @@ int HAL_GNSS_PowerOn(void) { return 0; }
 int HAL_GNSS_PowerOff(void) { return 0; }
 int HAL_GNSS_IsPowerOn(void) { return 1; }
 int HAL_GNSS_UrcListenerStart(HalMsgQRef_t q) { (void)q; return 0; }
+
+int HAL_GNSS_SetMode(int mode)
+{
+    return (mode >= 1 && mode <= 3) ? 0 : -1;
+}
+
+int HAL_GNSS_GetMode(void)
+{
+    return 1;
+}
+
+int HAL_GNSS_SetStaticHold(int cmPerSec)
+{
+    return (cmPerSec >= 0 && cmPerSec <= 1000) ? 0 : -1;
+}
+
+int HAL_GNSS_AgpsRequest(void)
+{
+    return 0;
+}

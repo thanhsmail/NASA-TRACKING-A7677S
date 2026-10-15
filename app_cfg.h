@@ -26,6 +26,7 @@ typedef struct {
     char     driverLicense[32];
     int      driverLoggedIn;
     int      lastMday;          /* Ngày reset odometer gần nhất */
+    int      gnssMode;          /* cmd 3: 1=GPS+BDS+QZSS, 2=BDS, 3=GPS+QZSS */
 } AppConfig_t;
 
 typedef struct {
@@ -55,6 +56,7 @@ int         CFG_GetPeriodStopped(void);
 int         CFG_GetAccMode(void);
 int         CFG_GetSpeedThresh(void);
 int         CFG_GetSilentMode(void);
+int         CFG_GetGnssMode(void);
 int         CFG_GetDout(void);
 int         CFG_GetParkConfirmSec(void);
 int         CFG_IsLocked(void);
@@ -71,6 +73,7 @@ void CFG_SetServer(const char *host, int port);
 void CFG_SetPlate(const char *plate);
 void CFG_SetPeriod(int moving, int stopped);
 void CFG_SetAccMode(int mode);
+void CFG_SetGnssMode(int mode);
 void CFG_SetSpeedThresh(int kph);
 void CFG_SetSilentMode(int on);
 void CFG_SetDout(int on);

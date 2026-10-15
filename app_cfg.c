@@ -52,6 +52,7 @@ static void CFG_SetDefaults(void)
     strncpy(s_cfg.driverLicense, NASA_DEFAULT_DRIVER_LICENSE, sizeof(s_cfg.driverLicense) - 1);
     s_cfg.driverLoggedIn   = 0;
     s_cfg.lastMday         = 0;
+    s_cfg.gnssMode         = GNSS_MODE_DEFAULT;
 }
 
 static void TrimInPlace(char *s)
@@ -114,6 +115,8 @@ static void ApplyKeyValue(const char *key, const char *val)
         s_cfg.driverLoggedIn = atoi(val);
     } else if (strcmp(key, "lmday") == 0) {
         s_cfg.lastMday = atoi(val);
+    } else if (strcmp(key, "gnss") == 0) {
+        s_cfg.gnssMode = atoi(val);
     }
 }
 
@@ -321,14 +324,14 @@ int CFG_Save(void)
     len = snprintf(s_saveBuf, sizeof(s_saveBuf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
-                   "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\n",
+                   "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\ngnss=%d\n",
                    s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate,
                    s_cfg.periodMovingSec, s_cfg.periodStoppedSec, s_cfg.accMode, s_cfg.speedThreshKph,
                    s_cfg.silentMode, s_cfg.doutOn, s_cfg.phone1, s_cfg.phone2, s_cfg.phone3,
                    s_cfg.parkConfirmSec, s_cfg.resetEveryDays, s_cfg.resetAtHour,
                    s_cfg.configLocked, s_cfg.deviceEnabled, s_cfg.operateDays,
                    s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn,
-                   s_cfg.lastMday);
+                   s_cfg.lastMday, s_cfg.gnssMode);
     if (len > 0) {
         HAL_FS_Delete(NASA_CFG_FILE);
         fp = HAL_FS_Open(NASA_CFG_FILE, "wb");
@@ -377,6 +380,12 @@ int CFG_GetPeriodStopped(void) { return s_cfg.periodStoppedSec; }
 int CFG_GetAccMode(void) { return s_cfg.accMode; }
 int CFG_GetSpeedThresh(void) { return s_cfg.speedThreshKph; }
 int CFG_GetSilentMode(void) { return s_cfg.silentMode; }
+int CFG_GetGnssMode(void)
+{
+    /* Cấu hình cũ (trước lệnh 3) không có trường này */
+    if (s_cfg.gnssMode < GNSS_MODE_MIN || s_cfg.gnssMode > GNSS_MODE_MAX) return GNSS_MODE_DEFAULT;
+    return s_cfg.gnssMode;
+}
 int CFG_GetDout(void) { return s_cfg.doutOn; }
 int CFG_GetParkConfirmSec(void) { return s_cfg.parkConfirmSec; }
 int CFG_IsLocked(void)
@@ -461,6 +470,11 @@ void CFG_SetPeriod(int moving, int stopped)
         s_cfg.periodMovingSec = moving;
     if (stopped >= TRACKING_PERIOD_MIN_SEC && stopped <= TRACKING_PERIOD_MAX_SEC)
         s_cfg.periodStoppedSec = stopped;
+}
+
+void CFG_SetGnssMode(int mode)
+{
+    if (mode >= GNSS_MODE_MIN && mode <= GNSS_MODE_MAX) s_cfg.gnssMode = mode;
 }
 
 void CFG_SetAccMode(int mode)

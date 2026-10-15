@@ -612,6 +612,8 @@ static NasaState_t Handle_StateTracking(void)
         return STATE_ERROR_RETRY;
     }
 
+    GPS_AgpsPoll(); /* đang có mạng: tải AGPS nếu lâu chưa bắt được vệ tinh */
+
     if (s_requestReplayAll) {
         s_requestReplayAll = 0;
         ReplayBurst();

@@ -112,6 +112,7 @@ Lệnh đến từ SMS hoặc Server đều vào `CMD_Execute()` trong [app_cmd.
 |---|---|---|---|
 | 1 | IP và cổng Server | 25 | Tên lái xe, số GPLX |
 | 2 | Ngõ ra DOUT (rơ-le) | 26 | Chu kỳ báo dừng đỗ |
+| 3 | Hệ vệ tinh: 1 GPS+BeiDou+QZSS (mặc định), 2 BeiDou, 3 GPS+QZSS | | |
 | 4 | Chu kỳ gửi khi chạy / dừng | 27 | Vị trí hiện tại |
 | 8 | Chế độ ACC | 29 | Thông tin thiết bị, kèm trạng thái flash và backup |
 | 9 | Khởi động lại | 32 | Lịch tự reset |
