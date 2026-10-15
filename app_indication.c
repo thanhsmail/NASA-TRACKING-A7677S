@@ -15,6 +15,7 @@
 #include "app_network.h"
 #include "app_nasa.h"
 #include "app_indication.h"
+#include "app_backup.h"
 #include <stddef.h>
 
 static HalTaskRef_t s_gpioStatusTaskRef = NULL;
@@ -30,6 +31,7 @@ static void sTask_GpioStatusIndication(void *argv)
     int lastRawAcc    = -1;
     int accDebounce   = 0;
     int s_accVal      = 0;
+    int accReadErr    = 0;
 
     (void)argv;
 
@@ -46,17 +48,22 @@ static void sTask_GpioStatusIndication(void *argv)
 
     while (1) {
         int silent     = CFG_GetSilentMode();
+        int accLevel   = HAL_GPIO_Read(GPIO_ACC_IN);
         /* Active-low: GPIO_ACC_IN LOW = ACC ON */
-        int currentAcc = (HAL_GPIO_Read(GPIO_ACC_IN) == 0) ? 1 : 0;
+        int currentAcc = (accLevel == 0) ? 1 : 0;
 
-        if (lastRawAcc == -1) {
+        if (accLevel < 0) {
+            /* Đọc lỗi: giữ nguyên trạng thái ACC cũ, không coi là ACC OFF */
+            if (accReadErr++ % 20 == 0) {
+                HAL_LOG("[ACC] read pin %d fail (x%d)", GPIO_ACC_IN, accReadErr);
+            }
+        } else if (lastRawAcc == -1) {
             lastRawAcc = currentAcc;
             s_accVal   = currentAcc;
             NASA_SetAcc(s_accVal);
             GPS_SetAccOn(s_accVal);
-        }
-
-        if (currentAcc == lastRawAcc) {
+            HAL_LOG("[ACC] init %d (pin %d level %d)", s_accVal, GPIO_ACC_IN, accLevel);
+        } else if (currentAcc == lastRawAcc) {
             if (currentAcc != s_accVal) {
                 accDebounce++;
                 if (accDebounce >= ACC_DEBOUNCE_CYCLES) {
@@ -99,7 +106,14 @@ static void sTask_GpioStatusIndication(void *argv)
                 HAL_GPIO_Write(GPIO_LED_NET, 0);
             }
 
-            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) HAL_GPIO_Write(GPIO_LED_PWR, 1);
+            /* LED nguồn = trạng thái bộ nhớ backup: sáng = bộ nhớ trong (EFS),
+             * nháy = bộ nhớ ngoài (flash SPI), tắt = cả hai lỗi */
+            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) {
+                int media = Backup_GetMedia();
+                int pwrLed = (media == BACKUP_MEDIA_FLASH) ? blinkSlow :
+                             (media == BACKUP_MEDIA_EFS)   ? 1 : 0;
+                HAL_GPIO_Write(GPIO_LED_PWR, pwrLed);
+            }
         }
 
         if (NASA_IsWatchdogTimeout()) {

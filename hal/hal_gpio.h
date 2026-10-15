@@ -43,7 +43,7 @@ void HAL_GPIO_Write(int pin, int level);
 /**
  * @brief  Doc muc logic tu chan GPIO input.
  * @param  pin  So pin.
- * @return 0 = LOW, 1 = HIGH.
+ * @return 0 = LOW, 1 = HIGH, -1 = loi doc (pin chua cau hinh / sai pad).
  */
 int HAL_GPIO_Read(int pin);
 

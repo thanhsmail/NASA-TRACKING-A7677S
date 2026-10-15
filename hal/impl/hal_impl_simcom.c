@@ -60,7 +60,12 @@ void HAL_GPIO_Config(int pin, HalGpioDir_t dir, HalGpioPull_t pull)
     cfg.pinEd   = SC_GPIO_NO_EDGE;
     cfg.isr     = NULL;
     cfg.wu      = NULL;
-    sAPI_GpioConfig(pin, cfg);
+    {
+        SC_GPIOReturnCode rc = sAPI_GpioConfig(pin, cfg);
+        if (rc != SC_GPIORC_OK) {
+            HAL_LOG_Print("[GPIO] config pin %d fail rc=%d", pin, (int)rc);
+        }
+    }
 }
 
 void HAL_GPIO_Write(int pin, int level)
@@ -70,7 +75,11 @@ void HAL_GPIO_Write(int pin, int level)
 
 int HAL_GPIO_Read(int pin)
 {
-    return (int)sAPI_GpioGetValue(pin);
+    /* SDK tra ve muc 0/1 hoac ma loi am (SC_GPIORC_INVALID_*): khong de ma loi
+     * bi hieu nham thanh muc HIGH */
+    int rc = (int)sAPI_GpioGetValue(pin);
+    if (rc == SC_GPIORC_LOW || rc == SC_GPIORC_HIGH) return rc;
+    return -1;
 }
 
 /* ========================== HAL_OS ======================================== */

@@ -146,7 +146,7 @@
 #define GPIO_LED_GNSS 74 /* SC_MODULE_GPIO_03 */
 #endif
 #ifndef GPIO_DOUT
-#define GPIO_DOUT 73 /* SC_MODULE_GPIO_04 */
+#define GPIO_DOUT 28 /* SC_MODULE_GPIO_09 / pin52 */
 #endif
 #ifndef GPIO_ACC_IN
 #define GPIO_ACC_IN 37 /* SC_MODULE_GPIO_10 */

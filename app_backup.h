@@ -52,6 +52,12 @@ void Backup_Clear(void);
 void Backup_GetStatus(int *useFlash, int *count, uint32_t *writeErrors);
 void Backup_Flush(void);
 
+/** Noi luu backup dang dung (LED nguon hien thi theo gia tri nay) */
+#define BACKUP_MEDIA_NONE   0   /* noi luu dang dung ghi loi (khong flash + EFS loi) */
+#define BACKUP_MEDIA_EFS    1   /* bo nho trong: file C:/rv26_bak.dat */
+#define BACKUP_MEDIA_FLASH  2   /* bo nho ngoai: flash SPI */
+int  Backup_GetMedia(void);
+
 /** Lưu định kỳ snapshot (mỗi 10s) khi tracking */
 void Backup_OnTick(const BackupRecord_t *rec, uint32_t nowTick);
 
