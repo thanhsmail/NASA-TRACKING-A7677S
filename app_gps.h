@@ -19,12 +19,10 @@ void GPS_Snapshot(GpsSnapshot_t *out);
 void GPS_SetAccOn(int on);
 void GPS_ResetOdometer(void);
 int GPS_GetSatellitesCount(void);
-double GPS_GetLastSpeedKph(void);
 double GPS_GetTotalKm(void);
 int GPS_IsMoving(void);
 int GPS_IsParked(void);
 int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize);
-void GnssUrcListenerEnsureStarted(void);
 void GPS_OnUrcString(const char *gpsUrc);
 
 /** Gọi mỗi vòng khi đang có phiên với Server: tải AGPS nếu lâu chưa có fix */

@@ -225,9 +225,9 @@ Bit trạng thái (`BuildDeviceStatus`, [app_config.h](app_config.h) `ST_*`):
 
 Mỗi giây `gnss_task` đưa một dòng `+CGNSSINFO` vào `GPS_OnUrcString()`. Thứ tự xử lý:
 
-1. **Phân tích**: `TryParseCgnssInfoUrc` (chính), `TryParseCgpsInfoUrc`, hoặc bộ phân tích dự phòng. Lấy vĩ độ, kinh độ, tốc độ, hướng, giờ UTC, HDOP (trường thứ 9 sau N/S), số vệ tinh = tổng các hệ (GPS + GLONASS + GALILEO + BEIDOU).
+1. **Đọc dòng URC thành một mẫu** (`GnssSample_t`): `TryParseCgnssInfoUrc` (chính) hoặc `TryParseCgpsInfoUrc`. Lấy vĩ độ, kinh độ, tốc độ, hướng, giờ UTC, HDOP (trường thứ 9 sau N/S), số vệ tinh = tổng các hệ (GPS + GLONASS + GALILEO + BEIDOU). Dòng không phải hai dạng này chỉ được dò giờ UTC, không lấy tọa độ. Mọi mẫu đi qua một hàm duy nhất `ApplySample()` (dòng "không có fix" qua `ApplyNoFix()`), hàm này làm các bước 2–5 dưới đây.
 2. **Lọc chạy / dừng** (`FilterMovingStatus`): tốc độ trên ngưỡng (mặc định 3 km/h, lệnh 10) liên tục 3 s mới là chạy; dưới ngưỡng 10 s là dừng; theo dõi trạng thái đỗ và trôi sau khi tắt ACC (bảng dưới).
-3. **Odometer** (`UpdateOdometer`): chỉ cộng khi đang chạy; bỏ bước nhảy bất thường; mất GPS quá 30 s thì đặt lại điểm tham chiếu.
+3. **Odometer** (`UpdateOdometer`): chỉ cộng khi đang chạy; bỏ bước nhảy dài hơn tốc độ cho phép trong thời gian đã trôi; mất GPS dưới 30 s (`ODOM_GPS_LOSS_TIMEOUT_SEC`) thì khi có lại nối từ điểm tham chiếu cũ, quá 30 s thì bỏ điểm tham chiếu (log một lần).
 4. **Điểm neo khi đứng yên** (`ApplyStationaryAnchor`): vị trí gửi đi khi dừng / đỗ là trung bình các mẫu tốt.
 5. **Log debug** (`GpsDebugOnSample`, bật bằng `GNSS_DEBUG`).
 
