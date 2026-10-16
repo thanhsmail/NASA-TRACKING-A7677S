@@ -51,7 +51,10 @@ static int           s_hasGnssTime      = 0;
 static int          s_isMovingNow      = 0;
 static int          s_isParkedNow      = 0;
 static int          s_isCoastingToPark = 0;  /* ACC đã tắt nhưng xe còn trôi */
-static volatile int s_accWireOn        = 0;  /* dây ACC, từ task gpio_status */
+/* Dây ACC, từ task gpio_status. -1 = chưa đọc được chân lần nào: chưa biết thì không coi là ACC OFF */
+static volatile int s_accWireOn        = -1;
+/* Dây ACC từng báo ON từ lúc khởi động = xe có đấu dây (dùng cho accMode 2) */
+static volatile int s_accWireSeenOn    = 0;
 
 /* Điểm neo khi đứng yên (ApplyStationaryAnchor) */
 static double s_anchorLat        = 0.0;  /* 0,0 = chưa neo */
@@ -159,6 +162,7 @@ void GPS_Init(void)
 void GPS_SetAccOn(int on)
 {
     s_accWireOn = on ? 1 : 0;
+    if (on) s_accWireSeenOn = 1;
 }
 
 /**
@@ -263,13 +267,23 @@ static int FilterMovingStatus(double speed, double lat, double lon)
 
     if (thresh <= 0.0) thresh = 3.0;
     accMode = CFG_GetAccMode();
-    wireAccOff = (accMode != 0) ? !s_accWireOn : 0;
+    /* Chỉ tin ACC OFF từ dây khi đã đọc được chân. accMode 2 (có đấu + không
+     * đấu): xe không đấu dây thì chân luôn báo OFF (kéo lên), nên chỉ dùng
+     * ACC OFF khi dây đã từng báo ON; nếu không thì chạy theo vận tốc như accMode 0. */
+    wireAccOff = 0;
+    if (s_accWireOn == 0) {
+        if (accMode == 1) wireAccOff = 1;
+        else if (accMode == 2) wireAccOff = s_accWireSeenOn;
+    }
 
     /* 1. Dây ACC tắt (accMode 1 hoặc 2) */
     if (wireAccOff) {
         /* Ngừng cộng odometer ngay */
         s_isMovingNow = 0;
         s_speedAboveThresholdTick = 0;
+        /* Bộ đếm dừng / đỗ của bước 2 phải bắt đầu lại khi ACC ON trở lại */
+        s_speedBelowThresholdTick = 0;
+        s_parkTimeoutStartTick = 0;
 
         if (s_isParkedNow) {
             /* Đang đỗ, ACC tắt: tốc độ nhiễu không làm mất điểm neo. Chỉ thoát
@@ -319,6 +333,10 @@ static int FilterMovingStatus(double speed, double lat, double lon)
             } else if ((now - s_parkTimeoutStartTick) >= (PARKED_CONFIRM_SEC * HAL_TICKS_PER_SEC)) {
                 s_isParkedNow = 1;
                 s_isMovingNow = 0;
+                /* Không để mốc cũ lại: nếu không, mẫu chậm đầu tiên sau khi
+                 * thoát đỗ sẽ đưa xe về ĐỖ ngay lập tức */
+                s_speedBelowThresholdTick = 0;
+                s_parkTimeoutStartTick = 0;
             }
         }
     }

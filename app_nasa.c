@@ -36,7 +36,7 @@ typedef enum {
 
 static NasaState_t s_nasaState = STATE_INIT;
 static uint32_t s_messageIdNum = 1;
-static int s_accRaw = 0;          /* 1 = ACC ON (chân ACC active-low, đã quy đổi ở GPIO task) */
+static int s_accRaw = -1;         /* 1 = ACC ON, 0 = OFF, -1 = chưa đọc được chân (đã quy đổi active-low ở GPIO task) */
 static int s_loginAcked = 0;
 static char s_resetReason[16] = "R-0.0";
 static char s_loginCode[16] = "0";
@@ -82,9 +82,10 @@ static int IsAccOn(void)
 {
     int mode = CFG_GetAccMode();
     int bySpeed = GPS_IsMoving();
-    int byWire = s_accRaw ? 1 : 0; /* Chân ACC active-low; s_accRaw đã là trạng thái logic ON/OFF */
+    int byWire = (s_accRaw > 0) ? 1 : 0; /* s_accRaw đã là trạng thái logic ON/OFF */
 
     if (mode == 0) return bySpeed;
+    if (s_accRaw < 0) return bySpeed; /* chưa đọc được chân ACC: theo vận tốc */
     if (mode == 2) return (byWire || bySpeed) ? 1 : 0;
     return byWire; /* mode 1: chỉ theo dây ACC */
 }
