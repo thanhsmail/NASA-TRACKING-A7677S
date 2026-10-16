@@ -112,7 +112,9 @@
  * Quy tắc accMode (Config cmd 8):
  *  - accMode == 0 (GPS Speed only): Đỗ khi dừng liên tục >= PARKED_CONFIRM_SEC (600s).
  *  - accMode == 1 (Wire ACC only + Fallback): ACC OFF -> COASTING_TO_PARK -> PARKED khi speed <= thresh. Fallback 600s.
- *  - accMode == 2 (Hybrid ACC): ACC OFF -> COASTING_TO_PARK (ngừng km dồn) -> PARKED khi speed <= thresh. Fallback 600s.
+ *  - accMode == 2 (Hybrid ACC): như accMode 1 nếu dây ACC đã từng báo ON từ lúc khởi động;
+ *    nếu chưa (xe không đấu dây) thì chạy theo vận tốc như accMode 0.
+ *  - Chưa đọc được chân ACC lần nào: không coi là ACC OFF, chạy theo vận tốc.
  */
 
 /* Phiên bản thiết bị RV26 / A7677S */
