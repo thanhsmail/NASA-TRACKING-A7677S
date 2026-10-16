@@ -32,6 +32,16 @@ add_executable(test_lxlt_rules
     ${COMMON_MOCK_SRCS}
 )
 
+# Test odometer GPS (stub riêng trong file test, không dùng mock_hal_gnss / net / gpio)
+add_executable(test_gps_odometer
+    unit/test_gps_odometer.c
+    ../app_gps.c
+    ../app_utils.c
+    mocks/mock_hal_os.c
+)
+target_link_libraries(test_gps_odometer m)
+
 enable_testing()
 add_test(NAME TestParkRules COMMAND test_park_rules)
 add_test(NAME TestLxltRules COMMAND test_lxlt_rules)
+add_test(NAME TestGpsOdometer COMMAND test_gps_odometer)

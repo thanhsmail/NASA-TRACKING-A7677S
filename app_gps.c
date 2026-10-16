@@ -12,11 +12,13 @@
 #include "hal/hal_log.h"
 #include "hal/hal_os.h"
 #include "hal/hal_gnss.h"
+#include "hal/hal_fs.h"
 #include "app_config.h"
 #include "app_cfg.h"
 #include "app_utils.h"
 #include "app_gps.h"
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,6 +74,19 @@ static double   s_prevLon          = 0.0;
 static uint32_t s_prevOdomTick     = 0;
 static uint32_t s_gpsLossStartTick = 0;    /* 0 = đang có GPS */
 static int      s_odomRefDropped   = 0;    /* đã bỏ điểm tham chiếu trong lần mất GPS này */
+
+/* Lưu km ngày vào NASA_ODOM_FILE để khởi động lại (mất nguồn, reset theo lịch
+ * cmd 32) không làm km ngày về 0. Đọc / ghi khi giữ s_gpsDataMutex. */
+#define ODOM_FILE_MAGIC 0x4F444F31u        /* "ODO1" */
+typedef struct {
+    uint32_t magic;
+    int32_t  mday;       /* ngày (RTC) lúc lưu, 0 = chưa có giờ */
+    double   totalKm;
+    uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
+} OdomFile_t;
+static double   s_odomSavedKm      = 0.0;
+static uint32_t s_odomSaveTick     = 0;    /* 0 = chưa lưu lần nào từ lúc bật */
+static int      s_odomSaveWasMoving = 0;
 
 /* Debug: tick lúc yêu cầu AGPS, để đo thời gian có fix sau AGPS; 0 = không đo */
 static uint32_t s_agpsReqTick = 0;
@@ -151,12 +166,111 @@ int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize)
 
 /* ============================== API công khai ============================= */
 
-/** Tạo mutex dữ liệu GPS. Gọi trước khi bật gnss_task. */
+/** Ngày theo RTC (giống ResetDailyCountersIfNeeded), 0 nếu RTC chưa có giờ */
+static int OdomRtcMday(void)
+{
+    HalDateTime_t rtc;
+
+    memset(&rtc, 0, sizeof(rtc));
+    if (HAL_GNSS_GetRtc(&rtc) != 0) return 0;
+    if (rtc.tm_year < 2020 || rtc.tm_year > 2100) return 0;
+    if (rtc.tm_mday < 1 || rtc.tm_mday > 31) return 0;
+    return rtc.tm_mday;
+}
+
+/** Ghi km ngày ra file. Bản ghi cố định nên ghi đè, không xóa file trước
+ *  (mất nguồn giữa lúc xóa và ghi sẽ mất luôn km). Gọi khi giữ s_gpsDataMutex. */
+static void OdomFileWrite(double km)
+{
+    OdomFile_t rec;
+    HalFile_t fp;
+
+    memset(&rec, 0, sizeof(rec));
+    rec.magic = ODOM_FILE_MAGIC;
+    rec.mday = OdomRtcMday();
+    rec.totalKm = km;
+    rec.checksum = Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(OdomFile_t, checksum));
+
+    fp = HAL_FS_Open(NASA_ODOM_FILE, "wb");
+    if (fp == HAL_FS_INVALID_HANDLE) {
+        HAL_LOG("[Odom] Khong mo duoc %s de luu km", NASA_ODOM_FILE);
+        return;
+    }
+    if (HAL_FS_Write(fp, &rec, sizeof(rec)) != (int)sizeof(rec)) {
+        HAL_LOG("[Odom] Ghi %s loi", NASA_ODOM_FILE);
+    }
+    HAL_FS_Close(fp);
+    s_odomSavedKm = km;
+}
+
+/** Đọc lại km ngày lúc khởi động. Bỏ qua nếu file hỏng, hoặc RTC đã có giờ
+ *  và đã sang ngày khác so với lúc lưu. */
+static void OdomFileLoad(void)
+{
+    OdomFile_t rec;
+    HalFile_t fp;
+    int n;
+    int today;
+
+    fp = HAL_FS_Open(NASA_ODOM_FILE, "rb");
+    if (fp == HAL_FS_INVALID_HANDLE) return;
+    memset(&rec, 0, sizeof(rec));
+    n = HAL_FS_Read(fp, &rec, sizeof(rec));
+    HAL_FS_Close(fp);
+
+    if (n != (int)sizeof(rec) || rec.magic != ODOM_FILE_MAGIC ||
+        rec.checksum != Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(OdomFile_t, checksum)) ||
+        !(rec.totalKm >= 0.0 && rec.totalKm <= ODOM_RESTORE_MAX_KM)) {
+        HAL_LOG("[Odom] File km ngay khong hop le, bat dau tu 0");
+        return;
+    }
+    today = OdomRtcMday();
+    if (today != 0 && rec.mday != 0 && today != rec.mday) {
+        HAL_LOG("[Odom] Km da luu thuoc ngay %d, hom nay %d -> bat dau tu 0", (int)rec.mday, today);
+        return;
+    }
+    s_totalKm = rec.totalKm;
+    s_odomSavedKm = rec.totalKm;
+    HAL_LOG("[Odom] Doc lai km ngay sau khoi dong: %.3f km", rec.totalKm);
+}
+
+/**
+ * @brief Lưu km ngày khi cần. Gọi sau mỗi mẫu GNSS.
+ *  - Xe vừa chuyển sang dừng: lưu mọi thay đổi (thường ngay trước khi tắt máy).
+ *  - Đang chạy: lưu khi đổi >= ODOM_SAVE_MIN_DELTA_KM và đã qua ODOM_SAVE_INTERVAL_SEC.
+ */
+static void OdomPersistPoll(void)
+{
+    uint32_t now = GetTickNow();
+    int moving;
+    int justStopped;
+    double delta;
+
+    HAL_OS_MutexLock(s_gpsDataMutex);
+    moving = s_isMovingNow;
+    justStopped = (s_odomSaveWasMoving && !moving);
+    s_odomSaveWasMoving = moving;
+    delta = fabs(s_totalKm - s_odomSavedKm);
+
+    if (justStopped ? (delta >= ODOM_MIN_DIST_KM)
+                    : (delta >= ODOM_SAVE_MIN_DELTA_KM &&
+                       (s_odomSaveTick == 0 ||
+                        (now - s_odomSaveTick) >= (uint32_t)ODOM_SAVE_INTERVAL_SEC * HAL_TICKS_PER_SEC))) {
+        OdomFileWrite(s_totalKm);
+        s_odomSaveTick = (now != 0) ? now : 1;
+    }
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
+}
+
+/** Tạo mutex dữ liệu GPS và đọc lại km ngày đã lưu. Gọi trước khi bật gnss_task. */
 void GPS_Init(void)
 {
     if (s_gpsDataMutex == NULL) {
         HAL_OS_MutexCreate(&s_gpsDataMutex);
     }
+    HAL_OS_MutexLock(s_gpsDataMutex);
+    OdomFileLoad();
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
 void GPS_SetAccOn(int on)
@@ -192,13 +306,14 @@ void GPS_Snapshot(GpsSnapshot_t *out)
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
-/** Đặt km trong ngày về 0 (gọi khi đổi ngày) */
+/** Đặt km trong ngày về 0 (gọi khi đổi ngày) và lưu ngay */
 void GPS_ResetOdometer(void)
 {
     HAL_OS_MutexLock(s_gpsDataMutex);
     s_totalKm = 0.0;
     s_prevLat = 0.0;
     s_prevLon = 0.0;
+    OdomFileWrite(0.0);
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
@@ -445,7 +560,11 @@ static void ApplyStationaryAnchor(int isMoving)
  *
  *  - Đứng yên: không cộng (chống km ảo do nhiễu), chỉ dời điểm tham chiếu.
  *  - Bỏ bước nhảy dài hơn tốc độ cho phép trong thời gian đã trôi.
- *  - Mất GPS ngắn: khi có lại thì nối từ điểm tham chiếu cũ.
+ *  - Mất GPS ngắn: khi có lại thì nối từ điểm tham chiếu cũ. Trạng thái chạy /
+ *    dừng không cập nhật trong lúc mất GPS và cần vài giây để xác nhận lại, nên
+ *    mẫu đầu tiên có GPS lại được xét theo độ dời: dời hơn ODOM_MAX_STATIONARY_KM
+ *    thì xe đã chạy thật trong lúc mất GPS (ra khỏi hầm xe, tắt ACC ngay sau
+ *    khi ra), vẫn nối dù đang báo dừng.
  *  - Mất GPS quá ODOM_GPS_LOSS_TIMEOUT_SEC: bỏ điểm tham chiếu, không nối.
  */
 static void UpdateOdometer(double newLat, double newLon)
@@ -472,7 +591,7 @@ static void UpdateOdometer(double newLat, double newLon)
     s_gpsLossStartTick = 0;
     s_odomRefDropped = 0;
 
-    if (!s_isMovingNow) {
+    if (!s_isMovingNow && !wasGpsLoss) {
         s_prevLat = newLat;
         s_prevLon = newLon;
         s_prevOdomTick = now;
@@ -494,7 +613,9 @@ static void UpdateOdometer(double newLat, double newLon)
         maxDist = (calcSpeed / 3.6) * elapsedSec * ODOM_MAX_JUMP_FACTOR / 1000.0;
         if (maxDist < ODOM_MAX_STATIONARY_KM) maxDist = ODOM_MAX_STATIONARY_KM;
 
-        if (dist >= ODOM_MIN_DIST_KM && dist <= maxDist) {
+        if (!s_isMovingNow && dist < ODOM_MAX_STATIONARY_KM) {
+            /* Có GPS lại khi đang dừng, dời ít: nhiễu vị trí, không cộng */
+        } else if (dist >= ODOM_MIN_DIST_KM && dist <= maxDist) {
             s_totalKm += dist;
             if (wasGpsLoss) {
                 HAL_LOG("[Odom] Noi lai sau mat GPS ngan (%.1fs): +%.1fm",
@@ -600,10 +721,11 @@ static void ApplySample(const GnssSample_t *s)
     ApplyStationaryAnchor(isMoving);
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 
+    OdomPersistPoll();
     GpsDebugOnSample();
 }
 
-/** Áp dòng "không có fix" (+CGNSSINFO rỗng) */
+/** Áp dòng "không có fix" (+CGNSSINFO / +CGPSINFO rỗng) */
 static void ApplyNoFix(void)
 {
     HAL_OS_MutexLock(s_gpsDataMutex);
@@ -635,6 +757,18 @@ static int SplitCommaInPlace(char *line, char **fields, int maxFields)
         *ptr++ = '\0';
     }
     return n;
+}
+
+/** 1 nếu mọi trường đều rỗng (dòng URC "không có fix": ",,,,,,") */
+static int AllFieldsEmpty(char **fields, int nf)
+{
+    int i;
+    for (i = 0; i < nf; i++) {
+        const char *f = fields[i];
+        while (*f == ' ' || *f == '\r' || *f == '\n') f++;
+        if (*f != '\0') return 0;
+    }
+    return 1;
 }
 
 /** ddmm.mmmm (NMEA) -> độ thập phân */
@@ -669,7 +803,9 @@ static int TryParseCgnssInfoUrc(const char *gpsUrc)
     buf[len] = '\0';
 
     nf = SplitCommaInPlace(buf, fields, 20);
-    if (nf < 13) {
+    /* Dòng không fix có thể ngắn (nf < 13) hoặc đủ trường nhưng rỗng tùy bản
+     * firmware; cả hai đều phải đếm thời gian mất GPS cho odometer */
+    if (nf < 13 || AllFieldsEmpty(fields, nf)) {
         static uint32_t lastNoFixLogTick = 0;
         uint32_t now = GetTickNow();
         ApplyNoFix();
@@ -732,6 +868,10 @@ static int TryParseCgpsInfoUrc(const char *gpsUrc)
     buf[sizeof(buf) - 1] = '\0';
 
     nf = SplitCommaInPlace(buf, fields, 16);
+    if (AllFieldsEmpty(fields, nf)) {
+        ApplyNoFix();
+        return 1;
+    }
     if (nf < 8 || fields[0][0] == '\0' || fields[2][0] == '\0') return 0;
     if (!ParseDateTimeFromUrcTokens(fields[4], fields[5], &utc)) return 0;
 

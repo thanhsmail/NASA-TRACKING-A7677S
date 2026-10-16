@@ -69,6 +69,9 @@
 #define ODOM_MAX_STATIONARY_KM 0.100 // Quãng đường tối đa khi dừng đỗ
 #define ODOM_GPS_LOSS_TIMEOUT_SEC 30 // Thời gian GPS mất để reset Odometer
 #define ODOM_JUMP_MIN_CALC_SPEED_KPH 30.0 // Ngưỡng vận tốc sàn tối thiểu để tính maxDist cho Jump Filter
+#define ODOM_SAVE_INTERVAL_SEC 60     // Khoảng cách tối thiểu giữa 2 lần lưu km ngày khi đang chạy
+#define ODOM_SAVE_MIN_DELTA_KM 0.05  // Chỉ lưu khi km ngày đổi ít nhất 50 m (khi xe dừng: lưu mọi thay đổi)
+#define ODOM_RESTORE_MAX_KM 5000.0   // Km ngày đọc lại lớn hơn mức này coi là hỏng
 
 #define MOVING_CONFIRM_SEC 3   // Thời gian xác nhận trạng thái di chuyển
 #define STOPPED_CONFIRM_SEC 10 // Thời gian xác nhận trạng thái dừng đỗ (khớp Park)
@@ -152,6 +155,7 @@
 /* File lưu cấu hình / backup trên FS nội bộ */
 #define NASA_CFG_FILE "C:/rv26.cfg"
 #define NASA_BACKUP_FILE "C:/rv26_bak.dat"
+#define NASA_ODOM_FILE "C:/rv26_odo.dat" /* km trong ngày, đọc lại sau khi khởi động */
 #define NASA_BACKUP_INTERVAL_SEC 10
 #define NASA_BACKUP_MAX_RECORDS 2000
 #define NASA_BACKUP_REPLAY_BURST 5 
