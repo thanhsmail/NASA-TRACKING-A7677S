@@ -6,6 +6,8 @@
 
 uint32_t Buffer_GetChecksum(const uint8_t *buffer, uint32_t length);
 uint32_t GetTickNow(void);
+/** Cộng / trừ số giây vào ngày giờ, tự sang ngày / tháng / năm */
+void UTIL_AddSecondsToDateTime(HalDateTime_t *t, int32_t sec);
 int IsDigitChar(char c);
 int Parse2Digits(const char *s);
 int ParseDateTimeFromUrcTokens(const char *dateToken, const char *timeToken, HalDateTime_t *out);

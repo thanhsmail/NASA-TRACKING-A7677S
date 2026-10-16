@@ -37,6 +37,53 @@ uint32_t GetTickNow(void)
     return HAL_OS_GetTick();
 }
 
+/** Số ngày trong tháng (có năm nhuận); tháng sai trả 30 */
+static int DaysInMonth(int year, int mon)
+{
+    static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (mon < 1 || mon > 12) return 30;
+    if (mon == 2 && (year % 4) == 0 && ((year % 100) != 0 || (year % 400) == 0)) return 29;
+    return days[mon - 1];
+}
+
+void UTIL_AddSecondsToDateTime(HalDateTime_t *t, int32_t sec)
+{
+    /* Tính trên int: các trường HalDateTime_t là số không dấu nên không giảm
+     * xuống dưới 0 được (bản cũ trong app_gps.c sai khi sec âm) */
+    int64_t total;
+    int year, mon, day;
+    int32_t secOfDay;
+
+    if (t == NULL) return;
+    year = t->tm_year;
+    mon  = t->tm_mon;
+    day  = t->tm_mday;
+    total = (int64_t)t->tm_hour * 3600 + (int64_t)t->tm_min * 60 + t->tm_sec + sec;
+
+    while (total < 0) {
+        total += 86400;
+        if (--day < 1) {
+            if (--mon < 1) { mon = 12; year--; }
+            day = DaysInMonth(year, mon);
+        }
+    }
+    while (total >= 86400) {
+        total -= 86400;
+        if (++day > DaysInMonth(year, mon)) {
+            day = 1;
+            if (++mon > 12) { mon = 1; year++; }
+        }
+    }
+
+    secOfDay = (int32_t)total;
+    t->tm_year = (uint16_t)year;
+    t->tm_mon  = (uint8_t)mon;
+    t->tm_mday = (uint8_t)day;
+    t->tm_hour = (uint8_t)(secOfDay / 3600);
+    t->tm_min  = (uint8_t)((secOfDay / 60) % 60);
+    t->tm_sec  = (uint8_t)(secOfDay % 60);
+}
+
 int IsDigitChar(char c)
 {
     return (c >= '0') && (c <= '9');
