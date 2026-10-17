@@ -22,9 +22,11 @@
 #include "app_nasa.h"
 #include "app_park_rules.h"
 #include "app_lxlt_rules.h"
+#include "app_fota.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 typedef enum {
     STATE_INIT = 1,
@@ -60,6 +62,26 @@ static volatile int s_trackingImmediateSend = 0;
 static volatile int s_immediateMsgType = 2; /* 2 or 7 */
 static volatile int s_requestReplayAll = 0;
 static double      s_prevSentHeadingDeg = -1.0;
+
+/* Ngủ tiết kiệm ắc quy (SleepPoll). PWR_SLEEP: GNSS tắt, module được sleep, vòng
+ * lặp giãn. PWR_SLEEP_FIX: lần thức định kỳ, GNSS bật chờ fix để gửi vị trí. */
+typedef enum { PWR_AWAKE = 0, PWR_SLEEP, PWR_SLEEP_FIX } PwrState_t;
+
+static volatile PwrState_t s_pwrState = PWR_AWAKE;
+static volatile int s_wakeReq = 0;            /* đặt từ task khác / ngắt GPIO */
+static const char *volatile s_wakeReqReason = "";
+static int      s_accWireSeenOn = 0;          /* dây ACC đã từng báo ON từ lúc khởi động */
+static uint32_t s_idleStartTick = 0;          /* ACC tắt + đứng yên từ lúc này, 0 = chưa */
+static uint32_t s_holdStartTick = 0;          /* thức vì SMS / lệnh từ lúc này, 0 = không giữ */
+static uint32_t s_sleepStartTick = 0;
+static uint32_t s_sleepPhaseTick = 0;         /* lần thức định kỳ trước (hoặc lúc bắt đầu ngủ) */
+static double   s_sleepLat = 0.0;             /* vị trí lúc bắt đầu ngủ, để phát hiện xe bị dời */
+static double   s_sleepLon = 0.0;
+static int      s_sleepWakeCount = 0;
+static int      s_sleepReportDue = 0;         /* đang ngủ: đến lúc gửi một bản tin vị trí */
+static int      s_battLow = 0;
+static int      s_battLowCnt = 0;
+static uint32_t s_battCheckTick = 0;
 
 static int NetworkSendFrame(const char *frame);
 
@@ -480,6 +502,266 @@ void NASA_OnServerProtocolLine(const char *line)
         HAL_LOG("[NASA] Unhandled protocol line: %s", line);
     }
 }
+/* ============================ Ngủ tiết kiệm ắc quy ============================ */
+
+static uint32_t NonZeroTick(uint32_t t)
+{
+    return (t != 0) ? t : 1;
+}
+
+static uint32_t SecToTicks(uint32_t sec)
+{
+    return sec * (uint32_t)HAL_TICKS_PER_SEC;
+}
+
+int NASA_IsSleeping(void)
+{
+    return (s_pwrState != PWR_AWAKE) ? 1 : 0;
+}
+
+/* Gọi được từ ngắt GPIO: chỉ ghi 2 biến */
+void NASA_WakeRequest(const char *reason)
+{
+    s_wakeReqReason = reason ? reason : "?";
+    s_wakeReq = 1;
+}
+
+static int SleepWakePeriodSec(void)
+{
+    int sec = CFG_GetSleepWakeSec();
+    if (s_battLow && sec < SLEEP_LOW_BATT_WAKE_PERIOD_SEC) sec = SLEEP_LOW_BATT_WAKE_PERIOD_SEC;
+    return sec;
+}
+
+/** Chu kỳ báo cáo khi ACC tắt: đang ngủ thì theo chu kỳ thức */
+static int StoppedPeriodSec(void)
+{
+    return NASA_IsSleeping() ? SleepWakePeriodSec() : CFG_GetPeriodStopped();
+}
+
+/** Số tick nghỉ mỗi vòng của nasa_reporter */
+static uint32_t SleepLoopTicks(void)
+{
+    return (s_pwrState == PWR_SLEEP) ? SecToTicks(SLEEP_LOOP_SEC) : (uint32_t)TASK_BASE_SLEEP_TICKS;
+}
+
+/** Xấp xỉ phẳng, đủ chính xác cho vài trăm mét */
+static double SleepDistanceKm(double lat1, double lon1, double lat2, double lon2)
+{
+    double dLat = (lat2 - lat1) * 111.32;
+    double dLon = (lon2 - lon1) * 111.32 * cos((lat1 + lat2) * 0.5 * 3.14159265358979 / 180.0);
+    return sqrt(dLat * dLat + dLon * dLon);
+}
+
+/** Ắc quy yếu: đo khi ACC tắt, mỗi 10 s, xác nhận vài lần liên tiếp, có trễ khi hết yếu */
+static void SleepCheckBattery(void)
+{
+    uint32_t now = GetTickNow();
+    float v;
+
+    if (SLEEP_LOW_BATT_VOLT <= 0.0f) return;
+    if (IsAccOn()) {
+        s_battLowCnt = 0;
+        return;
+    }
+    if (s_battCheckTick != 0 && (now - s_battCheckTick) < SecToTicks(10)) return;
+    s_battCheckTick = NonZeroTick(now);
+
+    v = NASA_GetVoltage();
+    if (!s_battLow) {
+        if (v < SLEEP_LOW_BATT_VOLT) {
+            if (++s_battLowCnt >= SLEEP_LOW_BATT_CONFIRM) {
+                s_battLow = 1;
+                HAL_LOG("[SLEEP] battery low %.1fV < %.1fV -> sleep after %ds, wake every %ds",
+                        (double)v, (double)SLEEP_LOW_BATT_VOLT, SLEEP_LOW_BATT_DELAY_SEC,
+                        SleepWakePeriodSec());
+            }
+        } else {
+            s_battLowCnt = 0;
+        }
+    } else if (v >= SLEEP_LOW_BATT_VOLT + SLEEP_LOW_BATT_HYST_VOLT) {
+        s_battLow = 0;
+        s_battLowCnt = 0;
+        HAL_LOG("[SLEEP] battery ok again %.1fV", (double)v);
+    }
+}
+
+/** @return NULL nếu được ngủ, ngược lại là lý do không ngủ / phải thức */
+static const char *SleepBlockReason(void)
+{
+    int mode = CFG_GetAccMode();
+
+    if (!CFG_GetSleepEnabled()) return "sleep disabled";
+    if (!CFG_IsDeviceEnabled()) return "device disabled";
+    /* Không tin được dây ACC thì không có gì đánh thức khi xe chạy */
+    if (s_accRaw < 0 || mode == 0 || (mode == 2 && !s_accWireSeenOn)) return "no ACC wire";
+    if (IsAccOn()) return "ACC on";
+    if (GPS_IsMoving()) return "moving";
+    if (FOTA_IsBusy()) return "FOTA";
+    return NULL;
+}
+
+static void SleepEnter(uint32_t idleSec)
+{
+    GpsSnapshot_t gps = {0};
+
+    GPS_Snapshot(&gps);
+    s_sleepLat = gps.lat;
+    s_sleepLon = gps.lon;
+    s_sleepStartTick = NonZeroTick(GetTickNow());
+    s_sleepPhaseTick = s_sleepStartTick;
+    s_sleepWakeCount = 0;
+    s_pwrState = PWR_SLEEP;
+    s_sleepReportDue = 1; /* báo Server một bản tin trước khi ngủ */
+    HAL_LOG("[SLEEP] enter: ACC off & still %lus, V=%.1f%s, server=%d -> GNSS off, LED off, wake every %ds",
+            (unsigned long)idleSec, (double)NASA_GetVoltage(), s_battLow ? " (low)" : "",
+            NASA_IsSessionActive(), SleepWakePeriodSec());
+    HAL_GNSS_SetPower(0);
+    (void)HAL_OS_SystemSleepEnable(1);
+}
+
+static void SleepExit(const char *reason)
+{
+    uint32_t now = GetTickNow();
+
+    HAL_LOG("[SLEEP] exit: %s after %lus asleep (%d periodic wake), V=%.1f",
+            reason, (unsigned long)((now - s_sleepStartTick) / HAL_TICKS_PER_SEC),
+            s_sleepWakeCount, (double)NASA_GetVoltage());
+    s_pwrState = PWR_AWAKE;
+    (void)HAL_OS_SystemSleepEnable(0);
+    HAL_GNSS_SetPower(1);
+    s_sleepReportDue = 0;
+    s_holdStartTick = NonZeroTick(now);
+    /* 15 phút mất kết nối (CheckNetworkDisconnTimeout) tính lại từ lúc thức */
+    s_disconnStartTick = 0;
+    s_trackingImmediateSend = 1;
+    s_immediateMsgType = 2;
+}
+
+/**
+ * Gọi mỗi vòng của nasa_reporter (kể cả lúc chờ thử kết nối lại): quyết định
+ * vào / ra chế độ ngủ và các lần thức định kỳ.
+ */
+static void SleepPoll(void)
+{
+    uint32_t now = GetTickNow();
+    const char *block;
+    const char *wakeReason = s_wakeReqReason;
+    int wakeReq = s_wakeReq;
+
+    if (wakeReq) s_wakeReq = 0;
+    SleepCheckBattery();
+    block = SleepBlockReason();
+
+    if (s_pwrState == PWR_AWAKE) {
+        uint32_t idleSec;
+        int delaySec;
+
+        if (wakeReq) s_holdStartTick = NonZeroTick(now); /* SMS / lệnh khi đang thức: hoãn ngủ */
+        if (block) {
+            s_idleStartTick = 0;
+            return;
+        }
+        if (s_idleStartTick == 0) {
+            s_idleStartTick = NonZeroTick(now);
+            HAL_LOG("[SLEEP] ACC off & still: sleep after %ds", s_battLow ?
+                    SLEEP_LOW_BATT_DELAY_SEC : CFG_GetSleepDelaySec());
+            return;
+        }
+        if (s_holdStartTick != 0) {
+            if ((now - s_holdStartTick) < SecToTicks(SLEEP_EVENT_HOLD_SEC)) return;
+            s_holdStartTick = 0;
+        }
+        idleSec = (now - s_idleStartTick) / HAL_TICKS_PER_SEC;
+        delaySec = CFG_GetSleepDelaySec();
+        if (s_battLow && delaySec > SLEEP_LOW_BATT_DELAY_SEC) delaySec = SLEEP_LOW_BATT_DELAY_SEC;
+        if (idleSec < (uint32_t)delaySec) return;
+        /* Đang có phiên mà còn điểm mù: phát bù hết rồi mới ngủ */
+        if (NASA_IsSessionActive() && Backup_Count() > 0) return;
+        SleepEnter(idleSec);
+        return;
+    }
+
+    /* Đang ngủ */
+    if (wakeReq) {
+        SleepExit(wakeReason);
+        return;
+    }
+    if (block) {
+        SleepExit(block);
+        return;
+    }
+
+    if (s_pwrState == PWR_SLEEP) {
+        if ((now - s_sleepPhaseTick) < SecToTicks((uint32_t)SleepWakePeriodSec())) return;
+        s_sleepWakeCount++;
+        s_sleepPhaseTick = NonZeroTick(now);
+        if (SLEEP_WAKE_GNSS_SEC > 0) {
+            HAL_LOG("[SLEEP] periodic wake #%d: GNSS on, wait fix <= %ds",
+                    s_sleepWakeCount, SLEEP_WAKE_GNSS_SEC);
+            s_pwrState = PWR_SLEEP_FIX;
+            (void)HAL_OS_SystemSleepEnable(0);
+            HAL_GNSS_SetPower(1);
+        } else {
+            HAL_LOG("[SLEEP] periodic wake #%d: report last position, next in %ds",
+                    s_sleepWakeCount, SleepWakePeriodSec());
+            s_sleepReportDue = 1;
+        }
+        return;
+    }
+
+    /* PWR_SLEEP_FIX: chờ fix mới (sau lúc bật GNSS) hoặc hết giờ */
+    {
+        GpsSnapshot_t gps = {0};
+        uint32_t waitedSec = (now - s_sleepPhaseTick) / HAL_TICKS_PER_SEC;
+        int gotFix;
+
+        GPS_Snapshot(&gps);
+        gotFix = gps.valid && (int32_t)(gps.fixTick - s_sleepPhaseTick) > 0;
+        if (!gotFix && waitedSec < (uint32_t)SLEEP_WAKE_GNSS_SEC) return;
+
+        if (gotFix) {
+            if (s_sleepLat == 0.0 && s_sleepLon == 0.0) {
+                s_sleepLat = gps.lat; /* lúc vào ngủ chưa từng có vị trí */
+                s_sleepLon = gps.lon;
+            } else {
+                double km = SleepDistanceKm(s_sleepLat, s_sleepLon, gps.lat, gps.lon);
+                if (km >= SLEEP_MOVED_KM) {
+                    HAL_LOG("[SLEEP] moved %.0f m from sleep position while ACC off", km * 1000.0);
+                    s_idleStartTick = NonZeroTick(now); /* đếm lại thời gian chờ ngủ */
+                    SleepExit("moved");
+                    return;
+                }
+            }
+        }
+        HAL_LOG("[SLEEP] periodic report: fix=%d after %lus (sats=%d) -> GNSS off, sleep again, next in %ds",
+                gotFix, (unsigned long)waitedSec, gps.satellites, SleepWakePeriodSec());
+        s_sleepReportDue = 1;
+        s_pwrState = PWR_SLEEP;
+        HAL_GNSS_SetPower(0);
+        (void)HAL_OS_SystemSleepEnable(1);
+    }
+}
+
+/** Bản tin định kỳ lúc ngủ mà không có phiên Server: lưu vào điểm mù */
+static void SleepStoreReport(void)
+{
+    char dtBuf[40] = {0};
+    GpsSnapshot_t gps = {0};
+    uint8_t csq = 0;
+    float voltage = NASA_GetVoltage();
+    BackupRecord_t bak;
+
+    s_sleepReportDue = 0;
+    GPS_Snapshot(&gps);
+    BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
+    HAL_NET_GetCsq(&csq);
+    FillBackupFromGps(&bak, &gps, dtBuf, csq, BuildDeviceStatus(&gps, voltage), voltage);
+    HAL_LOG("[SLEEP] no server -> store periodic report to backup");
+    PushBackupIfUsable(&bak);
+    s_lastTrackingTick = NonZeroTick(GetTickNow());
+}
+
 /**
  * Lấy mẫu khi chưa có phiên với Server (đang kết nối lại / chờ ACK / chờ thử
  * lại): chạy quy tắc dừng đỗ + lái xe và lưu vị trí vào bộ đệm điểm mù theo
@@ -499,6 +781,10 @@ static void OfflineSample(void)
     NASA_ParkUpdate(dtBuf, gps.lat, gps.lon, gps.speedKph);
     NASA_WorkUpdate(dtBuf, gps.lat, gps.lon, gps.speedKph);
 
+    /* Đang ngủ: bản tin định kỳ do SleepPoll quyết định (SleepStoreReport khi
+     * không có Server), không đọc CSQ / lưu điểm mù theo chu kỳ dừng */
+    if (NASA_IsSleeping()) return;
+
     voltage = NASA_GetVoltage();
     status = BuildDeviceStatus(&gps, voltage);
     HAL_NET_GetCsq(&csq);
@@ -509,7 +795,7 @@ static void OfflineSample(void)
     {
         uint32_t nowTick = GetTickNow();
         int periodSec = IsAccOn() ? GetAdaptivePeriodSec(gps.speedKph, gps.headingDeg)
-                                  : CFG_GetPeriodStopped();
+                                  : StoppedPeriodSec();
 
         if (s_lastTrackingTick == 0) {
             /* Vừa khởi động: chỉ đặt mốc, không lưu bản ghi thừa khi kết nối bình thường */
@@ -601,7 +887,7 @@ static NasaState_t Handle_StateTracking(void)
     HalDateTime_t rtc;
     char dtBuf[40];
 
-    HAL_OS_TaskSleep(TASK_BASE_SLEEP_TICKS);
+    HAL_OS_TaskSleep(SleepLoopTicks()); /* đang ngủ: 5 s */
 
     if (!CFG_IsDeviceEnabled()) {
         Network_Disconnect();
@@ -613,7 +899,8 @@ static NasaState_t Handle_StateTracking(void)
         return STATE_ERROR_RETRY;
     }
 
-    GPS_AgpsPoll(); /* đang có mạng: tải AGPS nếu lâu chưa bắt được vệ tinh */
+    /* đang có mạng: tải AGPS nếu lâu chưa bắt được vệ tinh (ngủ thì GNSS tắt) */
+    if (!NASA_IsSleeping()) GPS_AgpsPoll();
 
     if (s_requestReplayAll) {
         s_requestReplayAll = 0;
@@ -646,8 +933,15 @@ static NasaState_t Handle_StateTracking(void)
 
         {
             int accOn = IsAccOn();
+            int sleeping = NASA_IsSleeping();
             if (s_prevAccOn != accOn) {
                 s_prevAccOn = accOn;
+                s_trackingImmediateSend = 1;
+                s_immediateMsgType = 2;
+            }
+            if (s_sleepReportDue) {
+                /* Vào ngủ / thức định kỳ lúc ngủ: gửi một bản tin vị trí */
+                s_sleepReportDue = 0;
                 s_trackingImmediateSend = 1;
                 s_immediateMsgType = 2;
             }
@@ -657,12 +951,14 @@ static NasaState_t Handle_StateTracking(void)
                 uint32_t nowTick = GetTickNow();
                 uint32_t periodTicks;
 
-                if (!accOn) periodSec = CFG_GetPeriodStopped();
+                if (!accOn) periodSec = StoppedPeriodSec();
                 else periodSec = GetAdaptivePeriodSec(gpsTemp.speedKph, gpsTemp.headingDeg);
 
                 periodTicks = (uint32_t)periodSec * (uint32_t)HAL_TICKS_PER_SEC;
 
-                if (s_trackingImmediateSend || s_lastTrackingTick == 0 || (nowTick - s_lastTrackingTick) >= periodTicks) {
+                /* Đang ngủ: không gửi theo chu kỳ, chỉ gửi khi SleepPoll yêu cầu */
+                if (s_trackingImmediateSend || s_lastTrackingTick == 0 ||
+                    (!sleeping && (nowTick - s_lastTrackingTick) >= periodTicks)) {
                     uint8_t csq = 0;
                     int msg = s_immediateMsgType;
                     HAL_NET_GetCsq(&csq);
@@ -714,6 +1010,11 @@ void NASA_FeedWatchdog(void)
 {
     s_lastWatchdogFeedTick = GetTickNow();
 }
+int NASA_IsStarted(void)
+{
+    /* NASA_Init nuôi watchdog lần đầu ở cuối hàm */
+    return (s_lastWatchdogFeedTick != 0) ? 1 : 0;
+}
 // Kiểm tra Watchdog
 int NASA_IsWatchdogTimeout(void)
 {
@@ -730,7 +1031,8 @@ int NASA_IsWatchdogTimeout(void)
 static void CheckNetworkDisconnTimeout(void)
 {
     uint32_t now = GetTickNow();
-    if (!CFG_IsDeviceEnabled()) {
+    /* Đang ngủ: mất kết nối là chuyện bình thường (thử lại thưa), không reset */
+    if (!CFG_IsDeviceEnabled() || NASA_IsSleeping()) {
         s_disconnStartTick = 0;
         return;
     }
@@ -786,6 +1088,7 @@ void NASA_RunStep(void)
     uint32_t nowFlush = GetTickNow();
 
     NASA_FeedWatchdog();
+    SleepPoll();
     ApplySimChange();
     CheckNetworkDisconnTimeout();
     if (s_lastCfgFlushTick == 0 ||
@@ -808,15 +1111,24 @@ void NASA_RunStep(void)
         break;
     case STATE_ERROR_RETRY:
     default:
-        HAL_LOG("[NASA/Retry] wait %ds", ERROR_RETRY_DELAY_SEC);
         Network_Disconnect();
         s_loginAcked = 0;
+        /* Bản tin lúc ngủ không gửi được (vừa thử kết nối lại mà lỗi): lưu điểm mù */
+        if (NASA_IsSleeping() && s_sleepReportDue) SleepStoreReport();
         {
-            int sec;
-            for (sec = 0; sec < ERROR_RETRY_DELAY_SEC; sec++) {
+            int wasSleeping = NASA_IsSleeping();
+            uint32_t startTick = GetTickNow();
+
+            HAL_LOG("[NASA/Retry] wait %ds", wasSleeping ? SLEEP_NET_RETRY_SEC : ERROR_RETRY_DELAY_SEC);
+            for (;;) {
+                int waitSec = NASA_IsSleeping() ? SLEEP_NET_RETRY_SEC : ERROR_RETRY_DELAY_SEC;
+                if ((GetTickNow() - startTick) >= SecToTicks((uint32_t)waitSec)) break;
+                if (wasSleeping && !NASA_IsSleeping()) break;     /* vừa thức: kết nối lại ngay */
+                if (NASA_IsSleeping() && s_sleepReportDue) break; /* đến lúc gửi bản tin lúc ngủ */
                 NASA_FeedWatchdog();
                 CheckNetworkDisconnTimeout();
-                HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
+                HAL_OS_TaskSleep(SleepLoopTicks());
+                SleepPoll();
                 OfflineSample();
             }
         }
@@ -828,6 +1140,7 @@ void NASA_RunStep(void)
 void NASA_SetAcc(int accVal)
 {
     s_accRaw = accVal ? 1 : 0;
+    if (accVal) s_accWireSeenOn = 1;
 }
 // Kiểm tra phiên làm việc
 int NASA_IsSessionActive(void)

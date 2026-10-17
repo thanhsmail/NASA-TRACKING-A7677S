@@ -30,5 +30,16 @@ void NASA_OnSimChanged(const char *iccid);
 uint32_t NASA_GetNextMessageId(void);
 void NASA_FeedWatchdog(void);
 int  NASA_IsWatchdogTimeout(void);
+/** 1 = NASA_Init đã xong (đã quét flash backup), task chính đang chạy vòng lặp */
+int  NASA_IsStarted(void);
+
+/** 1 = đang ngủ tiết kiệm ắc quy (GNSS tắt, LED tắt, các task lặp thưa) */
+int  NASA_IsSleeping(void);
+/**
+ * Yêu cầu thức khỏi chế độ ngủ (SMS / lệnh / ngắt ACC). Gọi được từ task khác
+ * và từ ngắt GPIO; reason phải là chuỗi hằng. Đang thức thì hoãn ngủ thêm
+ * SLEEP_EVENT_HOLD_SEC.
+ */
+void NASA_WakeRequest(const char *reason);
 
 #endif /* APP_NASA_H */

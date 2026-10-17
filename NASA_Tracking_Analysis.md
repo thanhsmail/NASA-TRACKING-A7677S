@@ -93,10 +93,10 @@ NASA-TRACKING-A7677S/
 
 | Task | Ưu tiên | Stack | Tạo ở | Chu kỳ / kích hoạt | Công việc |
 |---|---|---|---|---|---|
-| `gnss_task` | 10 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Mỗi URC (1 giây) | Nhận `+CGNSSINFO`, gọi `GPS_OnUrcString()` |
-| `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp liên tục, nghỉ 1 giây mỗi vòng TRACKING | `NASA_RunStep()`: kết nối, đăng nhập, gửi bản tin, phát bù, quy tắc |
-| `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ URC SMS (timeout 1 giây) | Đọc SMS → thực thi lệnh → xóa SMS; gọi `SIM_Poll()` |
-| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | 0,5 giây (100 tick, 200 tick/giây) | Lọc ACC, LED, DOUT, kiểm tra watchdog |
+| `gnss_task` | 10 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Mỗi URC (1 giây), chờ tối đa 5 giây (GNSS tắt khi ngủ: 10 giây) | Nhận `+CGNSSINFO`, gọi `GPS_OnUrcString()`; 60 giây không có URC thì bật lại GNSS; tắt / bật GNSS theo `HAL_GNSS_SetPower()` |
+| `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp liên tục, nghỉ 1 giây mỗi vòng TRACKING (ngủ: 5 giây) | `NASA_RunStep()`: chế độ ngủ, kết nối, đăng nhập, gửi bản tin, phát bù, quy tắc |
+| `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ URC SMS (timeout 1 giây, ngủ: 5 giây) | Đọc SMS → thực thi lệnh → xóa SMS; gọi `SIM_Poll()` |
+| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | 0,5 giây (100 tick, 200 tick/giây); ngủ: 2 giây | Lọc ACC, LED, DOUT, kiểm tra watchdog phần mềm, nuôi watchdog phần cứng; ngắt ACC đánh thức |
 | `fota_task` | 20 | 10 KB | [app_fota.c](app_fota.c) | Chỉ tạo khi có lệnh 33 | Tải và nạp firmware |
 | `agps_task` | 25 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Chỉ tạo khi có yêu cầu AGPS đầu tiên | Gọi `sAPI_GnssAgpsSeviceOpen()` |
 | `ntp_sync` | 130 | — | [app_utils.c](app_utils.c) | Chỉ tạo khi RTC chưa hợp lệ | Hiện **chưa đồng bộ thật** (chỉ in log) |
@@ -127,7 +127,7 @@ graph TD
 
 ## 5. Máy trạng thái `NASA_RunStep()`
 
-[app_nasa.c](app_nasa.c). Mỗi lần gọi: nuôi watchdog, áp dụng đổi SIM nếu có, kiểm tra mất kết nối 15 phút, ghi cấu hình bẩn (mỗi 10 giây), rồi chạy trạng thái hiện tại.
+[app_nasa.c](app_nasa.c). Mỗi lần gọi: nuôi watchdog, `SleepPoll()` (vào / ra chế độ ngủ, mục 15), áp dụng đổi SIM nếu có, kiểm tra mất kết nối 15 phút, ghi cấu hình bẩn (mỗi 10 giây), rồi chạy trạng thái hiện tại.
 
 ```mermaid
 stateDiagram-v2
@@ -355,6 +355,9 @@ Lệnh đến từ SMS ([app_sms.c](app_sms.c)) hoặc Server ([app_network.c](a
 | 37 | Gửi SMS hộ | `na,37,<số>,<nội dung>` |
 | 40 | Khóa / mở khóa cấu hình | `na,40,close|open` — hiện luôn mở (`NASA_LOCK_FEATURE_ENABLE = 0`) |
 | 41 | Khôi phục cài đặt gốc | `na,41` |
+| 42 | Ngủ tiết kiệm ắc quy: bật / tắt, phút chờ trước khi ngủ, phút giữa 2 lần thức | `na,42,1,30,60` / `na,42,0` / `sa,42` → `sa,42 ngu tiet kiem: bat, cho 30 phut, thuc moi 60 phut, dang thuc, acquy 12.6V` |
+
+Mọi lệnh `na` / `sa` hợp lệ (SMS hoặc Server) đều gọi `NASA_WakeRequest()`: thiết bị đang ngủ thì thức, đang thức thì hoãn ngủ thêm 120 s.
 
 ---
 
@@ -363,9 +366,9 @@ Lệnh đến từ SMS ([app_sms.c](app_sms.c)) hoặc Server ([app_network.c](a
 Cấu hình (`AppConfig_t`) lưu ở hai nơi mỗi lần `CFG_Save()`:
 
 1. Flash rời sector 0 và 1: cả struct + CRC (`CFG_FLASH_MAGIC` = `NASA`).
-2. File `C:/rv26.cfg` dạng `key=value`: `host port plate pmove pstop acc spdth silent dout ph1 ph2 ph3 park rsd rsh lock en days dname dlic dlog lmday gnss`.
+2. File `C:/rv26.cfg` dạng `key=value`: `host port plate pmove pstop acc spdth silent dout ph1 ph2 ph3 park rsd rsh lock en days dname dlic dlog lmday gnss slp slpd slpw`.
 
-Khi nạp, flash được ưu tiên; nếu cả hai sector sai CRC (ví dụ struct vừa thêm trường như `gnssMode`) thì đọc file, file cũng không có thì dùng mặc định.
+Khi nạp, flash được ưu tiên; nếu cả hai sector sai CRC (ví dụ struct vừa thêm trường như `gnssMode`, hay 3 trường ngủ `sleepEnabled` / `sleepDelaySec` / `sleepWakeSec`) thì đọc file, file cũng không có thì dùng mặc định. File cũ chưa có `slp*` thì lấy mặc định trong [app_config.h](app_config.h); giá trị ngoài khoảng cho phép cũng về mặc định.
 
 ---
 
@@ -380,12 +383,91 @@ Thử lại tối đa 3 lần, cách 10 s. Kết quả báo về nguồn gửi l
 
 ---
 
-## 15. Tự phục hồi
+## 15. Ngủ tiết kiệm ắc quy xe
+
+Mục đích: xe tắt máy để lâu không làm cạn bình. Logic ở `SleepPoll()` trong [app_nasa.c](app_nasa.c), gọi đầu mỗi `NASA_RunStep()` và mỗi vòng chờ thử kết nối lại. Phần cứng đi qua HAL: `HAL_OS_SystemSleepEnable()` (`sAPI_SystemSleepSet`), `HAL_GPIO_WakeupEnable()` (`sAPI_GpioConfig` + `sAPI_GpioWakeupEnable`), `HAL_GNSS_SetPower()` (gnss_task tắt / bật chip).
+
+```mermaid
+stateDiagram-v2
+    [*] --> AWAKE
+    AWAKE --> SLEEP : ACC tắt + đứng yên ≥ thời gian chờ (30 phút, ắc quy yếu 60 s), đã phát bù xong, hết thời gian giữ thức
+    SLEEP --> SLEEP_FIX : đến chu kỳ thức (60 phút, ắc quy yếu 6 giờ)
+    SLEEP_FIX --> SLEEP : có fix mới hoặc chờ 90 s → gửi !NASA,2, tắt GNSS
+    SLEEP --> AWAKE : ACC bật / SMS / lệnh / tắt lệnh 42 / FOTA
+    SLEEP_FIX --> AWAKE : xe cách chỗ bắt đầu ngủ ≥ 150 m, hoặc như trên
+```
+
+| Điều kiện | Giá trị | Ở đâu |
+|---|---|---|
+| Bật / tắt | Mặc định bật | `SLEEP_ENABLE_DEFAULT`, lệnh 42 |
+| Thời gian chờ trước khi ngủ | 30 phút (1 phút đến 24 giờ) | `SLEEP_DELAY_SEC_DEFAULT`, lệnh 42 |
+| Chu kỳ thức gửi vị trí | 60 phút (5 phút đến 24 giờ) | `SLEEP_WAKE_PERIOD_SEC_DEFAULT`, lệnh 42 |
+| Bật GNSS chờ fix mỗi lần thức | Tối đa 90 s; 0 = gửi vị trí cũ, không bật GNSS | `SLEEP_WAKE_GNSS_SEC` |
+| Giữ thức sau SMS / lệnh / ngắt ACC giả | 120 s | `SLEEP_EVENT_HOLD_SEC` |
+| Ắc quy yếu | Dưới 11,0 V 3 lần đo liên tiếp (mỗi 10 s, chỉ đo khi ACC tắt) → ngủ sau 60 s, thức mỗi 6 giờ; hết yếu khi lên 11,3 V | `SLEEP_LOW_BATT_*` |
+| Xe bị dời khi đang ngủ | ≥ 150 m so với lúc bắt đầu ngủ (đo ở lần thức định kỳ) → thức hẳn, đếm lại thời gian chờ | `SLEEP_MOVED_KM` |
+
+Chỉ ngủ khi tin được dây ACC: `accMode` 1, hoặc 2 và dây đã từng báo ON từ lúc khởi động. Xe không đấu ACC (`accMode` 0) không bao giờ ngủ, vì khi GNSS tắt không còn gì phát hiện xe chạy. Đang có FOTA, thiết bị bị tắt (`en=0`) hoặc xe đang chạy theo GPS cũng không ngủ.
+
+Khi ngủ:
+
+| Thành phần | Thay đổi |
+|---|---|
+| GNSS | Tắt (`HAL_GNSS_SetPower(0)`); bật lại trong lần thức định kỳ và khi thức hẳn. Dữ liệu GPS giữ nguyên giá trị cuối |
+| Module | Cho phép sleep hệ thống; thức khi hết hẹn giờ task, có dữ liệu mạng / SMS, hoặc ngắt ACC. Module không ngủ khi đang cắm USB |
+| LED | Tắt cả 3 (như chế độ im lặng) |
+| Kết nối Server | Giữ nguyên để nhận lệnh. Mất kết nối: 10 phút mới thử lại (`SLEEP_NET_RETRY_SEC`); bản tin định kỳ không gửi được thì lưu điểm mù |
+| Bản tin | Một `!NASA,2` lúc vào ngủ, một mỗi lần thức định kỳ, một lúc thức hẳn; không gửi theo chu kỳ dừng 300 s, không lưu điểm mù theo chu kỳ |
+| AGPS | Không tải |
+| Vòng lặp | `nasa_reporter` và `SmsRecvTask` 5 s / vòng, `gpio_status` 2 s / vòng, `gnss_task` 10 s / vòng |
+
+Đánh thức:
+
+| Nguồn | Cách | Độ trễ |
+|---|---|---|
+| ACC bật | Ngắt cạnh xuống chân ACC (`AccWakeIsr`, tắt sleep hệ thống ngay trong ngắt như demo SDK); dự phòng: `gpio_status` đọc chân mỗi 2 s, thấy mức bật là gọi `NASA_WakeRequest()` không chờ lọc nhiễu | ≤ 5 s đến khi `nasa_reporter` xử lý |
+| SMS / lệnh Server | `CMD_Execute()` gọi `NASA_WakeRequest()` cho mọi lệnh `na` / `sa`; SMS không phải lệnh chỉ làm module thức tạm | ≤ 5 s |
+| Định kỳ | `SleepPoll()` đếm chu kỳ thức | — |
+
+Watchdog và bộ đếm treo khi ngủ:
+
+| Cơ chế | Vì sao không reset nhầm |
+|---|---|
+| Watchdog phần cứng 16 s | `gpio_status` vẫn nuôi mỗi 2 s |
+| `GNSS_TASK_HANG_SEC` 120 s | `gnss_task` vẫn chạy vòng mỗi ≤ 10 s khi GNSS tắt; tắt có chủ đích nên không tính là im lặng (không tự bật lại GNSS) |
+| `nasa_reporter` 180 s | Vòng ngủ 5 s, mỗi vòng `NASA_FeedWatchdog()`; vòng chờ thử lại 10 phút cũng nuôi mỗi 5 s |
+| `CheckNetworkDisconnTimeout` 15 phút | Bỏ qua khi đang ngủ; đếm lại từ đầu lúc thức |
+
+Log (lọc theo `[SLEEP]`):
+
+```
+[SLEEP] ACC off & still: sleep after 1800s
+[SLEEP] enter: ACC off & still 1800s, V=12.4, server=1 -> GNSS off, LED off, wake every 3600s
+[SLEEP] system sleep enable ret=0 (now=1)
+[GNSS] power off (sleep)
+[SLEEP] periodic wake #1: GNSS on, wait fix <= 90s
+[GNSS] power on (wake)
+[SLEEP] periodic report: fix=1 after 23s (sats=9) -> GNSS off, sleep again, next in 3600s
+[SLEEP] battery low 10.8V < 11.0V -> sleep after 60s, wake every 21600s
+[SLEEP] moved 420 m from sleep position while ACC off
+[SLEEP] exit: ACC interrupt after 7260s asleep (2 periodic wake), V=12.3
+[SLEEP] no server -> store periodic report to backup
+[GPIO] wakeup pin 37 edge 2 config rc=0 wakeup rc=0
+```
+
+Chưa kiểm trên thiết bị: chân pad 37 có hỗ trợ đánh thức hay không (xem dòng `[GPIO] wakeup` lúc khởi động; lỗi thì vẫn còn đọc chân mỗi 2 s), và dòng tiêu thụ thực tế khi ngủ (cần rút USB khi đo).
+
+---
+
+## 16. Tự phục hồi
 
 | Điều kiện | Hành động | Ở đâu |
 |---|---|---|
 | `nasa_reporter` không nuôi watchdog 180 s | Reset | `gpio_status` |
-| Mất phiên Server liên tục 15 phút | Reset | `CheckNetworkDisconnTimeout` |
+| Mất phiên Server liên tục 15 phút (không tính lúc đang ngủ) | Reset | `CheckNetworkDisconnTimeout` |
+| `gpio_status` / cả ứng dụng treo, hoặc `gnss_task` không chạy vòng nào 120 s (`GNSS_TASK_HANG_SEC`) | Watchdog phần cứng 16 s (`HW_WDT_PERIOD_REG`) reset; chỉ bật sau `NASA_Init` | [app_indication.c](app_indication.c), `HAL_OS_HwWatchdog*` |
+| Không có URC GNSS nào 60 s (`GNSS_NO_URC_RESTART_SEC`) | Tắt / bật lại GNSS, cấu hình lại từ đầu | `gnss_task` |
+| Không nhận byte nào từ Server `SERVER_SILENT_RECONNECT_SEC` giây (hiện = 0: tắt, vì Server chỉ trả ACK đăng nhập nên cứ 10 phút lại ngắt kết nối vô cớ) | Ngắt socket → STATE_ERROR_RETRY → kết nối và đăng nhập lại | `Network_RecvPoll` |
 | Đến giờ lịch reset (lệnh 32) | Reset | `Handle_StateTracking` |
 | `abort()` | Reset | [sc_application.c](sc_application.c) |
 | SIM không sẵn sàng 2 lần hỏi (mỗi 5 s), quá 30 s | Tắt / bật sóng (CFUN 0/1) mỗi 60 s | [app_sim.c](app_sim.c) |
@@ -393,7 +475,7 @@ Thử lại tối đa 3 lần, cách 10 s. Kết quả báo về nguồn gửi l
 
 ---
 
-## 16. Hạn chế đã biết
+## 17. Hạn chế đã biết
 
 | Vấn đề | Ảnh hưởng |
 |---|---|

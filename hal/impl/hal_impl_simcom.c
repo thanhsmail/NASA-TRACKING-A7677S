@@ -13,6 +13,7 @@
 #include "simcom_gpio.h"
 #include "simcom_gps.h"
 #include "sc_spi.h"
+#include "simcom_wtd.h"
 
 #include "hal_log.h"
 #include "hal_os.h"
@@ -82,6 +83,45 @@ int HAL_GPIO_Read(int pin)
     return -1;
 }
 
+static volatile HalGpioWakeCb_t s_gpioWakeCb = NULL;
+
+static void GpioIsrTrampoline(void)
+{
+    HalGpioWakeCb_t cb = s_gpioWakeCb;
+    if (cb) cb();
+}
+
+static void GpioWakeTrampoline(void)
+{
+    HalGpioWakeCb_t cb = s_gpioWakeCb;
+    /* Theo demo_gpio.c: muon o lai trang thai thuc sau khi duoc danh thuc thi
+     * phai tat sleep he thong; task NASA se bat lai neu van du dieu kien ngu */
+    sAPI_SystemSleepSet(SC_SYSTEM_SLEEP_DISABLE);
+    if (cb) cb();
+}
+
+int HAL_GPIO_WakeupEnable(int pin, HalGpioEdge_t edge, HalGpioWakeCb_t cb)
+{
+    SC_GPIOConfiguration cfg;
+    SC_GPIOTransitionType ed = (edge == HAL_GPIO_EDGE_RISE) ? SC_GPIO_RISE_EDGE :
+                               (edge == HAL_GPIO_EDGE_FALL) ? SC_GPIO_FALL_EDGE :
+                                                              SC_GPIO_TWO_EDGE;
+    SC_GPIOReturnCode rc1, rc2;
+
+    s_gpioWakeCb = cb;
+    cfg.pinDir  = SC_GPIO_IN_PIN;
+    cfg.initLv  = 1;
+    cfg.pinPull = SC_GPIO_PULLUP_ENABLE;
+    cfg.pinEd   = ed;
+    cfg.isr     = GpioIsrTrampoline;
+    cfg.wu      = GpioWakeTrampoline;
+    rc1 = sAPI_GpioConfig(pin, cfg);
+    rc2 = sAPI_GpioWakeupEnable(pin, ed);
+    HAL_LOG_Print("[GPIO] wakeup pin %d edge %d config rc=%d wakeup rc=%d",
+                  pin, (int)ed, (int)rc1, (int)rc2);
+    return (rc1 == SC_GPIORC_OK && rc2 == SC_GPIORC_OK) ? 0 : -1;
+}
+
 /* ========================== HAL_OS ======================================== */
 
 int HAL_OS_TaskCreate(HalTaskRef_t *ref, void *stack, uint32_t stackSize,
@@ -102,6 +142,31 @@ void HAL_OS_TaskSleep(uint32_t ticks)
 void HAL_OS_SysReset(void)
 {
     sAPI_SysReset();
+}
+
+int HAL_OS_HwWatchdogStart(uint8_t periodReg)
+{
+    /* Trinh tu theo sc_demo/src/demo_wtd.c: dat chu ky, bat fault wake, bat
+     * watchdog, roi cho an 1 lan de chu ky moi co hieu luc */
+    int ret = sAPI_SetWtdTimeOutPeriod(periodReg);
+    ret |= sAPI_FalutWakeEnable(1);
+    ret |= sAPI_SoftWtdEnable(1);
+    ret |= sAPI_FeedWtd();
+    HAL_LOG_Print("[WDT] hardware watchdog start period=0x%02X ret=%d", periodReg, ret);
+    return (ret == 0) ? 0 : -1;
+}
+
+void HAL_OS_HwWatchdogFeed(void)
+{
+    (void)sAPI_FeedWtd();
+}
+
+int HAL_OS_SystemSleepEnable(int enable)
+{
+    int ret = sAPI_SystemSleepSet(enable ? SC_SYSTEM_SLEEP_ENABLE : SC_SYSTEM_SLEEP_DISABLE);
+    HAL_LOG_Print("[SLEEP] system sleep %s ret=%d (now=%d)", enable ? "enable" : "disable",
+                  ret, (int)sAPI_SystemSleepGet());
+    return (ret == 0) ? 0 : -1;
 }
 
 uint32_t HAL_OS_GetTick(void)
@@ -482,14 +547,18 @@ int HAL_GNSS_AgpsRequest(void)
     return 0;
 }
 
-static void sTask_GnssUrcListener(void *argv)
-{
-    SIM_MSG_T msg;
-    (void)argv;
+/* Giam sat GNSS: chip gui +CGNSSINFO moi giay (ke ca khi khong co fix), nen
+ * im lang lau = chip / driver GNSS ngung: tat roi bat lai GNSS */
+static volatile int      s_gnssNoUrcRestartSec = 60;
+static volatile uint32_t s_gnssLastUrcTick = 0;
+static volatile uint32_t s_gnssTaskAliveTick = 0;
+static int               s_gnssRestartCount = 0;
 
-    HAL_LOG("[GNSS] Task Listener Start");
-    /* Trinh tu theo A76xx GNSS Application Note: bat nguon 1 lan (bat 2 lan lam
-     * hong nap dong), moi lenh cach nhau ~100 ms de chip kip tra loi */
+/** Bat GNSS va cau hinh lai tu dau (dung luc khoi dong va khi khoi phuc) */
+static void GnssPowerOnAndConfigure(void)
+{
+    /* Trinh tu theo A76xx GNSS Application Note: bat nguon 1 lan (bat 2 lan lien
+     * tiep lam hong nap dong), moi lenh cach nhau ~100 ms de chip kip tra loi */
     sAPI_GnssPowerStatusSet(SC_GNSS_POWER_ON);
     sAPI_TaskSleep(100);
     s_gnssStarted = 1;
@@ -500,16 +569,105 @@ static void sTask_GnssUrcListener(void *argv)
     (void)GnssApplyStaticHold();
     sAPI_TaskSleep(20);
     sAPI_GnssInfoGet(1); /* Bat URC dinh ky 1s (+CGNSSINFO) */
+}
+
+static void GnssRestart(uint32_t silentSec)
+{
+    s_gnssRestartCount++;
+    HAL_LOG_Print("[GNSS] no URC for %lus -> restart GNSS (#%d)",
+                  (unsigned long)silentSec, s_gnssRestartCount);
+    sAPI_GnssInfoGet(0);
+    s_gnssStarted = 0;
+    sAPI_GnssPowerStatusSet(SC_GNSS_POWER_OFF);
+    sAPI_TaskSleep(400); /* 2 s cho chip tat han */
+    GnssPowerOnAndConfigure();
+}
+
+/* Tat / bat GNSS theo yeu cau (ngu tiet kiem ac quy): chi gnss_task goi lenh chip */
+static volatile int s_gnssWantOn = 1;
+
+static void GnssPowerOff(void)
+{
+    sAPI_GnssInfoGet(0);
+    s_gnssStarted = 0;
+    sAPI_GnssPowerStatusSet(SC_GNSS_POWER_OFF);
+}
+
+void HAL_GNSS_SetPower(int on)
+{
+    s_gnssWantOn = on ? 1 : 0;
+}
+
+int HAL_GNSS_IsPowered(void)
+{
+    return s_gnssStarted ? 1 : 0;
+}
+
+int HAL_GNSS_SetNoUrcRestartSec(int sec)
+{
+    if (sec < 10) return -1;
+    s_gnssNoUrcRestartSec = sec;
+    return 0;
+}
+
+uint32_t HAL_GNSS_GetTaskAliveAgeSec(void)
+{
+    uint32_t alive = s_gnssTaskAliveTick;
+    uint32_t now = sAPI_GetTicks();
+    if (alive == 0 || now < alive) return 0; /* chua chay / vua cap nhat */
+    return (now - alive) / 200u;
+}
+
+static void sTask_GnssUrcListener(void *argv)
+{
+    SIM_MSG_T msg;
+    (void)argv;
+
+    HAL_LOG("[GNSS] Task Listener Start");
+    GnssPowerOnAndConfigure();
+    s_gnssLastUrcTick = sAPI_GetTicks();
 
     while (1) {
+        uint32_t now;
         memset(&msg, 0, sizeof(msg));
-        if (sAPI_MsgQRecv(s_gnssUrcMsgQ, &msg, SC_SUSPEND) == SC_SUCCESS) {
+        /* Cho toi da 5 s thay vi cho mai, de con kiem tra GNSS im lang; GNSS
+         * dang tat (ngu) thi 10 s, van du nhanh so voi GNSS_TASK_HANG_SEC */
+        if (sAPI_MsgQRecv(s_gnssUrcMsgQ, &msg, (s_gnssStarted ? 5u : 10u) * 200u) == SC_SUCCESS) {
             if (msg.arg3) {
                 const char *str = (const char *)msg.arg3;
                 HAL_LOG("[GNSS/URC] %s", str);
                 GPS_OnUrcString(str);
                 sAPI_Free(msg.arg3);
+                s_gnssLastUrcTick = sAPI_GetTicks();
+                if (s_gnssRestartCount > 0) {
+                    HAL_LOG_Print("[GNSS] URC back after %d restart(s)", s_gnssRestartCount);
+                    s_gnssRestartCount = 0;
+                }
             }
+        }
+
+        now = sAPI_GetTicks();
+        s_gnssTaskAliveTick = (now != 0) ? now : 1;
+
+        if (!s_gnssWantOn) {
+            /* Doi AGPS tai xong moi tat (AGPS can GNSS dang bat) */
+            if (s_gnssStarted && !s_agpsBusy && !s_agpsRequested) {
+                HAL_LOG_Print("[GNSS] power off (sleep)");
+                GnssPowerOff();
+            }
+            s_gnssLastUrcTick = now; /* tat co chu dich: khong tinh la im lang */
+            continue;
+        }
+        if (!s_gnssStarted) {
+            HAL_LOG_Print("[GNSS] power on (wake)");
+            GnssPowerOnAndConfigure();
+            s_gnssLastUrcTick = sAPI_GetTicks();
+            continue;
+        }
+
+        if ((now - s_gnssLastUrcTick) >= (uint32_t)s_gnssNoUrcRestartSec * 200u) {
+            GnssRestart((now - s_gnssLastUrcTick) / 200u);
+            s_gnssLastUrcTick = sAPI_GetTicks();
         }
     }
 }

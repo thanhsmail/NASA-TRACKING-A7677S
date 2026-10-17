@@ -9,6 +9,7 @@
 #include "hal/hal_os.h"
 #include "hal/hal_gpio.h"
 #include "hal/hal_net.h"
+#include "hal/hal_gnss.h"
 #include "app_config.h"
 #include "app_gps.h"
 #include "app_cfg.h"
@@ -21,17 +22,25 @@
 static HalTaskRef_t s_gpioStatusTaskRef = NULL;
 static uint8_t      s_gpioStatusTaskStack[1024 * 4];
 
+/* Ngắt cạnh xuống chân ACC (active-low: ACC bật) đánh thức module khi đang ngủ */
+static void AccWakeIsr(void)
+{
+    NASA_WakeRequest("ACC interrupt");
+}
+
 static void sTask_GpioStatusIndication(void *argv)
 {
     int blinkPhase    = 0;
     int blinkSlow     = 0;
     uint8_t last_csq  = 0;
-    int csq_poll_cnt  = 0;
+    int csq_poll_cnt  = 300; /* đọc CSQ ngay vòng đầu */
 
     int lastRawAcc    = -1;
     int accDebounce   = 0;
     int s_accVal      = 0;
     int accReadErr    = 0;
+    int hwWdtOn       = 0;
+    int gnssHangLogged = 0;
 
     (void)argv;
 
@@ -44,13 +53,23 @@ static void sTask_GpioStatusIndication(void *argv)
     }
     HAL_GPIO_Config(GPIO_DOUT,   HAL_GPIO_OUT, HAL_GPIO_PULL_UP);
     HAL_GPIO_Config(GPIO_ACC_IN, HAL_GPIO_IN,  HAL_GPIO_PULL_UP);
+    /* Chân không hỗ trợ đánh thức thì vẫn còn đọc chân mỗi 2 s khi ngủ (bên dưới) */
+    if (HAL_GPIO_WakeupEnable(GPIO_ACC_IN, HAL_GPIO_EDGE_FALL, AccWakeIsr) != 0) {
+        HAL_LOG("[ACC] wakeup interrupt not available on pin %d, polling only", GPIO_ACC_IN);
+    }
     HAL_GPIO_Write(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
 
     while (1) {
-        int silent     = CFG_GetSilentMode();
+        int sleeping   = NASA_IsSleeping();
+        int silent     = CFG_GetSilentMode() || sleeping; /* ngủ: tắt hết LED */
         int accLevel   = HAL_GPIO_Read(GPIO_ACC_IN);
         /* Active-low: GPIO_ACC_IN LOW = ACC ON */
         int currentAcc = (accLevel == 0) ? 1 : 0;
+
+        /* Đang ngủ mà chân ACC báo bật: thức ngay, không chờ lọc nhiễu 6 vòng x 2 s */
+        if (sleeping && accLevel >= 0 && currentAcc && !s_accVal) {
+            NASA_WakeRequest("ACC pin");
+        }
 
         if (accLevel < 0) {
             /* Đọc lỗi: giữ nguyên trạng thái ACC cũ, không coi là ACC OFF */
@@ -81,7 +100,9 @@ static void sTask_GpioStatusIndication(void *argv)
             accDebounce = 1;
         }
 
-        if (last_csq == 0 || ++csq_poll_cnt >= 300) {
+        /* Có sóng: đọc CSQ mỗi 150 s; mất sóng: mỗi 5 s (trước đây mỗi vòng 0,5 s,
+         * lệnh đọc CSQ chậm thì làm trễ việc nuôi watchdog) */
+        if (++csq_poll_cnt >= ((last_csq == 0) ? 10 : 300)) {
             HAL_NET_GetCsq(&last_csq);
             csq_poll_cnt = 0;
         }
@@ -122,8 +143,26 @@ static void sTask_GpioStatusIndication(void *argv)
             HAL_OS_SysReset();
         }
 
+#if HW_WDT_ENABLE
+        /* Watchdog phần cứng: bắt trường hợp chính task này (hoặc cả ứng dụng)
+         * treo, khi watchdog phần mềm ở trên không còn chạy được */
+        if (!hwWdtOn) {
+            if (NASA_IsStarted() && HAL_OS_HwWatchdogStart(HW_WDT_PERIOD_REG) == 0) {
+                hwWdtOn = 1;
+            }
+        } else if (HAL_GNSS_GetTaskAliveAgeSec() < GNSS_TASK_HANG_SEC) {
+            HAL_OS_HwWatchdogFeed();
+        } else if (!gnssHangLogged) {
+            /* gnss_task treo (không tự khởi động lại GNSS được): ngừng nuôi để reset */
+            HAL_LOG("[WDT] gnss_task hang %lus -> stop feeding, hardware reset",
+                    (unsigned long)HAL_GNSS_GetTaskAliveAgeSec());
+            gnssHangLogged = 1;
+        }
+#endif
+
         HAL_GPIO_Write(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
-        HAL_OS_TaskSleep(100);
+        /* Ngủ: 2 s / vòng, vẫn nuôi watchdog phần cứng (16 s) đủ dày */
+        HAL_OS_TaskSleep(sleeping ? SLEEP_GPIO_LOOP_TICKS : 100);
     }
 }
 

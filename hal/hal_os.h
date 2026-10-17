@@ -36,6 +36,25 @@ int HAL_OS_TaskCreate(HalTaskRef_t *ref, void *stack, uint32_t stackSize,
 
 void HAL_OS_TaskSleep(uint32_t ticks);
 void HAL_OS_SysReset(void);
+
+/**
+ * @brief  Bat watchdog phan cung cua module (simcom_wtd.h). Sau khi bat phai
+ *         goi HAL_OS_HwWatchdogFeed() thuong xuyen hon chu ky da dat, neu
+ *         khong module tu reset. Khong co cach tat lai trong luc chay app.
+ * @param  periodReg gia tri thanh ghi chu ky (bit 3:0); 0x04 = 16 giay theo demo SDK
+ * @return 0 = OK, -1 = loi
+ */
+int  HAL_OS_HwWatchdogStart(uint8_t periodReg);
+void HAL_OS_HwWatchdogFeed(void);
+
+/**
+ * @brief  Cho phep (1) / cam (0) module vao sleep he thong (sAPI_SystemSleepSet).
+ *         Khi cho phep, module tu ngu luc moi task deu dang cho va thuc khi het
+ *         hen gio cua task, co du lieu mang / SMS hoac ngat GPIO danh thuc.
+ *         Module khong ngu khi dang cam USB.
+ * @return 0 = OK, -1 = loi
+ */
+int  HAL_OS_SystemSleepEnable(int enable);
 uint32_t HAL_OS_GetTick(void);
 HalPowerUpReason_t HAL_OS_GetPowerUpReason(void);
 

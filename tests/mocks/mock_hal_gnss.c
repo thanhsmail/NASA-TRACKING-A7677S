@@ -62,3 +62,25 @@ int HAL_GNSS_AgpsRequest(void)
 {
     return 0;
 }
+
+int HAL_GNSS_SetNoUrcRestartSec(int sec)
+{
+    return (sec >= 10) ? 0 : -1;
+}
+
+uint32_t HAL_GNSS_GetTaskAliveAgeSec(void)
+{
+    return 0;
+}
+
+static int s_mockGnssPower = 1;
+
+void HAL_GNSS_SetPower(int on)
+{
+    s_mockGnssPower = on ? 1 : 0;
+}
+
+int HAL_GNSS_IsPowered(void)
+{
+    return s_mockGnssPower;
+}

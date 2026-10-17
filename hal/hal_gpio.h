@@ -47,6 +47,24 @@ void HAL_GPIO_Write(int pin, int level);
  */
 int HAL_GPIO_Read(int pin);
 
+/** Canh tin hieu dung cho ngat / danh thuc */
+typedef enum {
+    HAL_GPIO_EDGE_RISE = 1,
+    HAL_GPIO_EDGE_FALL = 2,
+    HAL_GPIO_EDGE_BOTH = 3
+} HalGpioEdge_t;
+
+/** Ham goi lai trong ngu canh ngat: chi duoc dat co, khong log / khong cho */
+typedef void (*HalGpioWakeCb_t)(void);
+
+/**
+ * @brief  Cau hinh chan input (pull-up) co ngat theo canh va cho phep danh thuc
+ *         module khi dang sleep (sAPI_GpioWakeupEnable). Ngat danh thuc tat luon
+ *         sleep he thong (theo demo SDK) de task kip xu ly.
+ * @return 0 = OK, -1 = SDK tu choi (chan khong ho tro danh thuc)
+ */
+int HAL_GPIO_WakeupEnable(int pin, HalGpioEdge_t edge, HalGpioWakeCb_t cb);
+
 #ifdef __cplusplus
 }
 #endif

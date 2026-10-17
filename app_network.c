@@ -13,6 +13,7 @@
 #include "app_nasa.h"
 #include "app_network.h"
 #include "app_fota.h"
+#include "app_utils.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -25,6 +26,10 @@ char *strtok_r(char *str, const char *delim, char **saveptr);
  * HAL_NET_* quan ly fd thuc, day chi track trang thai.
  */
 static int s_isConnected = 0;
+
+/* Tick lần cuối nhận được byte từ Server (hoặc lúc vừa kết nối), để phát hiện
+ * kết nối nửa mở: gửi vẫn "thành công" vào bộ đệm TCP nhưng không tới Server */
+static uint32_t s_lastRxTick = 0;
 
 /* Buffer tích luỹ: TCP là stream, một dòng lệnh/ACK có thể bị chia nhiều segment */
 static char s_rxAcc[NASA_SERVER_CMD_BUF_SIZE * 2];
@@ -100,6 +105,7 @@ int Network_Connect(const char *host, int port)
 
     s_isConnected = 1;
     s_rxAccLen = 0;
+    s_lastRxTick = GetTickNow();
     EnsureNonBlocking();
     HAL_LOG("[Network] Connected OK");
     return 0;
@@ -237,6 +243,7 @@ int Network_RecvPoll(void)
                              NASA_SERVER_RECV_TIMEOUT_US);
     if (recv_len > 0) {
         recvbuf[recv_len] = '\0';
+        s_lastRxTick = GetTickNow();
         HAL_LOG("[Network] Recv %d bytes: %s", recv_len, recvbuf);
         AccumulateAndDispatch(recvbuf, recv_len);
         return 0;
@@ -246,6 +253,17 @@ int Network_RecvPoll(void)
         /* Binh thuong: Khong co byte mới, neu con dong lenh thieu \r\n thì flush */
         if (s_rxAccLen > 0)
             FlushAccAsCompleteLine();
+#if SERVER_SILENT_RECONNECT_SEC > 0
+        /* Server chỉ trả ACK đăng nhập: im quá lâu thì coi kết nối đã chết
+         * (NAT nhà mạng cắt mà không báo), ngắt để kết nối và đăng nhập lại */
+        if ((GetTickNow() - s_lastRxTick) >= (uint32_t)SERVER_SILENT_RECONNECT_SEC * HAL_TICKS_PER_SEC) {
+            HAL_LOG("[Network] No data from Server for %ds -> reconnect", SERVER_SILENT_RECONNECT_SEC);
+            HAL_NET_Disconnect();
+            s_isConnected = 0;
+            s_rxAccLen = 0;
+            return 1;
+        }
+#endif
         return 0;
     }
 

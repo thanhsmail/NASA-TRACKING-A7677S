@@ -185,6 +185,9 @@ Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản c�
 |---|---|
 | `nasa_reporter` không chạy vòng nào trong 180 giây | `gpio_status` reset thiết bị |
 | Mất kết nối Server liên tục 15 phút | Reset thiết bị |
+| `gpio_status` (hoặc cả ứng dụng) treo, hoặc `gnss_task` không chạy vòng nào 120 giây | Watchdog phần cứng 16 giây reset module (bật sau khi khởi tạo xong) |
+| Không nhận được dòng GNSS nào 60 giây | Tắt / bật lại GNSS |
+| Không nhận được byte nào từ Server 10 phút | Ngắt và kết nối, đăng nhập lại |
 | Gọi `abort()` | Reset thiết bị |
 | Đến giờ trong lịch reset (lệnh 32) | Reset thiết bị |
 | SIM không sẵn sàng 2 lần hỏi liên tiếp (mỗi 5 giây), kéo dài quá 30 giây | Tắt / bật sóng (CFUN 0/1) mỗi 60 giây để module đọc lại khe SIM |
