@@ -27,6 +27,9 @@ typedef struct {
     int      driverLoggedIn;
     int      lastMday;          /* Ngày reset odometer gần nhất */
     int      gnssMode;          /* cmd 3: 1=GPS+BDS+QZSS, 2=BDS, 3=GPS+QZSS */
+    int      sleepEnabled;      /* cmd 42: ngủ tiết kiệm ắc quy khi ACC tắt */
+    int      sleepDelaySec;     /* cmd 42: ACC tắt + đứng yên bao lâu thì ngủ */
+    int      sleepWakeSec;      /* cmd 42: đang ngủ thì bao lâu thức gửi vị trí */
 } AppConfig_t;
 
 typedef struct {
@@ -65,6 +68,9 @@ int         CFG_IsDriverLoggedIn(void);
 const char *CFG_GetDriverName(void);
 const char *CFG_GetDriverLicense(void);
 const char *CFG_GetPhone(int index); /* 1..3 */
+int         CFG_GetSleepEnabled(void);
+int         CFG_GetSleepDelaySec(void);
+int         CFG_GetSleepWakeSec(void);
 
 int  CFG_IsAuthPhone(const char *phone);
 int  CFG_CanChangeProtected(const char *src, const char *fromPhone);
@@ -82,6 +88,8 @@ void CFG_SetParkConfirmSec(int sec);
 void CFG_SetResetSchedule(int days, int hour);
 void CFG_SetLocked(int locked);
 void CFG_SetDeviceEnabled(int enabled);
+/** Ngủ tiết kiệm ắc quy (lệnh 42). delaySec / wakeSec < 0 = giữ nguyên; ngoài khoảng cho phép thì kẹp lại */
+void CFG_SetSleep(int enabled, int delaySec, int wakeSec);
 void CFG_SetDriver(const char *name, const char *license, int loggedIn);
 void CFG_FlushDirty(void); /* flush deferred driver/config dirty flag */
 

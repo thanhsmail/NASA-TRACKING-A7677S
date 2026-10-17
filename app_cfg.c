@@ -53,6 +53,9 @@ static void CFG_SetDefaults(void)
     s_cfg.driverLoggedIn   = 0;
     s_cfg.lastMday         = 0;
     s_cfg.gnssMode         = GNSS_MODE_DEFAULT;
+    s_cfg.sleepEnabled     = SLEEP_ENABLE_DEFAULT;
+    s_cfg.sleepDelaySec    = SLEEP_DELAY_SEC_DEFAULT;
+    s_cfg.sleepWakeSec     = SLEEP_WAKE_PERIOD_SEC_DEFAULT;
 }
 
 static void TrimInPlace(char *s)
@@ -117,6 +120,12 @@ static void ApplyKeyValue(const char *key, const char *val)
         s_cfg.lastMday = atoi(val);
     } else if (strcmp(key, "gnss") == 0) {
         s_cfg.gnssMode = atoi(val);
+    } else if (strcmp(key, "slp") == 0) {
+        s_cfg.sleepEnabled = atoi(val);
+    } else if (strcmp(key, "slpd") == 0) {
+        s_cfg.sleepDelaySec = atoi(val);
+    } else if (strcmp(key, "slpw") == 0) {
+        s_cfg.sleepWakeSec = atoi(val);
     }
 }
 
@@ -324,14 +333,16 @@ int CFG_Save(void)
     len = snprintf(s_saveBuf, sizeof(s_saveBuf),
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
-                   "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\ngnss=%d\n",
+                   "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\ngnss=%d\n"
+                   "slp=%d\nslpd=%d\nslpw=%d\n",
                    s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate,
                    s_cfg.periodMovingSec, s_cfg.periodStoppedSec, s_cfg.accMode, s_cfg.speedThreshKph,
                    s_cfg.silentMode, s_cfg.doutOn, s_cfg.phone1, s_cfg.phone2, s_cfg.phone3,
                    s_cfg.parkConfirmSec, s_cfg.resetEveryDays, s_cfg.resetAtHour,
                    s_cfg.configLocked, s_cfg.deviceEnabled, s_cfg.operateDays,
                    s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn,
-                   s_cfg.lastMday, s_cfg.gnssMode);
+                   s_cfg.lastMday, s_cfg.gnssMode,
+                   s_cfg.sleepEnabled, s_cfg.sleepDelaySec, s_cfg.sleepWakeSec);
     if (len > 0) {
         HAL_FS_Delete(NASA_CFG_FILE);
         fp = HAL_FS_Open(NASA_CFG_FILE, "wb");
@@ -387,6 +398,20 @@ int CFG_GetGnssMode(void)
     return s_cfg.gnssMode;
 }
 int CFG_GetDout(void) { return s_cfg.doutOn; }
+/* Cấu hình cũ (trước lệnh 42) không có 3 trường ngủ: ngoài khoảng thì dùng mặc định */
+int CFG_GetSleepEnabled(void) { return s_cfg.sleepEnabled ? 1 : 0; }
+int CFG_GetSleepDelaySec(void)
+{
+    if (s_cfg.sleepDelaySec < SLEEP_DELAY_SEC_MIN || s_cfg.sleepDelaySec > SLEEP_DELAY_SEC_MAX)
+        return SLEEP_DELAY_SEC_DEFAULT;
+    return s_cfg.sleepDelaySec;
+}
+int CFG_GetSleepWakeSec(void)
+{
+    if (s_cfg.sleepWakeSec < SLEEP_WAKE_PERIOD_SEC_MIN || s_cfg.sleepWakeSec > SLEEP_WAKE_PERIOD_SEC_MAX)
+        return SLEEP_WAKE_PERIOD_SEC_DEFAULT;
+    return s_cfg.sleepWakeSec;
+}
 int CFG_GetParkConfirmSec(void) { return s_cfg.parkConfirmSec; }
 int CFG_IsLocked(void)
 {
@@ -519,6 +544,21 @@ void CFG_SetResetSchedule(int days, int hour)
 
 void CFG_SetLocked(int locked) { s_cfg.configLocked = locked ? 1 : 0; }
 void CFG_SetDeviceEnabled(int enabled) { s_cfg.deviceEnabled = enabled ? 1 : 0; }
+
+void CFG_SetSleep(int enabled, int delaySec, int wakeSec)
+{
+    s_cfg.sleepEnabled = enabled ? 1 : 0;
+    if (delaySec >= 0) {
+        if (delaySec < SLEEP_DELAY_SEC_MIN) delaySec = SLEEP_DELAY_SEC_MIN;
+        if (delaySec > SLEEP_DELAY_SEC_MAX) delaySec = SLEEP_DELAY_SEC_MAX;
+        s_cfg.sleepDelaySec = delaySec;
+    }
+    if (wakeSec >= 0) {
+        if (wakeSec < SLEEP_WAKE_PERIOD_SEC_MIN) wakeSec = SLEEP_WAKE_PERIOD_SEC_MIN;
+        if (wakeSec > SLEEP_WAKE_PERIOD_SEC_MAX) wakeSec = SLEEP_WAKE_PERIOD_SEC_MAX;
+        s_cfg.sleepWakeSec = wakeSec;
+    }
+}
 
 void CFG_SetDriver(const char *name, const char *license, int loggedIn)
 {

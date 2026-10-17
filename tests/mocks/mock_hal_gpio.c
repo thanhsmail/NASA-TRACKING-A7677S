@@ -28,3 +28,9 @@ int HAL_GPIO_Read(int pin)
     if (pin == 37) return s_mockAccPinState; /* GPIO_ACC_IN */
     return 1;
 }
+
+int HAL_GPIO_WakeupEnable(int pin, HalGpioEdge_t edge, HalGpioWakeCb_t cb)
+{
+    (void)pin; (void)edge; (void)cb;
+    return 0;
+}

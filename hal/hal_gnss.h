@@ -71,6 +71,26 @@ int HAL_GNSS_SetStaticHold(int cmPerSec);
  */
 int HAL_GNSS_AgpsRequest(void);
 
+/**
+ * @brief  Giam sat GNSS: chip gui URC moi giay ke ca khi khong co fix; khong co
+ *         URC nao qua `sec` giay thi gnss_task tat roi bat lai GNSS. Mac dinh 60.
+ * @return 0 = OK, -1 = sec < 10
+ */
+int HAL_GNSS_SetNoUrcRestartSec(int sec);
+
+/** @return so giay tu lan cuoi vong lap gnss_task chay (0 = chua chay); de canh task treo */
+uint32_t HAL_GNSS_GetTaskAliveAgeSec(void);
+
+/**
+ * @brief  Yeu cau tat (0) / bat (1) GNSS de tiet kiem dien khi ngu. gnss_task
+ *         thuc hien trong vong 10 giay; trong luc tat khong tu bat lai vi im
+ *         lang. Bat lai thi cau hinh lai tu dau (he ve tinh, giu tinh, URC).
+ */
+void HAL_GNSS_SetPower(int on);
+
+/** @return 1 = chip GNSS dang bat */
+int  HAL_GNSS_IsPowered(void);
+
 int HAL_GNSS_GetRtc(HalDateTime_t *rtc);
 int HAL_GNSS_SetRtc(const HalDateTime_t *rtc);
 

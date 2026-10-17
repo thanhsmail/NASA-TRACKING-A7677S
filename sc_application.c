@@ -60,7 +60,10 @@ static void SmsReceiverTask(void *argv)
         /* Rút / cắm SIM không có URC: hỏi định kỳ (tự giới hạn tần suất) */
         SIM_Poll();
 
-        if (HAL_SMS_RecvUrc(gSmsMsgQueue, &evt, HAL_TICKS_PER_SEC) != 0) continue;
+        /* Đang ngủ: chờ 5 s / vòng cho module ngủ lâu hơn; SMS đến vẫn đánh thức ngay */
+        if (HAL_SMS_RecvUrc(gSmsMsgQueue, &evt,
+                            NASA_IsSleeping() ? SLEEP_LOOP_SEC * HAL_TICKS_PER_SEC : HAL_TICKS_PER_SEC) != 0)
+            continue;
 
         if (evt.type == HAL_SMS_URC_NEW_MSG && evt.index > 0) {
             char smsBuf[256] = {0};
@@ -107,6 +110,7 @@ void userSpace_Main(void *arg)
     HAL_NET_NitzEnable();// Khoi tao NITZ
     HAL_GNSS_SetMode(CFG_GetGnssMode()); // He ve tinh da luu (lenh 3), ap dung khi bat GNSS
     HAL_GNSS_SetStaticHold(GNSS_STATIC_HOLD_CMS); // Chip giu vi tri khi dung yen
+    HAL_GNSS_SetNoUrcRestartSec(GNSS_NO_URC_RESTART_SEC); // Tu bat lai GNSS khi chip im lang
     HAL_GNSS_UrcListenerStart(); // Khoi tao GPS URC
 
     INDICATION_TaskStart(); // Khoi tao LED

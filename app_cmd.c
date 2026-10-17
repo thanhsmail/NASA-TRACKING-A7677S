@@ -202,6 +202,9 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         return;
     }
 
+    /* Có lệnh (SMS / Server) thì thức khỏi chế độ ngủ để xử lý và trả lời */
+    NASA_WakeRequest((src && strcmp(src, "SERVER") == 0) ? "server command" : "SMS command");
+
     isSet = (strcmp(tag, "na") == 0);
     codeStr = strtok_r(NULL, ",", &save);
     if (!codeStr) return;
@@ -548,6 +551,22 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             CFG_FactoryReset();
             snprintf(resp, sizeof(resp), "khoi phuc cai dat mac dinh ban dau");
         }
+        break;
+
+    /* --- Mã 42: Ngủ tiết kiệm ắc quy: na,42,<0|1>[,<chờ phút>[,<thức mỗi phút>]] --- */
+    case 42:
+        if (isSet) {
+            int delayMin = -1, wakeMin = -1;
+            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
+            if (NextToken(&save, b, sizeof(b)) && b[0]) delayMin = atoi(b);
+            if (NextToken(&save, b, sizeof(b)) && b[0]) wakeMin = atoi(b);
+            CFG_SetSleep(atoi(a), (delayMin >= 0) ? delayMin * 60 : -1, (wakeMin >= 0) ? wakeMin * 60 : -1);
+            CFG_Save();
+        }
+        snprintf(resp, sizeof(resp), "sa,42 ngu tiet kiem: %s, cho %d phut, thuc moi %d phut, dang %s, acquy %.1fV",
+                 CFG_GetSleepEnabled() ? "bat" : "tat",
+                 CFG_GetSleepDelaySec() / 60, CFG_GetSleepWakeSec() / 60,
+                 NASA_IsSleeping() ? "ngu" : "thuc", (double)NASA_GetVoltage());
         break;
 
     /* --- Mã lệnh không hợp lệ --- */

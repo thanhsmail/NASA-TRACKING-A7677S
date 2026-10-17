@@ -32,6 +32,22 @@ void HAL_OS_SysReset(void)
 {
 }
 
+int HAL_OS_HwWatchdogStart(uint8_t periodReg)
+{
+    (void)periodReg;
+    return 0;
+}
+
+void HAL_OS_HwWatchdogFeed(void)
+{
+}
+
+int HAL_OS_SystemSleepEnable(int enable)
+{
+    (void)enable;
+    return 0;
+}
+
 HalPowerUpReason_t HAL_OS_GetPowerUpReason(void)
 {
     return HAL_POWER_UP_NORMAL;

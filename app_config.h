@@ -96,6 +96,48 @@
 #define AGPS_NO_FIX_WAIT_SEC 60      // Có mạng mà chưa có fix sau ngần này giây (từ lúc bật) thì tải AGPS
 #define AGPS_MIN_INTERVAL_SEC 7200   // Tối thiểu 2 giờ giữa 2 lần tải
 
+/* Watchdog phần cứng (simcom_wtd.h): task gpio_status nuôi mỗi 0,5 s; chỉ bật sau
+ * khi NASA_Init xong (quét flash backup lúc khởi động có thể lâu) */
+#define HW_WDT_ENABLE 1
+#define HW_WDT_PERIOD_REG 0x04       // Chu kỳ watchdog phần cứng: 0x04 = 16 giây (theo demo SDK)
+#define GNSS_NO_URC_RESTART_SEC 60   // Không có URC GNSS nào ngần này giây thì tắt / bật lại GNSS
+#define GNSS_TASK_HANG_SEC 120       // gnss_task không chạy vòng nào ngần này giây = treo -> ngừng nuôi watchdog
+
+/* Server im: không nhận được byte nào từ Server ngần này giây thì ngắt và kết
+ * nối lại (Server chỉ trả ACK đăng nhập; kết nối TCP nửa mở vẫn gửi được vào
+ * bộ đệm nên không báo lỗi). 0 = tắt */
+#define SERVER_SILENT_RECONNECT_SEC 0
+
+/* Ngủ tiết kiệm ắc quy xe (app_nasa.c, SleepPoll): ACC tắt và xe đứng yên liên tục
+ * quá thời gian chờ thì tắt GNSS, tắt LED, giãn vòng lặp các task và cho phép
+ * module vào sleep (sAPI_SystemSleepSet). Vẫn giữ kết nối Server để nhận lệnh.
+ * Thức khi ACC bật (ngắt GPIO + đọc chân định kỳ), khi có SMS / lệnh, và định kỳ
+ * để gửi !NASA,2. Chỉ ngủ khi tin được dây ACC (accMode 1, hoặc 2 và dây đã từng
+ * báo ON); xe không đấu ACC thì không ngủ vì không có gì đánh thức khi xe chạy.
+ * Bật / tắt và hai thời gian dưới chỉnh được bằng lệnh 42. */
+#define SLEEP_ENABLE_DEFAULT 1
+#define SLEEP_DELAY_SEC_DEFAULT 1800       // ACC tắt + đứng yên 30 phút thì ngủ
+#define SLEEP_DELAY_SEC_MIN 60
+#define SLEEP_DELAY_SEC_MAX 86400
+#define SLEEP_WAKE_PERIOD_SEC_DEFAULT 3600 // Đang ngủ: thức mỗi 1 giờ gửi một bản tin vị trí
+#define SLEEP_WAKE_PERIOD_SEC_MIN 300
+#define SLEEP_WAKE_PERIOD_SEC_MAX 86400
+#define SLEEP_WAKE_GNSS_SEC 90             // Lần thức định kỳ: bật GNSS chờ fix tối đa ngần này giây rồi mới gửi. 0 = không bật, gửi vị trí cũ
+#define SLEEP_EVENT_HOLD_SEC 120           // Thức vì SMS / lệnh / ngắt ACC giả: thức ít nhất ngần này giây rồi mới ngủ lại
+#define SLEEP_LOOP_SEC 5                   // Đang ngủ: nasa_reporter và SmsRecvTask lặp mỗi 5 s (thay vì 1 s)
+#define SLEEP_GPIO_LOOP_TICKS 400          // Đang ngủ: gpio_status lặp mỗi 2 s (vẫn nuôi watchdog phần cứng 16 s)
+#define SLEEP_NET_RETRY_SEC 600            // Đang ngủ mà mất Server: 10 phút mới thử kết nối lại (thức thì 30 s)
+#define SLEEP_MOVED_KM 0.150               // Lần thức định kỳ thấy xe cách chỗ bắt đầu ngủ quá 150 m (bị kéo / chở) thì thức hẳn
+/* Ắc quy yếu (đo khi ACC tắt): dưới ngưỡng SLEEP_LOW_BATT_CONFIRM lần liên tiếp
+ * thì ngủ sau SLEEP_LOW_BATT_DELAY_SEC thay vì chờ đủ thời gian cấu hình, và
+ * giãn chu kỳ thức. Hết yếu khi lên trên ngưỡng + 0,3 V. 0 = tắt. Ngưỡng cho xe
+ * 12 V; xe 24 V không bao giờ chạm. */
+#define SLEEP_LOW_BATT_VOLT 11.0f
+#define SLEEP_LOW_BATT_HYST_VOLT 0.3f
+#define SLEEP_LOW_BATT_CONFIRM 3
+#define SLEEP_LOW_BATT_DELAY_SEC 60
+#define SLEEP_LOW_BATT_WAKE_PERIOD_SEC 21600 // Ắc quy yếu: thức mỗi 6 giờ
+
 /* Log debug GNSS / AGPS: thời gian có fix, mất / có lại fix, lý do chưa tải AGPS,
  * trạng thái định kỳ ([GNSS/Stat]). 0 = tắt khi phát hành nếu log quá nhiều */
 #define GNSS_DEBUG 1
