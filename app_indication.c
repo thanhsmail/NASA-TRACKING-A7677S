@@ -25,7 +25,7 @@ static uint8_t      s_gpioStatusTaskStack[1024 * 4];
 /* Ngắt cạnh xuống chân ACC (active-low: ACC bật) đánh thức module khi đang ngủ */
 static void AccWakeIsr(void)
 {
-    NASA_WakeRequest("ACC interrupt");
+    NASA_AccIrq();
 }
 
 static void sTask_GpioStatusIndication(void *argv)
@@ -53,7 +53,7 @@ static void sTask_GpioStatusIndication(void *argv)
     }
     HAL_GPIO_Config(GPIO_DOUT,   HAL_GPIO_OUT, HAL_GPIO_PULL_UP);
     HAL_GPIO_Config(GPIO_ACC_IN, HAL_GPIO_IN,  HAL_GPIO_PULL_UP);
-    /* Chân không hỗ trợ đánh thức thì vẫn còn đọc chân mỗi 2 s khi ngủ (bên dưới) */
+    /* Chân không hỗ trợ đánh thức thì vẫn còn đọc chân mỗi 6 s khi ngủ (bên dưới) */
     if (HAL_GPIO_WakeupEnable(GPIO_ACC_IN, HAL_GPIO_EDGE_FALL, AccWakeIsr) != 0) {
         HAL_LOG("[ACC] wakeup interrupt not available on pin %d, polling only", GPIO_ACC_IN);
     }
@@ -66,7 +66,7 @@ static void sTask_GpioStatusIndication(void *argv)
         /* Active-low: GPIO_ACC_IN LOW = ACC ON */
         int currentAcc = (accLevel == 0) ? 1 : 0;
 
-        /* Đang ngủ mà chân ACC báo bật: thức ngay, không chờ lọc nhiễu 6 vòng x 2 s */
+        /* Đang ngủ mà chân ACC báo bật: thức ngay, không chờ lọc nhiễu 6 vòng x 6 s */
         if (sleeping && accLevel >= 0 && currentAcc && !s_accVal) {
             NASA_WakeRequest("ACC pin");
         }
@@ -161,7 +161,7 @@ static void sTask_GpioStatusIndication(void *argv)
 #endif
 
         HAL_GPIO_Write(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
-        /* Ngủ: 2 s / vòng, vẫn nuôi watchdog phần cứng (16 s) đủ dày */
+        /* Ngủ: 6 s / vòng, vẫn nuôi watchdog phần cứng (16 s) đủ dày */
         HAL_OS_TaskSleep(sleeping ? SLEEP_GPIO_LOOP_TICKS : 100);
     }
 }

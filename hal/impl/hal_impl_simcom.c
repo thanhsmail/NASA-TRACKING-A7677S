@@ -13,6 +13,7 @@
 #include "simcom_gpio.h"
 #include "simcom_gps.h"
 #include "sc_spi.h"
+#include "sc_i2c.h"
 #include "simcom_wtd.h"
 
 #include "hal_log.h"
@@ -21,6 +22,7 @@
 #include "hal_net.h"
 #include "hal_gnss.h"
 #include "hal_spi.h"
+#include "hal_i2c.h"
 #include "hal_fs.h"
 #include "hal_sms.h"
 #include "hal_adc.h"
@@ -83,22 +85,37 @@ int HAL_GPIO_Read(int pin)
     return -1;
 }
 
-static volatile HalGpioWakeCb_t s_gpioWakeCb = NULL;
+/*
+ * SDK goi isr / wu khong kem so chan, nen moi chan danh thuc can mot cap ham
+ * trampoline rieng (slot). Hien co 2 slot: ACC va INT1 cam bien gia toc.
+ */
+#define HAL_GPIO_WAKE_SLOTS 2
 
-static void GpioIsrTrampoline(void)
+static volatile HalGpioWakeCb_t s_gpioWakeCb[HAL_GPIO_WAKE_SLOTS] = {NULL};
+static int s_gpioWakePin[HAL_GPIO_WAKE_SLOTS] = {-1, -1};
+
+static void GpioIsrSlot(int slot)
 {
-    HalGpioWakeCb_t cb = s_gpioWakeCb;
+    HalGpioWakeCb_t cb = s_gpioWakeCb[slot];
     if (cb) cb();
 }
 
-static void GpioWakeTrampoline(void)
+static void GpioWakeSlot(int slot)
 {
-    HalGpioWakeCb_t cb = s_gpioWakeCb;
+    HalGpioWakeCb_t cb = s_gpioWakeCb[slot];
     /* Theo demo_gpio.c: muon o lai trang thai thuc sau khi duoc danh thuc thi
      * phai tat sleep he thong; task NASA se bat lai neu van du dieu kien ngu */
     sAPI_SystemSleepSet(SC_SYSTEM_SLEEP_DISABLE);
     if (cb) cb();
 }
+
+static void GpioIsrTrampoline0(void)  { GpioIsrSlot(0); }
+static void GpioWakeTrampoline0(void) { GpioWakeSlot(0); }
+static void GpioIsrTrampoline1(void)  { GpioIsrSlot(1); }
+static void GpioWakeTrampoline1(void) { GpioWakeSlot(1); }
+
+static void (*const s_gpioIsrTramp[HAL_GPIO_WAKE_SLOTS])(void)  = { GpioIsrTrampoline0, GpioIsrTrampoline1 };
+static void (*const s_gpioWakeTramp[HAL_GPIO_WAKE_SLOTS])(void) = { GpioWakeTrampoline0, GpioWakeTrampoline1 };
 
 int HAL_GPIO_WakeupEnable(int pin, HalGpioEdge_t edge, HalGpioWakeCb_t cb)
 {
@@ -107,14 +124,29 @@ int HAL_GPIO_WakeupEnable(int pin, HalGpioEdge_t edge, HalGpioWakeCb_t cb)
                                (edge == HAL_GPIO_EDGE_FALL) ? SC_GPIO_FALL_EDGE :
                                                               SC_GPIO_TWO_EDGE;
     SC_GPIOReturnCode rc1, rc2;
+    int slot;
 
-    s_gpioWakeCb = cb;
+    /* Chan da dang ky thi dung lai slot cu, khong thi lay slot trong */
+    for (slot = 0; slot < HAL_GPIO_WAKE_SLOTS; slot++) {
+        if (s_gpioWakePin[slot] == pin) break;
+    }
+    if (slot == HAL_GPIO_WAKE_SLOTS) {
+        for (slot = 0; slot < HAL_GPIO_WAKE_SLOTS; slot++) {
+            if (s_gpioWakePin[slot] < 0) break;
+        }
+    }
+    if (slot == HAL_GPIO_WAKE_SLOTS) {
+        HAL_LOG_Print("[GPIO] wakeup pin %d: no free slot", pin);
+        return -1;
+    }
+    s_gpioWakePin[slot] = pin;
+    s_gpioWakeCb[slot] = cb;
     cfg.pinDir  = SC_GPIO_IN_PIN;
     cfg.initLv  = 1;
     cfg.pinPull = SC_GPIO_PULLUP_ENABLE;
     cfg.pinEd   = ed;
-    cfg.isr     = GpioIsrTrampoline;
-    cfg.wu      = GpioWakeTrampoline;
+    cfg.isr     = s_gpioIsrTramp[slot];
+    cfg.wu      = s_gpioWakeTramp[slot];
     rc1 = sAPI_GpioConfig(pin, cfg);
     rc2 = sAPI_GpioWakeupEnable(pin, ed);
     HAL_LOG_Print("[GPIO] wakeup pin %d edge %d config rc=%d wakeup rc=%d",
@@ -164,9 +196,19 @@ void HAL_OS_HwWatchdogFeed(void)
 int HAL_OS_SystemSleepEnable(int enable)
 {
     int ret = sAPI_SystemSleepSet(enable ? SC_SYSTEM_SLEEP_ENABLE : SC_SYSTEM_SLEEP_DISABLE);
-    HAL_LOG_Print("[SLEEP] system sleep %s ret=%d (now=%d)", enable ? "enable" : "disable",
-                  ret, (int)sAPI_SystemSleepGet());
+    HAL_LOG_Print("[SLEEP] system sleep %s ret=%d (now=%d, usb=%d)", enable ? "enable" : "disable",
+                  ret, (int)sAPI_SystemSleepGet(), HAL_OS_UsbConnected());
     return (ret == 0) ? 0 : -1;
+}
+
+int HAL_OS_SystemSleepIsEnabled(void)
+{
+    return (sAPI_SystemSleepGet() == SC_SYSTEM_SLEEP_ENABLE) ? 1 : 0;
+}
+
+int HAL_OS_UsbConnected(void)
+{
+    return (sAPI_UsbVbusDetect() == USB_VBUS_HIGH) ? 1 : 0;
 }
 
 uint32_t HAL_OS_GetTick(void)
@@ -738,6 +780,38 @@ int HAL_SPI_CustomCsSetLevel(HalSpiDev_t *dev, int level)
     if (!dev) return -1;
     rc = sAPI_SpiCustomCsSetLevel(dev->index, level);
     return (rc == SC_SPI_RC_OK) ? 0 : -1;
+}
+
+/* ========================== HAL_I2C ======================================= */
+
+/*
+ * SDK nhan dia chi slave dang 8 bit (7 bit dich trai 1): demo_i2c.c goi NAU8810
+ * voi 0x34, ma dia chi 7 bit cua NAU8810 la 0x1A.
+ */
+#ifndef HAL_I2C_SDK_ADDR
+#define HAL_I2C_SDK_ADDR(a7) ((UINT8)((a7) << 1))
+#endif
+
+int HAL_I2C_Init(int channel, int fast)
+{
+    SC_I2C_DEV dev;
+
+    memset(&dev, 0, sizeof(dev));
+    dev.i2c_channel = (SC_I2C_CHANNEL)channel;
+    dev.i2c_clock = fast ? SC_I2C_FAST_MODE : SC_I2C_STANDARD_MODE;
+    return (sAPI_I2CConfigInit(&dev) == SC_I2C_RC_OK) ? 0 : -1;
+}
+
+int HAL_I2C_ReadReg(int channel, uint8_t addr7, uint8_t reg, uint8_t *buf, uint16_t len)
+{
+    if (!buf || len == 0) return -1;
+    return (sAPI_I2CRead(channel, HAL_I2C_SDK_ADDR(addr7), reg, buf, len) == SC_I2C_RC_OK) ? 0 : -1;
+}
+
+int HAL_I2C_WriteReg(int channel, uint8_t addr7, uint8_t reg, const uint8_t *data, uint16_t len)
+{
+    if (!data || len == 0) return -1;
+    return (sAPI_I2CWrite(channel, HAL_I2C_SDK_ADDR(addr7), reg, (UINT8 *)data, len) == SC_I2C_RC_OK) ? 0 : -1;
 }
 
 /* ========================== HAL_FS ======================================== */

@@ -38,10 +38,14 @@ typedef struct {
     int      parkDailyCount;
     uint32_t park61Tick;
     int      pendingSend63;
+    int      holdPeriodic;   /* 1 = không gửi 6-2 theo chu kỳ (thiết bị đang ngủ) */
+    int      forceReport;    /* 1 = gửi một 6-2 ở lần xử lý tới (lần thức định kỳ) */
 } ParkState_t;
 
 void ParkRules_Init(ParkState_t *state);
 void ParkRules_ResetDailyCount(ParkState_t *state);
+/** Đang đỗ: gửi một bản tin 6-2 ở lần ParkRules_Process tới, bất kể chu kỳ */
+void ParkRules_RequestReport(ParkState_t *state);
 
 /**
  * @brief Xử lý quy tắc đỗ xe định kỳ & chuyển trạng thái

@@ -19,6 +19,12 @@ void ParkRules_ResetDailyCount(ParkState_t *state)
     state->parkDailyCount = 0;
 }
 
+void ParkRules_RequestReport(ParkState_t *state)
+{
+    if (!state) return;
+    state->forceReport = 1;
+}
+
 static void AppendChecksumAndEndLocal(char *out, size_t size, const char *payload)
 {
     uint32_t checksum = Buffer_GetChecksum((const uint8_t *)payload, (uint32_t)strlen(payload));
@@ -134,7 +140,10 @@ int ParkRules_Process(ParkState_t *state, const GpsSnapshot_t *gps,
             }
             return 1;
         } else if (isParked) {
-            if ((nowTick - state->parkLastReportTick) >= (uint32_t)(parkPeriodSec * ticksPerSec)) {
+            if (state->forceReport ||
+                (!state->holdPeriodic &&
+                 (nowTick - state->parkLastReportTick) >= (uint32_t)(parkPeriodSec * ticksPerSec))) {
+                state->forceReport = 0;
                 state->parkLastReportTick = nowTick;
                 outEvent->type = PARK_EVENT_SEND_TYPE2;
                 outEvent->lat = state->parkLat;

@@ -125,9 +125,10 @@
 #define SLEEP_WAKE_GNSS_SEC 90             // Lần thức định kỳ: bật GNSS chờ fix tối đa ngần này giây rồi mới gửi. 0 = không bật, gửi vị trí cũ
 #define SLEEP_EVENT_HOLD_SEC 120           // Thức vì SMS / lệnh / ngắt ACC giả: thức ít nhất ngần này giây rồi mới ngủ lại
 #define SLEEP_LOOP_SEC 5                   // Đang ngủ: nasa_reporter và SmsRecvTask lặp mỗi 5 s (thay vì 1 s)
-#define SLEEP_GPIO_LOOP_TICKS 400          // Đang ngủ: gpio_status lặp mỗi 2 s (vẫn nuôi watchdog phần cứng 16 s)
+#define SLEEP_GPIO_LOOP_TICKS 1200         // Đang ngủ: gpio_status lặp mỗi 6 s (vẫn nuôi watchdog phần cứng 16 s; ACC đã có ngắt đánh thức)
 #define SLEEP_NET_RETRY_SEC 600            // Đang ngủ mà mất Server: 10 phút mới thử kết nối lại (thức thì 30 s)
-#define SLEEP_MOVED_KM 0.150               // Lần thức định kỳ thấy xe cách chỗ bắt đầu ngủ quá 150 m (bị kéo / chở) thì thức hẳn
+#define SLEEP_STATUS_LOG_SEC 600           // Đang ngủ: log cờ sleep / USB / điện áp mỗi ngần này giây (đối chiếu khi đo dòng). 0 = tắt
+#define SLEEP_MOVED_KM 0.150              // Lần thức định kỳ thấy xe cách chỗ bắt đầu ngủ quá 150 m (bị kéo / chở) thì thức hẳn
 /* Ắc quy yếu (đo khi ACC tắt): dưới ngưỡng SLEEP_LOW_BATT_CONFIRM lần liên tiếp
  * thì ngủ sau SLEEP_LOW_BATT_DELAY_SEC thay vì chờ đủ thời gian cấu hình, và
  * giãn chu kỳ thức. Hết yếu khi lên trên ngưỡng + 0,3 V. 0 = tắt. Ngưỡng cho xe
@@ -207,8 +208,8 @@
  * ASR1606). SC_MODULE_GPIO_00 chỉ có khi FEATURE_SIMCOM_NORI; dùng pad số cố
  * định. Đổi khi schematic PCB khác.
  *
- * Quan trọng: GPIO_05 (pad 120, pin19) dành riêng cho CS flash qua NPN C1815 —
- * không được dùng chung với LED/DOUT.
+ * Quan trọng: GPIO_05 (pad 120, pin19) nhận INT1 của LIS3DSH; CS flash đã
+ * chuyển sang pin12 (pad 17) — không được dùng chung với LED/DOUT.
  */
 #ifndef GPIO_LED_NET
 #define GPIO_LED_NET 80 /* SC_MODULE_GPIO_00 */
@@ -229,23 +230,57 @@
 /*
  * SPI flash rời EN25QH64A trên A7677S MANS (SC_SPI_1606_PIN):
  *  - SPI channel 0 = SSP0 data (da xac nhan tren board: JEDEC ID EF 40 17): pin11 CLK (pad16), pin13 MOSI (pad19), pin14 MISO (pad18)
- *  - CS# Flash: GPIO_05 (pad 120, pin19) → NPN C1815 đảo logic
- *      MCU HIGH → transistor dẫn → CS# = 0V (Active)
- *      MCU LOW  → transistor ngắt → CS# kéo lên 3.3V (Inactive)
- *  - Không dùng SSP0_CS (pin12/pad17) cho CS — schematic đấu GPIO riêng
+ *  - CS# Flash: pin12 (pad 17, GPIO_35/SSP0_CS), driver tự lái bằng GPIO.
+ *    Mức chọn chip FLASH_SPI_CS_ACTIVE_LEVEL được thử trước; EN25_Init vẫn thử
+ *    mức ngược lại để chẩn đoán (board cũ: pin19 qua NPN C1815 đảo logic, mức 1)
  */
 #ifndef FLASH_SPI_INDEX
 #define FLASH_SPI_INDEX 0
 #endif
 #ifndef FLASH_SPI_CS_PIN
-#define FLASH_SPI_CS_PIN 120 /* SC_MODULE_GPIO_05 / pin19 — lái CS# qua C1815 */
+#define FLASH_SPI_CS_PIN 17 /* SC_MODULE_GPIO_35 / pin12 */
+#endif
+#ifndef FLASH_SPI_CS_ACTIVE_LEVEL
+#define FLASH_SPI_CS_ACTIVE_LEVEL 0 /* nối thẳng CS# (active low) */
+#endif
+
+/* INT1 của LIS3DSH: pin19 (pad 120). Đặt -1 nếu board không nối INT1 */
+#ifndef LIS3DSH_INT1_PIN
+#define LIS3DSH_INT1_PIN 120 /* SC_MODULE_GPIO_05 / pin19 */
 #endif
 
 #if (GPIO_LED_PWR == FLASH_SPI_CS_PIN) || (GPIO_LED_NET == FLASH_SPI_CS_PIN) || \
     (GPIO_LED_GNSS == FLASH_SPI_CS_PIN) || (GPIO_DOUT == FLASH_SPI_CS_PIN) || \
-    (GPIO_ACC_IN == FLASH_SPI_CS_PIN)
-#error "FLASH_SPI_CS_PIN xung đột với GPIO LED/DOUT/ACC — Flash CS phải chân riêng"
+    (GPIO_ACC_IN == FLASH_SPI_CS_PIN) || (LIS3DSH_INT1_PIN == FLASH_SPI_CS_PIN)
+#error "FLASH_SPI_CS_PIN xung đột với GPIO LED/DOUT/ACC/INT1 — Flash CS phải chân riêng"
 #endif
+#if (LIS3DSH_INT1_PIN >= 0) && ((GPIO_LED_PWR == LIS3DSH_INT1_PIN) || (GPIO_LED_NET == LIS3DSH_INT1_PIN) || \
+    (GPIO_LED_GNSS == LIS3DSH_INT1_PIN) || (GPIO_DOUT == LIS3DSH_INT1_PIN) || (GPIO_ACC_IN == LIS3DSH_INT1_PIN))
+#error "LIS3DSH_INT1_PIN xung đột với GPIO LED/DOUT/ACC"
+#endif
+
+/*
+ * Cảm biến gia tốc LIS3DSH qua I2C (drv_lis3dsh.c). CS nối Vdd_IO (chọn I2C);
+ * driver tự dò địa chỉ 0x1E (SEL = GND, board RV26) rồi 0x1D (SEL = Vdd). Vdd_IO phải cùng
+ * mức I/O của module (1.8 V), điện trở kéo lên SCL/SDA về Vdd_IO.
+ *  - Kênh 0 = CI2C (pin37 SDA / pin38 SCL trên họ A767x) — đã xác nhận trên board
+ *  - Không có cảm biến / lỗi: firmware chạy như cũ
+ */
+#ifndef LIS3DSH_I2C_CHANNEL
+#define LIS3DSH_I2C_CHANNEL 0
+#endif
+#ifndef LIS3DSH_ODR
+#define LIS3DSH_ODR LIS3DSH_ODR_25HZ // ~ vài chục µA; đủ cho phát hiện rung / di chuyển
+#endif
+#define ACCEL_LOG_SEC 10 // Đang thức: log X/Y/Z (mg) mỗi ngần này giây để kiểm tra lắp đặt. 0 = tắt
+/* Đang ngủ: thức khi rung / bị dời. Lúc vào ngủ nạp SM1 với ngưỡng = trục lớn
+ * nhất lúc đứng yên + MOTION_WAKE_DELTA_MG; INT1 chốt đến khi SleepPoll đọc
+ * OUTS1 (mỗi vòng ngủ 5 s nên một lần rung ngắn chỉ tính 1 ngắt). Đủ
+ * MOTION_WAKE_EVENTS ngắt trong MOTION_WAKE_WINDOW_SEC giây thì thức hẳn —
+ * đóng cửa / xe khác chạy qua chỉ 1 ngắt, bị kéo / chở thì rung liên tục. */
+#define MOTION_WAKE_DELTA_MG 150
+#define MOTION_WAKE_EVENTS 3
+#define MOTION_WAKE_WINDOW_SEC 60
 
 /* Bitmask trạng thái thiết bị (Protocol RV26 — bản tin 2/7) */
 #define ST_GPS (1u << 0)
