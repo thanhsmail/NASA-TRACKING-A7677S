@@ -41,5 +41,6 @@ int  NASA_IsSleeping(void);
  * SLEEP_EVENT_HOLD_SEC.
  */
 void NASA_WakeRequest(const char *reason);
+void NASA_AccIrq(void);
 
 #endif /* APP_NASA_H */

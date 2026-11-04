@@ -220,6 +220,7 @@ if(NOT DEFINED MODULE_LIST)
                 sc_application.c
                 app_indication.c
                 drv_en25qh64a.c
+                drv_lis3dsh.c
                 app_nasa.c
                 app_park_rules.c
                 app_lxlt_rules.c

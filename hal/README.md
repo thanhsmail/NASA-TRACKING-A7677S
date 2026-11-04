@@ -45,6 +45,7 @@ Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tác
 | `hal/hal_net.h` | TCP & Cell Network | PDP Activation, TCP Connect/Send/Recv non-blocking, CSQ, IMEI/ICCID |
 | `hal/hal_gnss.h` | GNSS/GPS | Đọc RTC, Bật/Tắt GNSS, Lắng nghe URC định vị qua Callback |
 | `hal/hal_spi.h` | SPI Bus | Cấu hình SPI, Truyền/Nhận buffer cho Flash NOR |
+| `hal/hal_i2c.h` | I2C Bus | Cấu hình kênh I2C, Đọc/Ghi thanh ghi 8 bit (cảm biến gia tốc LIS3DSH) |
 | `hal/hal_fs.h` | File System | Đọc/Ghi/Xóa file trên bộ nhớ Flash nội (EFS) |
 | `hal/hal_sms.h` | Short Message | Cấu hình CNMI, Đọc/Xóa/Gửi SMS, Nhận URC SMS |
 | `hal/hal_adc.h` | ADC | Đọc điện áp thực tế tại chân ADC (mV), ví dụ ADC1/ADC.PWR |

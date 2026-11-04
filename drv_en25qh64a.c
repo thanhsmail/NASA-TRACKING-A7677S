@@ -19,13 +19,12 @@ static int          s_isInitialized = 0;
 static HalMutexRef_t s_spiMutex = NULL;
 
 /*
- * Mach CS Flash (NPN C1815 dao logic) -- theo schematic:
- *  - MCU GPIO_05 HIGH -> transistor dan -> Flash CS# = 0V (Active Low)
- *  - MCU GPIO_05 LOW  -> transistor ngat -> Flash CS# = 3.3V (Inactive)
+ * CS Flash lai bang GPIO FLASH_SPI_CS_PIN, muc chon chip FLASH_SPI_CS_ACTIVE_LEVEL
+ * (0 = noi thang CS#; 1 = qua NPN C1815 dao logic nhu board cu pin19).
  *
  * Dung HAL_GPIO_Write (khong goi sAPI_GpioSetValue truc tiep).
  */
-static int s_csActiveLevel = 1; /* muc GPIO de chon flash (1 = qua NPN dao) */
+static int s_csActiveLevel = FLASH_SPI_CS_ACTIVE_LEVEL; /* muc GPIO de chon flash */
 
 static void EN25_CS_Assert(void)
 {
@@ -174,15 +173,16 @@ int EN25_Init(void)
     static const int spiCandidates[] = { FLASH_SPI_INDEX, 0, 1, 2 };
     uint8_t  mfrId = 0;
     uint16_t devId = 0;
-    int      csLevel;
+    int      csTry;
     unsigned i;
 
     if (s_spiMutex == NULL) {
         HAL_OS_MutexCreate(&s_spiMutex);
     }
 
-    /* Muc CS theo schematic (1) truoc; muc nguoc lai chi de chan doan mach */
-    for (csLevel = 1; csLevel >= 0; csLevel--) {
+    /* Muc CS theo schematic truoc; muc nguoc lai chi de chan doan mach */
+    for (csTry = 0; csTry < 2; csTry++) {
+        int csLevel = csTry ? !FLASH_SPI_CS_ACTIVE_LEVEL : FLASH_SPI_CS_ACTIVE_LEVEL;
         for (i = 0; i < sizeof(spiCandidates) / sizeof(spiCandidates[0]); i++) {
             if (i > 0 && spiCandidates[i] == FLASH_SPI_INDEX) continue;
             if (EN25_Probe(spiCandidates[i], csLevel, &mfrId, &devId) == 0) {
@@ -198,8 +198,9 @@ int EN25_Init(void)
 
     HAL_LOG("[EN25/Flash] Flash Init Failed on all SPI channels (csPin=%d)", FLASH_SPI_CS_PIN);
     /* Tra CS ve muc nghi theo schematic */
-    s_csActiveLevel = 1;
-    HAL_GPIO_Config(FLASH_SPI_CS_PIN, HAL_GPIO_OUT, HAL_GPIO_PULL_DOWN);
+    s_csActiveLevel = FLASH_SPI_CS_ACTIVE_LEVEL;
+    HAL_GPIO_Config(FLASH_SPI_CS_PIN, HAL_GPIO_OUT,
+                    s_csActiveLevel ? HAL_GPIO_PULL_DOWN : HAL_GPIO_PULL_UP);
     EN25_CS_Deassert();
     s_isInitialized = 0;
     return -1;

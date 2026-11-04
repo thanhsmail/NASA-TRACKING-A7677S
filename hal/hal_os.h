@@ -55,6 +55,10 @@ void HAL_OS_HwWatchdogFeed(void);
  * @return 0 = OK, -1 = loi
  */
 int  HAL_OS_SystemSleepEnable(int enable);
+/** @return co sleep he thong hien tai (sAPI_SystemSleepGet): 1 = cho phep */
+int  HAL_OS_SystemSleepIsEnabled(void);
+/** @return 1 neu dang cam USB (VBUS cao) -- module khong ngu duoc, 0 neu khong */
+int  HAL_OS_UsbConnected(void);
 uint32_t HAL_OS_GetTick(void);
 HalPowerUpReason_t HAL_OS_GetPowerUpReason(void);
 

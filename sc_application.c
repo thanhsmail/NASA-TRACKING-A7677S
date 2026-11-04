@@ -23,6 +23,7 @@
 #include "hal/hal_sms.h"
 
 #include "drv_en25qh64a.h"
+#include "drv_lis3dsh.h"
 #include "app_config.h"
 #include "app_utils.h"
 #include "app_gps.h"
@@ -101,6 +102,12 @@ void userSpace_Main(void *arg)
     HAL_LOG("==== NASA FW %s HW %s A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 
     EN25_Init();    // Khoi tao Flash
+    if (LIS3DSH_Init() == 0) { // Khoi tao cam bien gia toc (khong co thi chay nhu cu)
+        int16_t d[3] = {0};
+        int st = LIS3DSH_SelfTest(d);
+        HAL_LOG("[LIS3DSH] self-test %s: dX=%d dY=%d dZ=%d mg",
+                st == 0 ? "PASS" : (st > 0 ? "OUT OF RANGE" : "ERROR"), d[0], d[1], d[2]);
+    }
     CFG_Init();     // Khoi tao cau hinh
     GPS_Init();     // Khoi tao GPS
     SMS_Init();     // Khoi tao SMS

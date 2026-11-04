@@ -60,8 +60,9 @@ typedef void (*HalGpioWakeCb_t)(void);
 /**
  * @brief  Cau hinh chan input (pull-up) co ngat theo canh va cho phep danh thuc
  *         module khi dang sleep (sAPI_GpioWakeupEnable). Ngat danh thuc tat luon
- *         sleep he thong (theo demo SDK) de task kip xu ly.
- * @return 0 = OK, -1 = SDK tu choi (chan khong ho tro danh thuc)
+ *         sleep he thong (theo demo SDK) de task kip xu ly. Toi da 2 chan
+ *         (ACC, INT1 cam bien gia toc), moi chan mot callback rieng.
+ * @return 0 = OK, -1 = SDK tu choi (chan khong ho tro danh thuc) / het slot
  */
 int HAL_GPIO_WakeupEnable(int pin, HalGpioEdge_t edge, HalGpioWakeCb_t cb);
 
