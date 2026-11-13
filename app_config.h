@@ -96,6 +96,27 @@
 #define AGPS_NO_FIX_WAIT_SEC 60      // Có mạng mà chưa có fix sau ngần này giây (từ lúc bật) thì tải AGPS
 #define AGPS_MIN_INTERVAL_SEC 7200   // Tối thiểu 2 giờ giữa 2 lần tải
 
+/* Vị trí khi mất GPS. Fix cũ hơn GPS_FIX_STALE_SEC (GNSS im lặng / đang tắt lúc
+ * ngủ) không còn coi là hợp lệ: gửi vị trí giữ lại, tốc độ 0, số vệ tinh 0. */
+#define GPS_FIX_STALE_SEC 5
+/* Vị trí hợp lệ cuối lưu ra NASA_POS_FILE để khởi động lại không gửi 0,0.
+ * Chỉ ghi khi đã dời >= POS_SAVE_MIN_KM, và khi xe dừng hoặc đã qua
+ * POS_SAVE_INTERVAL_SEC lúc đang chạy (giảm ghi flash). */
+#define POS_SAVE_MIN_KM 0.03
+#define POS_SAVE_INTERVAL_SEC 300
+
+/* LBS (vị trí theo trạm phát sóng, AT+CLBS / sAPI_LocGet) khi mất GPS. Chỉ hỏi
+ * khi đang có phiên với Server, mất fix >= LBS_NO_FIX_WAIT_SEC và: chưa có vị
+ * trí nào, hoặc xe đang chạy / ACC bật (có thể đã đi xa vị trí giữ lại). Độ
+ * chính xác cỡ vài trăm mét: không cộng odometer, không đổi trạng thái chạy / dừng. */
+#define LBS_ENABLE 1
+#define LBS_NO_FIX_WAIT_SEC 60       // Mất fix ngần này giây mới hỏi LBS
+#define LBS_INTERVAL_SEC 300         // Giữa 2 lần hỏi khi lần trước thành công
+#define LBS_RETRY_SEC 120            // Giữa 2 lần hỏi khi lần trước lỗi
+#define LBS_TIMEOUT_SEC 30           // Chờ kết quả tối đa (tài liệu: 9 s)
+#define LBS_MAX_ACC_M 3000           // Bỏ kết quả kém chính xác hơn mức này
+#define LBS_MAX_PER_DAY 120          // Tối đa số lần hỏi trong 24 giờ chạy máy
+
 /* Watchdog phần cứng (simcom_wtd.h): task gpio_status nuôi mỗi 0,5 s; chỉ bật sau
  * khi NASA_Init xong (quét flash backup lúc khởi động có thể lâu) */
 #define HW_WDT_ENABLE 1
@@ -199,6 +220,7 @@
 #define NASA_CFG_FILE "C:/rv26.cfg"
 #define NASA_BACKUP_FILE "C:/rv26_bak.dat"
 #define NASA_ODOM_FILE "C:/rv26_odo.dat" /* km trong ngày, đọc lại sau khi khởi động */
+#define NASA_POS_FILE "C:/rv26_pos.dat"  /* vị trí hợp lệ cuối, đọc lại sau khi khởi động */
 #define NASA_BACKUP_INTERVAL_SEC 10
 #define NASA_BACKUP_MAX_RECORDS 2000
 #define NASA_BACKUP_REPLAY_BURST 5 

@@ -84,3 +84,15 @@ int HAL_GNSS_IsPowered(void)
 {
     return s_mockGnssPower;
 }
+
+int HAL_LBS_Request(uint32_t timeoutSec)
+{
+    (void)timeoutSec;
+    return -1;
+}
+
+int HAL_LBS_GetResult(HalLbsResult_t *out)
+{
+    (void)out;
+    return 0;
+}
