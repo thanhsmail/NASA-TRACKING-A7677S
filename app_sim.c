@@ -29,6 +29,7 @@ static uint32_t s_lastRedetectTick = 0;
 static int      s_ready = -1;      /* -1 = chưa biết (vừa khởi động) */
 static int      s_notReadyCount = 0;
 static int      s_lockedLogged = 0;
+static int      s_radioOnPending = 0; /* CFUN=1 sau CFUN=0 bị lỗi: sóng + VSIM đang tắt */
 static char     s_iccid[32] = {0};
 
 int SIM_IsReady(void)
@@ -70,13 +71,38 @@ static void OnSimReady(const char *reason)
     }
 }
 
+/**
+ * Bật lại sóng (CFUN=1), thử tối đa SIM_RADIO_ON_RETRY lần cách nhau 1 s.
+ * CFUN=0 cũng tắt nguồn VSIM: nếu CFUN=1 lỗi mà không thử lại thì module nằm
+ * ở CFUN=0 (VSIM = 0 V, không sóng) suốt SIM_REDETECT_INTERVAL_SEC.
+ * @return 0 nếu bật được
+ */
+static int RadioOnRetry(void)
+{
+    int i;
+
+    for (i = 1; i <= SIM_RADIO_ON_RETRY; i++) {
+        if (HAL_NET_SetRadio(1) == 0) {
+            if (i > 1 || s_radioOnPending) HAL_LOG("[SIM] CFUN=1 OK (try %d)", i);
+            s_radioOnPending = 0;
+            return 0;
+        }
+        HAL_LOG("[SIM] CFUN=1 fail (try %d/%d)", i, SIM_RADIO_ON_RETRY);
+        if (i < SIM_RADIO_ON_RETRY) HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
+    }
+    s_radioOnPending = 1;
+    return -1;
+}
+
 static void RedetectSim(void)
 {
     HAL_LOG("[SIM] absent %lus -> radio off/on (CFUN 0/1) to re-detect SIM",
             (unsigned long)ElapsedSec(s_absentSinceTick, GetTickNow()));
     if (HAL_NET_SetRadio(0) != 0) HAL_LOG("[SIM] CFUN=0 fail");
     HAL_OS_TaskSleep(SIM_RADIO_OFF_SEC * HAL_TICKS_PER_SEC);
-    if (HAL_NET_SetRadio(1) != 0) HAL_LOG("[SIM] CFUN=1 fail");
+    if (RadioOnRetry() != 0) {
+        HAL_LOG("[SIM] radio still off (CFUN=0) -> retry CFUN=1 every %ds", SIM_POLL_SEC);
+    }
 }
 
 void SIM_Poll(void)
@@ -86,6 +112,15 @@ void SIM_Poll(void)
 
     if (s_lastPollTick != 0 && ElapsedSec(s_lastPollTick, now) < SIM_POLL_SEC) return;
     s_lastPollTick = (now != 0) ? now : 1;
+
+    /* Lần bật sóng trước lỗi: ưu tiên bật lại (VSIM đang tắt, hỏi SIM vô ích) */
+    if (s_radioOnPending) {
+        if (RadioOnRetry() == 0) {
+            s_lastRedetectTick = GetTickNow(); /* SIM vừa được cấp nguồn lại: chờ đủ chu kỳ */
+            s_lastPollTick = s_lastRedetectTick;
+        }
+        return;
+    }
 
     st = HAL_NET_GetSimState();
 

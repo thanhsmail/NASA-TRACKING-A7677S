@@ -91,6 +91,26 @@ void HAL_GNSS_SetPower(int on);
 /** @return 1 = chip GNSS dang bat */
 int  HAL_GNSS_IsPowered(void);
 
+/** Ket qua mot lan hoi vi tri LBS (tram phat song) */
+typedef struct {
+    int    ok;         /**< 1 = co vi tri, 0 = loi */
+    int    errCode;    /**< ret_code cua AT+CLBS (0 = OK), -1 = API loi, -2 = het gio */
+    double lat;        /**< do thap phan */
+    double lon;
+    int    accM;       /**< do chinh xac (m) */
+} HalLbsResult_t;
+
+/**
+ * @brief  Hoi vi tri LBS (sAPI_LocGet type 1), chay trong task rieng, khong chan
+ *         task goi. Can mang du lieu. Ket qua lay bang HAL_LBS_GetResult.
+ * @param  timeoutSec thoi gian cho ket qua toi da
+ * @return 0 = da dua vao hang doi, -1 = dang hoi / khong tao duoc task
+ */
+int HAL_LBS_Request(uint32_t timeoutSec);
+
+/** @return 1 = co ket qua moi (da ghi vao out va xoa), 0 = chua co */
+int HAL_LBS_GetResult(HalLbsResult_t *out);
+
 int HAL_GNSS_GetRtc(HalDateTime_t *rtc);
 int HAL_GNSS_SetRtc(const HalDateTime_t *rtc);
 

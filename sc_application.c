@@ -58,12 +58,13 @@ static void SmsReceiverTask(void *argv)
     HAL_OS_TaskSleep(200);
 
     while (1) {
-        /* Rút / cắm SIM không có URC: hỏi định kỳ (tự giới hạn tần suất) */
-        SIM_Poll();
+        /* Rút / cắm SIM không có URC: hỏi định kỳ (tự giới hạn tần suất). Ngủ sâu
+         * thì sóng tắt (CFUN=4): không hỏi, tránh nhầm là rút SIM rồi bật / tắt sóng */
+        if (!NASA_IsSleeping()) SIM_Poll();
 
-        /* Đang ngủ: chờ 5 s / vòng cho module ngủ lâu hơn; SMS đến vẫn đánh thức ngay */
+        /* Ngủ sâu: chờ 60 s / vòng (không có SMS vì sóng tắt) */
         if (HAL_SMS_RecvUrc(gSmsMsgQueue, &evt,
-                            NASA_IsSleeping() ? SLEEP_LOOP_SEC * HAL_TICKS_PER_SEC : HAL_TICKS_PER_SEC) != 0)
+                            NASA_IsSleeping() ? SLEEP_IDLE_TASK_SEC * HAL_TICKS_PER_SEC : HAL_TICKS_PER_SEC) != 0)
             continue;
 
         if (evt.type == HAL_SMS_URC_NEW_MSG && evt.index > 0) {
@@ -102,13 +103,15 @@ void userSpace_Main(void *arg)
     HAL_LOG("==== NASA FW %s HW %s A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 
     EN25_Init();    // Khoi tao Flash
-    if (LIS3DSH_Init() == 0) { // Khoi tao cam bien gia toc (khong co thi chay nhu cu)
+    CFG_Init();     // Khoi tao cau hinh (truoc LIS3DSH: lenh 44 co the da tat cam bien)
+    if (!CFG_GetAccelEnabled()) {
+        HAL_LOG("[LIS3DSH] disabled (cmd 44) -> power down %s", LIS3DSH_PowerDown() == 0 ? "OK" : "fail");
+    } else if (LIS3DSH_Init() == 0) { // Khoi tao cam bien gia toc (khong co thi chay nhu cu)
         int16_t d[3] = {0};
         int st = LIS3DSH_SelfTest(d);
         HAL_LOG("[LIS3DSH] self-test %s: dX=%d dY=%d dZ=%d mg",
                 st == 0 ? "PASS" : (st > 0 ? "OUT OF RANGE" : "ERROR"), d[0], d[1], d[2]);
     }
-    CFG_Init();     // Khoi tao cau hinh
     GPS_Init();     // Khoi tao GPS
     SMS_Init();     // Khoi tao SMS
 

@@ -1,0 +1,347 @@
+-----------------env configs-------------------------
+-  set tools
+-  -include E:/test/Newfolder/NASA-TRACKING-A7677S/tools/script/env.mak
+-----------------------------------------------------
+INFO: Could not find files for the given pattern(s).
+rmdir /s /q E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\
+----------------------------------------
+----- build old userspace framework -----
+----------------------------------------
+gnumake -C E:/test/Newfolder/NASA-TRACKING-A7677S -f E:/test/Newfolder/NASA-TRACKING-A7677S/config/buildCusLib.mak SCMODULE=A7677S_MANV_1606_V702_OPENSDK TOOL_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S/tools ROOT_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S TOP_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S APP_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S KERNEL_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S/kernel -j1
+-----------------env configs-------------------------
+-  set tools
+-  -include E:/test/Newfolder/NASA-TRACKING-A7677S/tools/script/env.mak
+-----------------------------------------------------
+gnumake[1]: Entering directory `E:/test/Newfolder/NASA-TRACKING-A7677S'
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\
+A subdirectory or file E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\ already exists.
+gnumake[1]: [mkDir] Error 1 (ignored)
+----------------------------------
+----------- build [old_fw_demo] -----------
+----------------------------------
+-----------------env configs-------------------------
+-  set tools
+-  -include E:/test/Newfolder/NASA-TRACKING-A7677S/tools/script/env.mak
+-----------------------------------------------------
+gnumake[2]: Entering directory `E:/test/Newfolder/NASA-TRACKING-A7677S/old_fw_demo'
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\obj_cus
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\obj_cus\packag-old_fw_demo
+--- CC E:/test/Newfolder/NASA-TRACKING-A7677S/old_fw_demo/demo.c
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\lib
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\obj_cus\packag-old_fw_demo
+A subdirectory or file E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\obj_cus\packag-old_fw_demo already exists.
+gnumake[2]: [E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/obj_cus/packag-old_fw_demo] Error 1 (ignored)
+--- AR E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/lib/cuslibold_fw_demo.a
+gnumake[2]: Leaving directory `E:/test/Newfolder/NASA-TRACKING-A7677S/old_fw_demo'
+gnumake[1]: Leaving directory `E:/test/Newfolder/NASA-TRACKING-A7677S'
+E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cmake/bin/cmake.exe -BE:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/ -DSCMODULE="A7677S_MANV_1606_V702_OPENSDK" -DSIMCOM_SDK=ON -DKERNEL_DIR="E:/test/Newfolder/NASA-TRACKING-A7677S/kernel" -DAPP_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S -DA7677S=ON -DMANV=ON -D1606=ON -DV702=ON -DOPENSDK=ON -DA7677S_MANV_1606_V702_OPENSDK=ON -DGCC_ARM_TOOLCHAIN_DIR="E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi" -DCMAKE_TOOLCHAIN_FILE="E:/test/Newfolder/NASA-TRACKING-A7677S/config/ToolChain.cmake" -DAPP_NAME="customer_app" -DCONFIG_SIMCOM_PROTOCOL_V1=ON -DCONFIG_HAS_DEMO=ON -DCONFIG_SIMCOM_UI_DEMO_TO_UART1_PORT=ON -DCONFIG_HAS_DEMO_WTD=ON -DCONFIG_HAS_DEMO_PMU=ON -DCONFIG_HAS_DEMO_GPIO=ON -DCONFIG_HAS_DEMO_PWM=ON -DCONFIG_HAS_DEMO_UART=ON -DCONFIG_HAS_DEMO_USB=ON -DCONFIG_HAS_DEMO_I2C=ON -DCONFIG_HAS_DEMO_SPI=ON -DCONFIG_HAS_DEMO_FLASH=ON -DCONFIG_HAS_DEMO_OTA=ON -DCONFIG_HAS_DEMO_GNSS=ON -DCONFIG_HAS_DEMO_LCD=ON -DCONFIG_HAS_DEMO_CAM=ON -DCONFIG_HAS_DEMO_SYS=ON -DCONFIG_HAS_DEMO_EXFLASHMOUNTFS=ON -DCONFIG_HAS_DEMO_NETWORK=ON -DCONFIG_HAS_DEMO_SIMCARD=ON -DCONFIG_HAS_DEMO_CALL=ON -DCONFIG_HAS_DEMO_SMS=ON -DCONFIG_HAS_DEMO_LBS=ON -DCONFIG_HAS_DEMO_SJDR=ON -DCONFIG_HAS_DEMO_INTERNET_SERVICE=ON -DCONFIG_HAS_DEMO_SSL=ON -DCONFIG_HAS_DEMO_TCPIP=ON -DCONFIG_HAS_DEMO_HTTPS=ON -DCONFIG_HAS_DEMO_FTPS=ON -DCONFIG_HAS_DEMO_MQTTS=ON -DCONFIG_HAS_DEMO_NTP=ON -DCONFIG_HAS_DEMO_HTP=ON -DCONFIG_HAS_DEMO_AUDIO=ON -DCONFIG_HAS_DEMO_TTS=ON -DCONFIG_HAS_DEMO_POC=ON -DCONFIG_HAS_DEMO_WIFI=ON -DCONFIG_HAS_DEMO_RTC=ON -DCONFIG_HAS_DEMO_BLE=ON -DCONFIG_HAS_DEMO_BT=ON -DCONFIG_HAS_DEMO_BT_STACK=ON -DCONFIG_HAS_DEMO_FS=ON -DCONFIG_HAS_DEMO_APP_DOWNLOAD=ON -DCONFIG_HAS_DEMO_APP_UPDATE=ON -DCONFIG_HAS_DEMO_PING=ON -DCONFIG_HAS_CJSON=ON -G "Ninja" E:/test/Newfolder/NASA-TRACKING-A7677S
+-- The ASM compiler identification is GNU
+-- Found assembler: E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-gcc.exe
+-- The C compiler identification is GNU 9.2.1
+-- The CXX compiler identification is GNU 9.2.1
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-gcc.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-g++.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done
+-- Generating done
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    1606
+    A7677S
+    A7677S_MANV_1606_V702_OPENSDK
+    MANV
+    OPENSDK
+    SIMCOM_SDK
+    V702
+
+
+-- Build files have been written to: E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK
+---------------------------
+----- build userspace -----
+---------------------------
+E: && ninja -C E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/
+ninja: Entering directory `E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/'
+[1/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_cam.c.obj
+[2/67] Building C object CMakeFiles/userspace.dir/app_indication.c.obj
+[3/67] Building C object CMakeFiles/userspace.dir/drv_en25qh64a.c.obj
+[4/67] Building C object CMakeFiles/userspace.dir/sc_application.c.obj
+[5/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_gps.c.obj
+[6/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_system.c.obj
+[7/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_txrx_power.c.obj
+[8/67] Building C object CMakeFiles/userspace.dir/app_nasa.c.obj
+[9/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_ftps_test.c.obj
+[10/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_network.c.obj
+[11/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_mqtt.c.obj
+[12/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_ftps.c.obj
+[13/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_https.c.obj
+[14/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_tcpip.c.obj
+[15/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_sjdr.c.obj
+[16/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_loc_test.c.obj
+[17/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_sms.c.obj
+[18/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_loc.c.obj
+[19/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_simcard.c.obj
+[20/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_ssl.c.obj
+[21/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_cjson.c.obj
+[22/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_ping.c.obj
+[23/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_app_updater.c.obj
+[24/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_ssl_test.c.obj
+[25/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_htp.c.obj
+[26/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_file_system.c.obj
+[27/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_ntp.c.obj
+[28/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_wifi.c.obj
+[29/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/mqtt_OneNET.c.obj
+[30/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_app_download.c.obj
+[31/67] Building C object CMakeFiles/userspace.dir/app_park_rules.c.obj
+[32/67] Building C object CMakeFiles/userspace.dir/app_lxlt_rules.c.obj
+[33/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_rtc.c.obj
+[34/67] Building C object CMakeFiles/userspace.dir/app_network.c.obj
+[35/67] Building C object CMakeFiles/userspace.dir/app_sms.c.obj
+[36/67] Building C object CMakeFiles/userspace.dir/app_fota.c.obj
+[37/67] Building C object CMakeFiles/userspace.dir/app_cmd.c.obj
+[38/67] Building C object CMakeFiles/userspace.dir/app_gps.c.obj
+[39/67] Building C object CMakeFiles/userspace.dir/app_sim.c.obj
+[40/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/mqtt_tencent.c.obj
+[41/67] Building C object CMakeFiles/userspace.dir/app_utils.c.obj
+[42/67] Building C object CMakeFiles/userspace.dir/app_cfg.c.obj
+[43/67] Building C object CMakeFiles/userspace.dir/app_backup.c.obj
+[44/67] Building C object CMakeFiles/userspace.dir/hal/impl/hal_impl_simcom.c.obj
+[45/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/token/onenet_md5.c.obj
+[46/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/token/onenet_base64.c.obj
+[47/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/token/onenet_hmac_sha1.c.obj
+[48/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/token/token.c.obj
+[49/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_helloworld.c.obj
+[50/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/simcom_demo.c.obj
+[51/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/utils/core_auth.c.obj
+[52/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/utils/core_sha256.c.obj
+[53/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/utils/core_string.c.obj
+[54/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_wtd.c.obj
+[55/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/uart_api.c.obj
+[56/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_gpio.c.obj
+[57/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/cus_usb_vcom.c.obj
+[58/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_pm.c.obj
+[59/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/cus_urc.c.obj
+[60/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_pwm.c.obj
+[61/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_i2c.c.obj
+[62/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_flash.c.obj
+[63/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_spi.c.obj
+[64/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_fota.c.obj
+[65/67] Building C object sc_demo/CMakeFiles/sc_demo.dir/src/demo_uart.c.obj
+[66/67] Linking C static library lib\libsc_demo.a
+[67/67] Linking C executable customer_app.elf
+arm-none-eabi-objcopy -O binary E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/customer_app.elf E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/customer_app.bin
+crc_set E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/customer_app.bin E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/customer_app_crc.bin
+SUCCESS!! fileSize:0x17c20 crc value:0x460a5cd7
+del /q E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\customer_app.bin
+ren E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\customer_app_crc.bin customer_app.bin
+--------------------------------
+----- create aboot package -----
+--------------------------------
+del /q E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn.zip
+Could Not Find E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn.zip
+rmdir /s /q E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot
+The system cannot find the file specified.
+GNUmake: [E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/burn.zip] Error 2 (ignored)
+rmdir /s /q E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory
+The system cannot find the file specified.
+GNUmake: [E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/burn.zip] Error 2 (ignored)
+gnumake -C E:/test/Newfolder/NASA-TRACKING-A7677S/config/ -f make_image_16xx.mak ROOT_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S KERNEL_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S/kernel APP_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S TOOL_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S/tools PREBUILD_DIR= SC_MODULE=A7677S_MANV_1606_V702_OPENSDK SC_HD_CFG= SC_HD_OPT= SC_USR_OPT= SC_MODULE_BASE=A7677S_MANV_1606_V702_OPENSDK SC_MODULE_FULL=A7677S_MANV_1606_V702_OPENSDK OUT=out APP_NAME=customer_app SIMCOM_RELEASE_SDK=YES
+-----------------env configs-------------------------
+-  set tools
+-  -include E:/test/Newfolder/NASA-TRACKING-A7677S/tools/script/env.mak
+-----------------------------------------------------
+gnumake[1]: Entering directory `E:/test/Newfolder/NASA-TRACKING-A7677S/config'
+rmdir /s /q E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot
+The system cannot find the file specified.
+gnumake[1]: [E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/aboot] Error 2 (ignored)
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot
+xcopy /s /e /q E:\test\Newfolder\NASA-TRACKING-A7677S\kernel\A7677S_MANV_1606_V702_OPENSDK\aboot E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\
+155 File(s) copied
+copy /y E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\customer_app.bin E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\
+        1 file(s) copied.
+E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\aboot\arelease -c E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/aboot -g -p ASR_CRANEL_EVB -v CRANEL_A0_SINGLE_SIM_04MB_OPENSDK --release-pack E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn_source.zip E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn.zip
+Parsing command line parameters ...
+Release package file name is "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn.zip"
+Finished parsing command line parameters.
+Processing all images needed ...
+  Generating fip image "preboot" with id "preboot.img" ...
+    Generating lzma image "preboot_lzma" with id "preboot.lzma" ...
+      Opening image "preboot_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\2021.10.16\preboot.bin" ...
+      Done.
+    Done.
+  Done.
+  Generating fip image "flasher" with id "flasher.img" ...
+    Generating lzma image "flasher_lzma" with id "flasher.lzma" ...
+      Opening image "flasher_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\2021.10.16\flasher.bin" ...
+      Done.
+    Done.
+  Done.
+  Generating finf image "flashinfo" with id "flashinfo.bin" ...
+  Done.
+  Opening image "rd" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\ReliableData.bin" ...
+  Done.
+  Opening image "cp" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\cp.bin" ...
+  Done.
+  Opening image "dsp" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\dsp.bin" ...
+  Done.
+  Opening image "rfbin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\rf.bin" ...
+  Done.
+  Opening image "customer_app" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\customer_app.bin" ...
+  Done.
+  Opening image "fota_param" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\fota_param.bin" ...
+  Done.
+  Generating aptb image "partition" with id "partition.bin" ...
+  Done.
+  Generating ubi image "bootloader" with id "bootloader.ubi" ...
+    Using already opened/generated image "flashinfo" with id "flashinfo.bin" ...
+    Done.
+    Using already opened/generated image "partition" with id "partition.bin" ...
+    Done.
+    Using already opened/generated image "preboot" with id "preboot.img" ...
+    Done.
+    Generating fip image "bootloader_img" with id "bootloader.img" ...
+      Generating lzma image "boot2_lzma" with id "boot2.lzma" ...
+        Opening image "boot2_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\2021.10.16\boot2.bin" ...
+        Done.
+      Done.
+      Generating lzma image "boot33_lzma" with id "boot33.lzma" ...
+        Generating aggr image "boot33_pkey" with id "boot33.pkey" ...
+          Opening image "boot33_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\images\boot33.bin" ...
+          Done.
+          Generating pkey image "ntos_pkey" with id "ntos.pkey" ...
+            Reading image from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot\config\security\key\rsa_nt_os_key.pem" ...
+            Done.
+          Done.
+        Done.
+      Done.
+    Done.
+  Done.
+  Generating fota images ...
+    Generating group image "system" with id "system.img" ...
+      Using already opened/generated image "partition" with id "partition.bin" ...
+      Done.
+      Using already opened/generated image "rd" with id "ReliableData.bin" ...
+      Done.
+      Using already opened/generated image "cp" with id "cp.bin" ...
+      Done.
+      Using already opened/generated image "dsp" with id "dsp.bin" ...
+      Done.
+      Using already opened/generated image "rfbin" with id "rf.bin" ...
+      Done.
+    Done.
+  Done.
+Done.
+Calculating total progress weight ...
+Done.
+Generating download commands ...
+Done.
+Generating crane firmware image ...
+Done.
+Generating target release package ...
+Done.
+Release package generated successfully!
+gnumake[1]: Leaving directory `E:/test/Newfolder/NASA-TRACKING-A7677S/config'
+gnumake -C E:/test/Newfolder/NASA-TRACKING-A7677S/config/ -f make_image_16xx.mak ROOT_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S KERNEL_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S/kernel APP_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S TOOL_DIR=E:/test/Newfolder/NASA-TRACKING-A7677S/tools PREBUILD_DIR= SC_MODULE=A7677S_MANV_1606_V702_OPENSDK SC_HD_CFG= SC_HD_OPT= SC_USR_OPT= SC_MODULE_BASE=A7677S_MANV_1606_V702_OPENSDK SC_MODULE_FULL=A7677S_MANV_1606_V702_OPENSDK OUT=out APP_NAME=customer_app SIMCOM_RELEASE_SDK=YES ASR_PLAT=160X FACTORY=TRUE
+-----------------env configs-------------------------
+-  set tools
+-  -include E:/test/Newfolder/NASA-TRACKING-A7677S/tools/script/env.mak
+-----------------------------------------------------
+gnumake[1]: Entering directory `E:/test/Newfolder/NASA-TRACKING-A7677S/config'
+rmdir /s /q E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory
+The system cannot find the file specified.
+gnumake[1]: [E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/aboot_factory] Error 2 (ignored)
+mkdir  E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory
+xcopy /s /e /q E:\test\Newfolder\NASA-TRACKING-A7677S\kernel\A7677S_MANV_1606_V702_OPENSDK\aboot_factory E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\
+155 File(s) copied
+copy /y E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\customer_app.bin E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\
+        1 file(s) copied.
+E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\aboot\arelease -c E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/aboot_factory -g -p ASR_CRANEL_EVB -v CRANEL_A0_SINGLE_SIM_04MB_OPENSDK --release-pack E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn_factory_source.zip E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn_factory.zip
+Parsing command line parameters ...
+Release package file name is "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\burn_factory.zip"
+Finished parsing command line parameters.
+Processing all images needed ...
+  Generating fip image "preboot" with id "preboot.img" ...
+    Generating lzma image "preboot_lzma" with id "preboot.lzma" ...
+      Opening image "preboot_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\2021.10.16\preboot.bin" ...
+      Done.
+    Done.
+  Done.
+  Generating fip image "flasher" with id "flasher.img" ...
+    Generating lzma image "flasher_lzma" with id "flasher.lzma" ...
+      Opening image "flasher_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\2021.10.16\flasher.bin" ...
+      Done.
+    Done.
+  Done.
+  Generating finf image "flashinfo" with id "flashinfo.bin" ...
+  Done.
+  Opening image "rd" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\ReliableData.bin" ...
+  Done.
+  Opening image "cp" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\cp.bin" ...
+  Done.
+  Opening image "dsp" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\dsp.bin" ...
+  Done.
+  Opening image "rfbin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\rf.bin" ...
+  Done.
+  Opening image "customer_app" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\customer_app.bin" ...
+  Done.
+  Opening image "fota_param" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\fota_param.bin" ...
+  Done.
+  Generating aptb image "partition" with id "partition.bin" ...
+  Done.
+  Generating ubi image "bootloader" with id "bootloader.ubi" ...
+    Using already opened/generated image "flashinfo" with id "flashinfo.bin" ...
+    Done.
+    Using already opened/generated image "partition" with id "partition.bin" ...
+    Done.
+    Using already opened/generated image "preboot" with id "preboot.img" ...
+    Done.
+    Generating fip image "bootloader_img" with id "bootloader.img" ...
+      Generating lzma image "boot2_lzma" with id "boot2.lzma" ...
+        Opening image "boot2_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\2021.10.16\boot2.bin" ...
+        Done.
+      Done.
+      Generating lzma image "boot33_lzma" with id "boot33.lzma" ...
+        Generating aggr image "boot33_pkey" with id "boot33.pkey" ...
+          Opening image "boot33_bin" from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\images\boot33.bin" ...
+          Done.
+          Generating pkey image "ntos_pkey" with id "ntos.pkey" ...
+            Reading image from "E:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK\aboot_factory\config\security\key\rsa_nt_os_key.pem" ...
+            Done.
+          Done.
+        Done.
+      Done.
+    Done.
+  Done.
+  Generating fota images ...
+    Generating group image "system" with id "system.img" ...
+      Using already opened/generated image "partition" with id "partition.bin" ...
+      Done.
+      Using already opened/generated image "rd" with id "ReliableData.bin" ...
+      Done.
+      Using already opened/generated image "cp" with id "cp.bin" ...
+      Done.
+      Using already opened/generated image "dsp" with id "dsp.bin" ...
+      Done.
+      Using already opened/generated image "rfbin" with id "rf.bin" ...
+      Done.
+    Done.
+  Done.
+Done.
+Calculating total progress weight ...
+Done.
+Generating download commands ...
+Done.
+Generating crane firmware image ...
+Done.
+Generating target release package ...
+Done.
+Release package generated successfully!
+gnumake[1]: Leaving directory `E:/test/Newfolder/NASA-TRACKING-A7677S/config'

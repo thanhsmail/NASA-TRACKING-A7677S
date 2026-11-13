@@ -1,4 +1,4 @@
-# Install script for directory: E:/test/Newfolder/NASA-TRACKING-A7677S
+# Install script for directory: E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -34,12 +34,12 @@ endif()
 
 # Set default install directory permissions.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-objdump.exe")
+  set(CMAKE_OBJDUMP "E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-objdump.exe")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for each subdirectory.
-  include("E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/sc_demo/cmake_install.cmake")
+  include("E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/sc_demo/cmake_install.cmake")
 
 endif()
 
@@ -51,5 +51,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "E:/test/Newfolder/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/out/A7677S_MANV_1606_V702_OPENSDK/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

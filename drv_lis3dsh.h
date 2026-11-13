@@ -19,6 +19,8 @@
 #define LIS3DSH_REG_CTRL_REG6   0x25 /* BOOT FIFO_EN WTM_EN ADD_INC ... */
 #define LIS3DSH_REG_STATUS      0x27
 #define LIS3DSH_REG_OUT_X_L     0x28 /* X/Y/Z L,H lien tiep 0x28..0x2D */
+#define LIS3DSH_REG_FIFO_CTRL   0x2E /* FMODE[7:5] WTMP[4:0] */
+#define LIS3DSH_REG_FIFO_SRC    0x2F /* WTM OVRN EMPTY FSS[4:0] */
 #define LIS3DSH_REG_ST1_1       0x40 /* SM1 code ST1_1..ST1_16 (0x40..0x4F, chi ghi) */
 #define LIS3DSH_REG_THRS1_1     0x57
 #define LIS3DSH_REG_MASK1_B     0x59
@@ -45,12 +47,40 @@
 #define LIS3DSH_CTRL5_BW_50HZ   0xC0
 #define LIS3DSH_CTRL5_ST_POS    0x02 /* ST2:ST1 = 01: self-test duong */
 #define LIS3DSH_CTRL6_ADD_INC   0x10
+#define LIS3DSH_CTRL6_FIFO_EN   0x40
+#define LIS3DSH_FIFO_BYPASS     0x00
+#define LIS3DSH_FIFO_STREAM     0x40 /* FMODE = 010: day thi mau moi de mau cu */
+#define LIS3DSH_FIFO_SRC_OVRN   0x40
+#define LIS3DSH_FIFO_SRC_FSS    0x1F
+#define LIS3DSH_FIFO_DEPTH      32
 #define LIS3DSH_STATUS_ZYXDA    0x08
+
+/* Ket qua LIS3DSH_Check */
+#define LIS3DSH_CHECK_OK        0
+#define LIS3DSH_CHECK_I2C      -1 /* khong ACK / loi doc */
+#define LIS3DSH_CHECK_ID       -2 /* WHO_AM_I sai */
+#define LIS3DSH_CHECK_CONFIG   -3 /* CTRL_REG4 khac cau hinh (chip bi reset) */
+
+typedef struct {
+    int     whoAmI;  /* -1 neu khong doc duoc */
+    int     ctrl4;   /* -1 neu khong doc duoc */
+    int16_t raw[3];  /* LSB, de phat hien du lieu dung yen */
+    int16_t mg[3];
+} Lis3dshCheck_t;
 
 /* API Driver */
 int LIS3DSH_Init(void);
+/** Kiem tra nhanh (WHO_AM_I, CTRL_REG4, 1 mau XYZ); @return LIS3DSH_CHECK_x */
+int LIS3DSH_Check(Lis3dshCheck_t *out);
+/** @return dia chi I2C 7 bit da tim thay, 0 neu chua */
+uint8_t LIS3DSH_GetAddr(void);
+/** Ket qua self-test gan nhat (0 dat, 1 lech, -1 loi, -2 chua chay) */
+int LIS3DSH_GetLastSelfTest(int16_t deltaMg[3]);
+/** Tat cam bien: soft reset ve power-down (ODR = 0, SM / ngat tat); @return 0 neu thanh cong */
+int LIS3DSH_PowerDown(void);
 int LIS3DSH_IsReady(void);
 int LIS3DSH_ReadXYZ(int16_t mg[3]);
+int LIS3DSH_ReadAvgXYZ(int32_t mg[3], int *count);
 int LIS3DSH_SelfTest(int16_t deltaMg[3]);
 int LIS3DSH_MotionArm(int deltaMg, int *thrMg);
 int LIS3DSH_MotionDisarm(void);

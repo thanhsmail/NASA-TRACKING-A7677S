@@ -3,7 +3,7 @@ set(CMAKE_HOST_SYSTEM_NAME "Windows")
 set(CMAKE_HOST_SYSTEM_VERSION "10.0.26200")
 set(CMAKE_HOST_SYSTEM_PROCESSOR "AMD64")
 
-include("E:/test/Newfolder/NASA-TRACKING-A7677S/config/ToolChain.cmake")
+include("E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/config/ToolChain.cmake")
 
 set(CMAKE_SYSTEM "Generic")
 set(CMAKE_SYSTEM_NAME "Generic")

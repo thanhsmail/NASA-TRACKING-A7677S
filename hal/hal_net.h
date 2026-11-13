@@ -35,6 +35,8 @@ int  HAL_NET_GetSimState(void);
 
 /** Bật (1) / tắt (0) sóng di động (CFUN 1 / 0). @return 0 nếu thành công */
 int  HAL_NET_SetRadio(int on);
+/** Che do may bay (CFUN=4: tat song, giu SIM) khi on = 1; tro lai CFUN=1 khi on = 0 */
+int  HAL_NET_SetFlightMode(int on);
 
 #ifdef __cplusplus
 }

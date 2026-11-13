@@ -17,7 +17,7 @@
 rule C_COMPILER__userspace_
   depfile = $DEP_FILE
   deps = gcc
-  command = E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-gcc.exe @$RSP_FILE -MD -MT $out -MF $DEP_FILE -o $out -c $in
+  command = E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-gcc.exe @$RSP_FILE -MD -MT $out -MF $DEP_FILE -o $out -c $in
   description = Building C object $out
   rspfile = $RSP_FILE
   rspfile_content =  $DEFINES $INCLUDES $FLAGS
@@ -27,7 +27,7 @@ rule C_COMPILER__userspace_
 # Rule for linking C executable.
 
 rule C_EXECUTABLE_LINKER__userspace_
-  command = cmd.exe /C "$PRE_LINK && E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-ld.exe $LINK_FLAGS -Map $TARGET_FILE.map -o $TARGET_FILE --whole-archive @$RSP_FILE --no-whole-archive      E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libm.a     E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libc.a     E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libstdc++.a     E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libg.a     E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libnosys.a     E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/lib/gcc/arm-none-eabi/9.2.1/thumb/v7/nofp/libgcc.a && $POST_BUILD"
+  command = cmd.exe /C "$PRE_LINK && E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-ld.exe $LINK_FLAGS -Map $TARGET_FILE.map -o $TARGET_FILE --whole-archive @$RSP_FILE --no-whole-archive      E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libm.a     E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libc.a     E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libstdc++.a     E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libg.a     E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/arm-none-eabi/lib/thumb/v7/nofp/libnosys.a     E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/lib/gcc/arm-none-eabi/9.2.1/thumb/v7/nofp/libgcc.a && $POST_BUILD"
   description = Linking C executable $TARGET_FILE
   rspfile = $RSP_FILE
   rspfile_content = $in $LINK_PATH $LINK_LIBRARIES
@@ -48,7 +48,7 @@ rule CUSTOM_COMMAND
 rule C_COMPILER__sc_demo_
   depfile = $DEP_FILE
   deps = gcc
-  command = E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-gcc.exe @$RSP_FILE -MD -MT $out -MF $DEP_FILE -o $out -c $in
+  command = E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-gcc.exe @$RSP_FILE -MD -MT $out -MF $DEP_FILE -o $out -c $in
   description = Building C object $out
   rspfile = $RSP_FILE
   rspfile_content =  $DEFINES $INCLUDES $FLAGS
@@ -58,7 +58,7 @@ rule C_COMPILER__sc_demo_
 # Rule for linking C static library.
 
 rule C_STATIC_LIBRARY_LINKER__sc_demo_
-  command = cmd.exe /C "$PRE_LINK && E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\cmake\bin\cmake.exe -E rm -f $TARGET_FILE && E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-ar.exe qc $TARGET_FILE $LINK_FLAGS @$RSP_FILE && E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-ranlib.exe $TARGET_FILE && $POST_BUILD"
+  command = cmd.exe /C "$PRE_LINK && E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\cmake\bin\cmake.exe -E rm -f $TARGET_FILE && E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-ar.exe qc $TARGET_FILE $LINK_FLAGS @$RSP_FILE && E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\cross_tool\gcc-arm-none-eabi\bin\arm-none-eabi-ranlib.exe $TARGET_FILE && $POST_BUILD"
   description = Linking C static library $TARGET_FILE
   rspfile = $RSP_FILE
   rspfile_content = $in $LINK_PATH $LINK_LIBRARIES
@@ -69,7 +69,7 @@ rule C_STATIC_LIBRARY_LINKER__sc_demo_
 # Rule for re-running cmake.
 
 rule RERUN_CMAKE
-  command = E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\cmake\bin\cmake.exe --regenerate-during-build -SE:\test\Newfolder\NASA-TRACKING-A7677S -BE:\test\Newfolder\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK
+  command = E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\cmake\bin\cmake.exe --regenerate-during-build -SE:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S -BE:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\out\A7677S_MANV_1606_V702_OPENSDK
   description = Re-running CMake...
   generator = 1
 
@@ -78,7 +78,7 @@ rule RERUN_CMAKE
 # Rule for cleaning all built files.
 
 rule CLEAN
-  command = E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\ninja.exe $FILE_ARG -t clean $TARGETS
+  command = E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\ninja.exe $FILE_ARG -t clean $TARGETS
   description = Cleaning all built files...
 
 
@@ -86,6 +86,6 @@ rule CLEAN
 # Rule for printing all primary targets available.
 
 rule HELP
-  command = E:\test\Newfolder\NASA-TRACKING-A7677S\tools\win32\ninja.exe -t targets
+  command = E:\tailieumudule4G\RV4G\Firmware\NASA-TRACKING-A7677S\tools\win32\ninja.exe -t targets
   description = All primary targets available:
 

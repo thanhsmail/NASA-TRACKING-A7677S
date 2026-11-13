@@ -14,4 +14,7 @@
  */
 int INDICATION_TaskStart(void);
 
+/** Thức gpio_status đang chờ lúc ngủ sâu (gọi khi ra khỏi ngủ) */
+void INDICATION_Wake(void);
+
 #endif /* APP_INDICATION_H */

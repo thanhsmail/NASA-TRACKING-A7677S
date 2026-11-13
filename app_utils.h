@@ -14,5 +14,7 @@ int ParseDateTimeFromUrcTokens(const char *dateToken, const char *timeToken, Hal
 void BuildDateTimeAutoFallback(char *dateTime, uint32_t dateTimeSize);
 void TriggerNtpSyncIfNeeded(void);
 void NitzEnableFromNetwork(void);
+/** 1 = đang ngủ sâu: task ntp_sync chờ lâu hơn (không thức mỗi giây) */
+void UTIL_SetLowPower(int on);
 
 #endif /* APP_UTILS_H */

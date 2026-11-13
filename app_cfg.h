@@ -30,6 +30,11 @@ typedef struct {
     int      sleepEnabled;      /* cmd 42: ngủ tiết kiệm ắc quy khi ACC tắt */
     int      sleepDelaySec;     /* cmd 42: ACC tắt + đứng yên bao lâu thì ngủ */
     int      sleepWakeSec;      /* cmd 42: đang ngủ thì bao lâu thức gửi vị trí */
+    int      motionWakeOff;     /* cmd 43: 1 = không thức khi rung (LIS3DSH) */
+    int      motionDeltaMg;     /* cmd 43: ngưỡng = trục lớn nhất lúc đứng yên + ngần này mg */
+    int      motionEvents;      /* cmd 43: số ngắt rung ... */
+    int      motionWindowSec;   /* cmd 43: ... trong ngần này giây thì thức */
+    int      accelOff;          /* cmd 44: 1 = tắt hẳn cảm biến gia tốc LIS3DSH */
 } AppConfig_t;
 
 typedef struct {
@@ -71,6 +76,11 @@ const char *CFG_GetPhone(int index); /* 1..3 */
 int         CFG_GetSleepEnabled(void);
 int         CFG_GetSleepDelaySec(void);
 int         CFG_GetSleepWakeSec(void);
+int         CFG_GetMotionWakeEnabled(void);
+int         CFG_GetAccelEnabled(void);
+int         CFG_GetMotionDeltaMg(void);
+int         CFG_GetMotionEvents(void);
+int         CFG_GetMotionWindowSec(void);
 
 int  CFG_IsAuthPhone(const char *phone);
 int  CFG_CanChangeProtected(const char *src, const char *fromPhone);
@@ -90,6 +100,9 @@ void CFG_SetLocked(int locked);
 void CFG_SetDeviceEnabled(int enabled);
 /** Ngủ tiết kiệm ắc quy (lệnh 42). delaySec / wakeSec < 0 = giữ nguyên; ngoài khoảng cho phép thì kẹp lại */
 void CFG_SetSleep(int enabled, int delaySec, int wakeSec);
+/** Tham số < 0 = giữ nguyên */
+void CFG_SetMotionWake(int enabled, int deltaMg, int events, int windowSec);
+void CFG_SetAccelEnabled(int enabled);
 void CFG_SetDriver(const char *name, const char *license, int loggedIn);
 void CFG_FlushDirty(void); /* flush deferred driver/config dirty flag */
 

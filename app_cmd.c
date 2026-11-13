@@ -419,16 +419,22 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     {
         GpsSnapshot_t gps = {0};
         GPS_Snapshot(&gps);
-        if (gps.valid) {
+        /* Có fix: #OK. Mất GPS: vị trí cuối (#LAST) hoặc vị trí trạm phát
+         * sóng (#LBS<độ chính xác>m). Chưa từng có vị trí: NO FIX */
+        if (gps.source != GPS_SRC_NONE) {
+            char tag[24];
             int latD = (int)gps.lat;
             double latM = (gps.lat - latD) * 60.0;
             if (latM < 0) latM = -latM;
             int lonD = (int)gps.lon;
             double lonM = (gps.lon - lonD) * 60.0;
             if (lonM < 0) lonM = -lonM;
+            if (gps.valid) snprintf(tag, sizeof(tag), "OK");
+            else if (gps.source == GPS_SRC_LBS) snprintf(tag, sizeof(tag), "LBS%dm", gps.accM);
+            else snprintf(tag, sizeof(tag), "LAST");
             snprintf(resp, sizeof(resp),
-                     "sa,27 https://maps.google.com/maps?q=N%%20%d%%20%.6f%%20E%%20%d%%20%.6f#OK",
-                     latD < 0 ? -latD : latD, latM, lonD < 0 ? -lonD : lonD, lonM);
+                     "sa,27 https://maps.google.com/maps?q=N%%20%d%%20%.6f%%20E%%20%d%%20%.6f#%s",
+                     latD < 0 ? -latD : latD, latM, lonD < 0 ? -lonD : lonD, lonM, tag);
         } else {
             snprintf(resp, sizeof(resp), "sa,27 NO FIX");
         }
@@ -553,21 +559,78 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
-    /* --- Mã 42: Ngủ tiết kiệm ắc quy: na,42,<0|1>[,<chờ phút>[,<thức mỗi phút>]] --- */
+    /* --- Mã 42: Ngủ sâu tiết kiệm ắc quy: na,42,<0|1>[,<chờ phút>]
+     *     (ngủ sâu chỉ thức khi ACC bật / rung; tham số thứ 3 cũ bị bỏ qua) --- */
     case 42:
         if (isSet) {
-            int delayMin = -1, wakeMin = -1;
+            int delayMin = -1;
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             if (NextToken(&save, b, sizeof(b)) && b[0]) delayMin = atoi(b);
-            if (NextToken(&save, b, sizeof(b)) && b[0]) wakeMin = atoi(b);
-            CFG_SetSleep(atoi(a), (delayMin >= 0) ? delayMin * 60 : -1, (wakeMin >= 0) ? wakeMin * 60 : -1);
+            CFG_SetSleep(atoi(a), (delayMin >= 0) ? delayMin * 60 : -1, -1);
             CFG_Save();
         }
-        snprintf(resp, sizeof(resp), "sa,42 ngu tiet kiem: %s, cho %d phut, thuc moi %d phut, dang %s, acquy %.1fV",
+        snprintf(resp, sizeof(resp), "sa,42 ngu sau: %s, cho %d phut, thuc khi ACC bat / rung, dang %s, acquy %.1fV",
                  CFG_GetSleepEnabled() ? "bat" : "tat",
-                 CFG_GetSleepDelaySec() / 60, CFG_GetSleepWakeSec() / 60,
+                 CFG_GetSleepDelaySec() / 60,
                  NASA_IsSleeping() ? "ngu" : "thuc", (double)NASA_GetVoltage());
         break;
+
+    /* --- Mã 43: Độ nhạy cảm biến rung (thức khi rung lúc ngủ):
+     *     na,43,<0|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]   đặt (lưu cấu hình)
+     *     na,43,t[,<giây>]                                   thử lúc đang thức, xem log [ACCEL/TEST] --- */
+    case 43:
+    {
+        int thrMg = 0, testOn = 0, testCount = 0, testSec = 0, present;
+
+        if (isSet) {
+            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
+            if (a[0] == 't' || a[0] == 'T') {
+                int sec = (NextToken(&save, b, sizeof(b)) && b[0]) ? atoi(b) : 0;
+                NASA_MotionTestStart(sec);
+            } else {
+                int deltaMg = -1, events = -1, windowSec = -1;
+                if (NextToken(&save, b, sizeof(b)) && b[0]) deltaMg = atoi(b);
+                if (NextToken(&save, b, sizeof(b)) && b[0]) events = atoi(b);
+                if (NextToken(&save, b, sizeof(b)) && b[0]) windowSec = atoi(b);
+                CFG_SetMotionWake(atoi(a), deltaMg, events, windowSec);
+                CFG_Save();
+            }
+        }
+        present = NASA_MotionInfo(&thrMg, &testOn, &testCount, &testSec);
+        snprintf(resp, sizeof(resp),
+                 "sa,43 rung: %s%s, nguong +%dmg (lan nap cuoi %dmg), thuc khi %d ngat/%ds, thu: %s %d ngat/%ds",
+                 CFG_GetMotionWakeEnabled() ? "bat" : "tat", present ? "" : " (khong co cam bien)",
+                 CFG_GetMotionDeltaMg(), thrMg, CFG_GetMotionEvents(), CFG_GetMotionWindowSec(),
+                 testOn ? "dang chay," : "lan truoc", testCount, testSec);
+        break;
+    }
+
+    /* --- Mã 44: Kiểm tra cảm biến gia tốc LIS3DSH:
+     *     sa,44     tình trạng (kiểm tra định kỳ ACCEL_HEALTH_SEC, self-test gần nhất)
+     *     na,44,t   chạy self-test lúc đang thức (để xe đứng yên), vài giây sau gửi sa,44 xem kết quả
+     *     na,44,<0|1>  tắt / bật cảm biến (lưu cấu hình). Tắt: không thức khi rung, không xác nhận cua --- */
+    case 44:
+    {
+        char st[300];
+
+        if (isSet) {
+            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
+            if (a[0] == 't' || a[0] == 'T') {
+                NASA_AccelSelfTestRequest();
+            } else if (a[0] == '0' || a[0] == '1') {
+                CFG_SetAccelEnabled(a[0] == '1');
+                CFG_Save();
+                NASA_AccelPowerRequest();
+            } else {
+                Reply(reply, ctx, src, "ERROR");
+                return;
+            }
+        }
+        (void)NASA_AccelStatus(st, sizeof(st));
+        snprintf(resp, sizeof(resp), "sa,44 cam bien gia toc: %s%s", st,
+                 NASA_IsSleeping() ? " (dang ngu, khong kiem tra)" : "");
+        break;
+    }
 
     /* --- Mã lệnh không hợp lệ --- */
     default:

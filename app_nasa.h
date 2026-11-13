@@ -42,5 +42,15 @@ int  NASA_IsSleeping(void);
  */
 void NASA_WakeRequest(const char *reason);
 void NASA_AccIrq(void);
+/** Lệnh na,43,t: thử độ nhạy cảm biến rung trong sec giây lúc đang thức (chạy ở nasa_reporter) */
+void NASA_MotionTestStart(int sec);
+/** @return 1 nếu có LIS3DSH + INT1; ngưỡng lần nạp gần nhất, trạng thái / kết quả lần thử */
+int  NASA_MotionInfo(int *thrMg, int *testOn, int *testCount, int *testSec);
+/** Lệnh na,44,t: chạy self-test LIS3DSH ở vòng nasa_reporter kế tiếp (lúc thức) */
+void NASA_AccelSelfTestRequest(void);
+/** Lệnh na,44,0|1: áp dụng CFG_GetAccelEnabled() (tắt / bật LIS3DSH) ở vòng nasa_reporter kế tiếp */
+void NASA_AccelPowerRequest(void);
+/** Ghi tình trạng LIS3DSH (kiểm tra định kỳ + self-test gần nhất) vào buf; @return độ dài */
+int  NASA_AccelStatus(char *buf, int len);
 
 #endif /* APP_NASA_H */
