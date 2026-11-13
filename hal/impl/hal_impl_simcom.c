@@ -589,6 +589,124 @@ int HAL_GNSS_AgpsRequest(void)
     return 0;
 }
 
+/* LBS: sAPI_LocGet mo ket noi toi may chu LBS cua SIMCom va tra ket qua qua
+ * message queue (toi ~9 s), nen chay trong task rieng nhu AGPS */
+static sTaskRef s_lbsTaskRef = NULL;
+static uint8_t  s_lbsTaskStack[1024 * 4];
+static sMsgQRef s_lbsRespQ = NULL;
+static volatile int      s_lbsRequested = 0;
+static volatile int      s_lbsBusy = 0;
+static volatile uint32_t s_lbsTimeoutSec = 30;
+static volatile int      s_lbsHasResult = 0;
+static HalLbsResult_t    s_lbsResult;
+
+static void LbsDrainQueue(void)
+{
+    SIM_MSG_T stale;
+    for (;;) {
+        memset(&stale, 0, sizeof(stale));
+        if (sAPI_MsgQRecv(s_lbsRespQ, &stale, SC_NO_SUSPEND) != SC_SUCCESS) break;
+        if (stale.arg3) sAPI_Free(stale.arg3);
+    }
+}
+
+static void LbsQueryOnce(HalLbsResult_t *res)
+{
+    SIM_MSG_T msg;
+    SC_LBS_RETURNCODE rc;
+    UINT32 t0 = sAPI_GetTicks();
+    UINT32 waitTicks = s_lbsTimeoutSec * 200u;
+
+    memset(res, 0, sizeof(*res));
+    LbsDrainQueue(); /* ket qua tre cua lan hoi truoc (da het gio) */
+    rc = sAPI_LocGet(0, s_lbsRespQ, 1);
+    if (rc != SC_LBS_SUCCESS) {
+        res->errCode = -1;
+        HAL_LOG_Print("[LBS] sAPI_LocGet rc=%d", (int)rc);
+        return;
+    }
+    for (;;) {
+        UINT32 used = sAPI_GetTicks() - t0;
+        if (used >= waitTicks) {
+            res->errCode = -2;
+            HAL_LOG_Print("[LBS] timeout %lus", (unsigned long)s_lbsTimeoutSec);
+            return;
+        }
+        memset(&msg, 0, sizeof(msg));
+        if (sAPI_MsgQRecv(s_lbsRespQ, &msg, waitTicks - used) != SC_SUCCESS) continue;
+        if (msg.msg_id != SC_SRV_LBS || msg.arg3 == NULL) {
+            if (msg.arg3) sAPI_Free(msg.arg3);
+            continue;
+        }
+        {
+            SC_lbs_info_t *info = (SC_lbs_info_t *)msg.arg3;
+            res->errCode = (int)info->u8ErrorCode;
+            if (info->u8ErrorCode == 0) {
+                /* SDK tra do * 1e6; ep int32 de giu dau (Nam / Tay) */
+                res->lat = (double)(int32_t)info->u32Lat / 1000000.0;
+                res->lon = (double)(int32_t)info->u32Lng / 1000000.0;
+                res->accM = (int)info->u16Acc;
+                res->ok = 1;
+            }
+            HAL_LOG_Print("[LBS] ret=%d lat=%.6f lon=%.6f acc=%dm in %lu ms",
+                          res->errCode, res->lat, res->lon, res->accM,
+                          (unsigned long)((sAPI_GetTicks() - t0) * 5u));
+            sAPI_Free(msg.arg3);
+        }
+        return;
+    }
+}
+
+static void sTask_Lbs(void *argv)
+{
+    HalLbsResult_t res;
+    (void)argv;
+    for (;;) {
+        if (!s_lbsRequested) {
+            sAPI_TaskSleep(200);
+            continue;
+        }
+        s_lbsRequested = 0;
+        LbsQueryOnce(&res);
+        s_lbsResult = res;
+        s_lbsHasResult = 1;
+        s_lbsBusy = 0;
+    }
+}
+
+int HAL_LBS_Request(uint32_t timeoutSec)
+{
+    if (s_lbsBusy || s_lbsRequested) return -1;
+    if (s_lbsRespQ == NULL) {
+        if (sAPI_MsgQCreate(&s_lbsRespQ, "lbs_respq", sizeof(SIM_MSG_T), 4, SC_FIFO) != SC_SUCCESS) {
+            s_lbsRespQ = NULL;
+            HAL_LOG_Print("[LBS] create msgq fail");
+            return -1;
+        }
+    }
+    if (s_lbsTaskRef == NULL) {
+        if (sAPI_TaskCreate(&s_lbsTaskRef, s_lbsTaskStack, sizeof(s_lbsTaskStack),
+                            25, "lbs_task", sTask_Lbs, NULL) != SC_SUCCESS) {
+            s_lbsTaskRef = NULL;
+            HAL_LOG_Print("[LBS] create task fail");
+            return -1;
+        }
+    }
+    s_lbsTimeoutSec = (timeoutSec < 10u) ? 10u : timeoutSec;
+    s_lbsHasResult = 0;
+    s_lbsBusy = 1;
+    s_lbsRequested = 1;
+    return 0;
+}
+
+int HAL_LBS_GetResult(HalLbsResult_t *out)
+{
+    if (!s_lbsHasResult || out == NULL) return 0;
+    *out = s_lbsResult;
+    s_lbsHasResult = 0;
+    return 1;
+}
+
 /* Giam sat GNSS: chip gui +CGNSSINFO moi giay (ke ca khi khong co fix), nen
  * im lang lau = chip / driver GNSS ngung: tat roi bat lai GNSS */
 static volatile int      s_gnssNoUrcRestartSec = 60;

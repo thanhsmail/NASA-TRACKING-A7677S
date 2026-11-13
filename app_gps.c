@@ -40,9 +40,28 @@ static double   s_lastHeadingDeg = 0.0;  /* chỉ cập nhật khi đang chạy 
 static int      s_lastSatellites = 0;    /* tổng mọi hệ vệ tinh */
 static double   s_lastHdop       = 0.0;  /* 0 = URC không báo HDOP */
 static int      s_satSys[4]      = {0};  /* số vệ tinh theo hệ GPS / GLONASS / GALILEO / BEIDOU */
-static uint32_t s_lastFixTick    = 0;
+static uint32_t s_lastFixTick    = 0;    /* mẫu GNSS cuối có vị trí (kể cả < 5 vệ tinh) */
 static double   s_holdLat        = 0.0;  /* vị trí hợp lệ gần nhất, dùng khi mất GPS */
 static double   s_holdLon        = 0.0;
+static uint32_t s_validFixTick   = 0;    /* tick của fix hợp lệ gần nhất, 0 = chưa có từ lúc bật */
+
+/* Vị trí LBS khi mất GPS (GPS_LbsPoll). Chỉ dùng khi mới hơn fix hợp lệ gần nhất */
+static double   s_lbsLat         = 0.0;
+static double   s_lbsLon         = 0.0;
+static int      s_lbsAccM        = 0;
+static uint32_t s_lbsTick        = 0;    /* 0 = không có vị trí LBS */
+
+/* Vị trí hợp lệ cuối lưu ra NASA_POS_FILE (PosPersistPoll) */
+#define POS_FILE_MAGIC 0x504F5331u         /* "POS1" */
+typedef struct {
+    uint32_t magic;
+    double   lat;
+    double   lon;
+    uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
+} PosFile_t;
+static double   s_posSavedLat      = 0.0;
+static double   s_posSavedLon      = 0.0;
+static uint32_t s_posSaveTick      = 0;
 
 /* Giờ UTC từ GNSS */
 static HalDateTime_t s_lastGnssTime     = {0};
@@ -262,7 +281,95 @@ static void OdomPersistPoll(void)
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
-/** Tạo mutex dữ liệu GPS và đọc lại km ngày đã lưu. Gọi trước khi bật gnss_task. */
+static double CalculateDistanceKm(double lat1, double lon1, double lat2, double lon2);
+
+static int PosIsSane(double lat, double lon)
+{
+    return (lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0 &&
+            !(lat == 0.0 && lon == 0.0));
+}
+
+/** Ghi vị trí hợp lệ cuối ra file (ghi đè bản ghi cố định, như OdomFileWrite).
+ *  Chỉ gnss_task gọi, ngoài s_gpsDataMutex. */
+static void PosFileWrite(double lat, double lon)
+{
+    PosFile_t rec;
+    HalFile_t fp;
+
+    memset(&rec, 0, sizeof(rec));
+    rec.magic = POS_FILE_MAGIC;
+    rec.lat = lat;
+    rec.lon = lon;
+    rec.checksum = Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(PosFile_t, checksum));
+
+    fp = HAL_FS_Open(NASA_POS_FILE, "wb");
+    if (fp == HAL_FS_INVALID_HANDLE) {
+        HAL_LOG("[GNSS/Pos] Khong mo duoc %s de luu vi tri", NASA_POS_FILE);
+        return;
+    }
+    if (HAL_FS_Write(fp, &rec, sizeof(rec)) != (int)sizeof(rec)) {
+        HAL_LOG("[GNSS/Pos] Ghi %s loi", NASA_POS_FILE);
+    }
+    HAL_FS_Close(fp);
+    s_posSavedLat = lat;
+    s_posSavedLon = lon;
+}
+
+/** Đọc lại vị trí hợp lệ cuối lúc khởi động làm vị trí giữ lại (chưa có fix
+ *  thì gửi vị trí này thay vì 0,0). Gọi khi giữ s_gpsDataMutex. */
+static void PosFileLoad(void)
+{
+    PosFile_t rec;
+    HalFile_t fp;
+    int n;
+
+    fp = HAL_FS_Open(NASA_POS_FILE, "rb");
+    if (fp == HAL_FS_INVALID_HANDLE) return;
+    memset(&rec, 0, sizeof(rec));
+    n = HAL_FS_Read(fp, &rec, sizeof(rec));
+    HAL_FS_Close(fp);
+
+    if (n != (int)sizeof(rec) || rec.magic != POS_FILE_MAGIC ||
+        rec.checksum != Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(PosFile_t, checksum)) ||
+        !PosIsSane(rec.lat, rec.lon)) {
+        HAL_LOG("[GNSS/Pos] File vi tri khong hop le, bo qua");
+        return;
+    }
+    s_holdLat = rec.lat;
+    s_holdLon = rec.lon;
+    s_posSavedLat = rec.lat;
+    s_posSavedLon = rec.lon;
+    HAL_LOG("[GNSS/Pos] Doc lai vi tri cuoi sau khoi dong: %.6f,%.6f", rec.lat, rec.lon);
+}
+
+/**
+ * @brief Lưu vị trí hợp lệ cuối khi cần. Gọi sau mỗi mẫu GNSS, ngoài khóa.
+ *  Chỉ ghi khi đã dời >= POS_SAVE_MIN_KM so với lần lưu trước, và xe đang
+ *  dừng hoặc đã qua POS_SAVE_INTERVAL_SEC (đang chạy).
+ */
+static void PosPersistPoll(void)
+{
+    uint32_t now = GetTickNow();
+    double lat, lon;
+    int moving;
+
+    HAL_OS_MutexLock(s_gpsDataMutex);
+    lat = s_holdLat;
+    lon = s_holdLon;
+    moving = s_isMovingNow;
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
+
+    if (s_validFixTick == 0 || !PosIsSane(lat, lon)) return; /* chưa có fix từ lúc bật */
+    if (PosIsSane(s_posSavedLat, s_posSavedLon) &&
+        CalculateDistanceKm(s_posSavedLat, s_posSavedLon, lat, lon) < POS_SAVE_MIN_KM) return;
+    if (moving && s_posSaveTick != 0 &&
+        (now - s_posSaveTick) < (uint32_t)POS_SAVE_INTERVAL_SEC * HAL_TICKS_PER_SEC) return;
+
+    PosFileWrite(lat, lon);
+    s_posSaveTick = (now != 0) ? now : 1;
+}
+
+/** Tạo mutex dữ liệu GPS, đọc lại km ngày và vị trí cuối đã lưu. Gọi trước khi bật gnss_task. */
 void GPS_Init(void)
 {
     if (s_gpsDataMutex == NULL) {
@@ -270,6 +377,7 @@ void GPS_Init(void)
     }
     HAL_OS_MutexLock(s_gpsDataMutex);
     OdomFileLoad();
+    PosFileLoad();
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
@@ -279,29 +387,52 @@ void GPS_SetAccOn(int on)
     if (on) s_accWireSeenOn = 1;
 }
 
+/** 1 nếu tick a sau tick b (chịu được tràn bộ đếm) */
+static int TickAfter(uint32_t a, uint32_t b)
+{
+    return (int32_t)(a - b) > 0;
+}
+
 /**
  * @brief Bản sao dữ liệu GPS an toàn luồng.
- * valid = 0 khi dưới 5 vệ tinh hoặc chưa có vị trí; lúc đó lat / lon là vị trí
- * hợp lệ gần nhất (chưa từng có fix từ lúc bật thì là 0,0).
+ * valid = 1 khi có fix (>= 5 vệ tinh, có vị trí) và mẫu cuối chưa quá
+ * GPS_FIX_STALE_SEC. Khi valid = 0, lat / lon lấy theo thứ tự:
+ *  - vị trí LBS nếu mới hơn fix hợp lệ gần nhất (source = GPS_SRC_LBS);
+ *  - vị trí hợp lệ gần nhất, có thể đọc lại từ file sau khởi động (GPS_SRC_HOLD);
+ *  - 0,0 nếu chưa từng có vị trí (GPS_SRC_NONE).
+ * GNSS im lặng / đang tắt (mẫu cũ): tốc độ 0, số vệ tinh 0.
  */
 void GPS_Snapshot(GpsSnapshot_t *out)
 {
+    uint32_t now;
+    int fresh;
+
     if (out == NULL) return;
     HAL_OS_MutexLock(s_gpsDataMutex);
+    now = GetTickNow();
+    fresh = (s_lastFixTick != 0 &&
+             (now - s_lastFixTick) <= (uint32_t)GPS_FIX_STALE_SEC * HAL_TICKS_PER_SEC);
     out->lat        = s_lastLat;
     out->lon        = s_lastLon;
-    out->speedKph   = s_lastSpeedKph;
+    out->speedKph   = fresh ? s_lastSpeedKph : 0.0;
     out->headingDeg = s_lastHeadingDeg;
-    out->satellites = s_lastSatellites;
+    out->satellites = fresh ? s_lastSatellites : 0;
     out->totalKm    = s_totalKm;
     out->fixTick    = s_lastFixTick;
-    out->valid      = (out->satellites >= GPS_MIN_SATS_FOR_FIX && out->lat != 0.0 && out->lon != 0.0);
+    out->accM       = 0;
+    out->valid      = (fresh && out->satellites >= GPS_MIN_SATS_FOR_FIX &&
+                       out->lat != 0.0 && out->lon != 0.0);
     if (out->valid) {
-        s_holdLat = out->lat;
-        s_holdLon = out->lon;
+        out->source = GPS_SRC_GNSS;
+    } else if (s_lbsTick != 0 && (s_validFixTick == 0 || TickAfter(s_lbsTick, s_validFixTick))) {
+        out->lat = s_lbsLat;
+        out->lon = s_lbsLon;
+        out->accM = s_lbsAccM;
+        out->source = GPS_SRC_LBS;
     } else {
         out->lat = s_holdLat;
         out->lon = s_holdLon;
+        out->source = (s_holdLat == 0.0 && s_holdLon == 0.0) ? GPS_SRC_NONE : GPS_SRC_HOLD;
     }
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
@@ -367,6 +498,22 @@ static double CalculateDistanceKm(double lat1, double lon1, double lat2, double 
 }
 
 /**
+ * @brief 1 = dây ACC báo tắt và tin được theo accMode.
+ * Chỉ tin ACC OFF từ dây khi đã đọc được chân. accMode 2 (có đấu + không
+ * đấu): xe không đấu dây thì chân luôn báo OFF (kéo lên), nên chỉ dùng
+ * ACC OFF khi dây đã từng báo ON; nếu không thì chạy theo vận tốc như accMode 0.
+ */
+static int WireAccOff(void)
+{
+    int accMode = CFG_GetAccMode();
+
+    if (s_accWireOn != 0) return 0;
+    if (accMode == 1) return 1;
+    if (accMode == 2) return s_accWireSeenOn;
+    return 0;
+}
+
+/**
  * @brief Lọc trạng thái chạy / dừng / trôi sau tắt ACC / đỗ, chống nhiễu tốc độ GPS.
  * @return 1 = đang chạy.
  */
@@ -377,19 +524,10 @@ static int FilterMovingStatus(double speed, double lat, double lon)
     static uint32_t s_parkTimeoutStartTick = 0;
     uint32_t now = GetTickNow();
     double thresh = (double)CFG_GetSpeedThresh();
-    int accMode;
     int wireAccOff;
 
     if (thresh <= 0.0) thresh = 3.0;
-    accMode = CFG_GetAccMode();
-    /* Chỉ tin ACC OFF từ dây khi đã đọc được chân. accMode 2 (có đấu + không
-     * đấu): xe không đấu dây thì chân luôn báo OFF (kéo lên), nên chỉ dùng
-     * ACC OFF khi dây đã từng báo ON; nếu không thì chạy theo vận tốc như accMode 0. */
-    wireAccOff = 0;
-    if (s_accWireOn == 0) {
-        if (accMode == 1) wireAccOff = 1;
-        else if (accMode == 2) wireAccOff = s_accWireSeenOn;
-    }
+    wireAccOff = WireAccOff();
 
     /* 1. Dây ACC tắt (accMode 1 hoặc 2) */
     if (wireAccOff) {
@@ -719,9 +857,20 @@ static void ApplySample(const GnssSample_t *s)
 
     UpdateOdometer(s->lat, s->lon);
     ApplyStationaryAnchor(isMoving);
+    if (s_lastSatellites >= GPS_MIN_SATS_FOR_FIX && s_lastLat != 0.0 && s_lastLon != 0.0) {
+        /* Vị trí giữ lại khi mất GPS: sau điểm neo, để lúc đỗ giữ điểm neo */
+        s_holdLat = s_lastLat;
+        s_holdLon = s_lastLon;
+        s_validFixTick = (s_lastFixTick != 0) ? s_lastFixTick : 1;
+        if (s_lbsTick != 0) {
+            HAL_LOG("[GNSS/LBS] GPS fix back -> drop LBS position");
+            s_lbsTick = 0;
+        }
+    }
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 
     OdomPersistPoll();
+    PosPersistPoll();
     GpsDebugOnSample();
 }
 
@@ -1003,5 +1152,103 @@ void GPS_AgpsPoll(void)
     }
 #endif
     s_lastReason = reason;
+#endif
+}
+
+/* ============================== LBS ======================================= */
+
+/**
+ * @brief Hỏi vị trí theo trạm phát sóng (LBS) khi mất GPS. Gọi mỗi vòng khi
+ *        đang có phiên với Server (không gọi lúc ngủ).
+ *
+ * Chỉ hỏi khi mất fix >= LBS_NO_FIX_WAIT_SEC và: chưa có vị trí nào (khởi động
+ * trong hầm, file vị trí hỏng), hoặc xe đang chạy / ACC bật (vị trí giữ lại có
+ * thể đã cũ). Xe đỗ, ACC tắt thì giữ vị trí GPS cuối, không hỏi. Vị trí LBS
+ * chỉ để báo vị trí: không cộng odometer, không đổi trạng thái chạy / dừng, bỏ
+ * ngay khi có fix GPS lại (ApplySample).
+ */
+void GPS_LbsPoll(void)
+{
+#if LBS_ENABLE
+    static uint32_t s_reqTick = 0;      /* 0 = chưa hỏi lần nào */
+    static int      s_pending = 0;
+    static int      s_lastOk = 0;
+    static uint32_t s_dayTick = 0;
+    static int      s_dayCount = 0;
+    static int      s_capLogged = 0;
+    HalLbsResult_t res;
+    uint32_t now = GetTickNow();
+    uint32_t validTick;
+    uint32_t lostSec;
+    int hasFix, noPos, active;
+
+    if (HAL_LBS_GetResult(&res)) {
+        s_pending = 0;
+        s_lastOk = 0;
+        if (res.ok && PosIsSane(res.lat, res.lon) && res.accM <= LBS_MAX_ACC_M) {
+            int used = 0;
+            HAL_OS_MutexLock(s_gpsDataMutex);
+            /* Có fix lại trong lúc chờ kết quả thì bỏ (so với lúc hỏi) */
+            if (s_validFixTick == 0 || !TickAfter(s_validFixTick, s_reqTick)) {
+                s_lbsLat = res.lat;
+                s_lbsLon = res.lon;
+                s_lbsAccM = res.accM;
+                s_lbsTick = (now != 0) ? now : 1;
+                used = 1;
+            }
+            HAL_OS_MutexUnlock(s_gpsDataMutex);
+            HAL_LOG("[GNSS/LBS] %s lat=%.6f lon=%.6f acc=%dm",
+                    used ? "use" : "fix back meanwhile, drop", res.lat, res.lon, res.accM);
+            s_lastOk = 1; /* hỏi thành công: giãn theo LBS_INTERVAL_SEC */
+        } else {
+            HAL_LOG("[GNSS/LBS] reject: ok=%d ret=%d lat=%.6f lon=%.6f acc=%dm",
+                    res.ok, res.errCode, res.lat, res.lon, res.accM);
+        }
+    }
+    if (s_pending) {
+        /* Task LBS không trả kết quả (không nên xảy ra): thôi chờ */
+        if ((now - s_reqTick) < (uint32_t)(LBS_TIMEOUT_SEC + 30) * HAL_TICKS_PER_SEC) return;
+        HAL_LOG("[GNSS/LBS] no result after %ds, give up", LBS_TIMEOUT_SEC + 30);
+        s_pending = 0;
+    }
+
+    HAL_OS_MutexLock(s_gpsDataMutex);
+    hasFix = (s_lastSatellites >= GPS_MIN_SATS_FOR_FIX && s_lastLat != 0.0 && s_lastLon != 0.0 &&
+              s_lastFixTick != 0 &&
+              (now - s_lastFixTick) <= (uint32_t)GPS_FIX_STALE_SEC * HAL_TICKS_PER_SEC);
+    validTick = s_validFixTick;
+    noPos = (s_holdLat == 0.0 && s_holdLon == 0.0 && s_lbsTick == 0);
+    HAL_OS_MutexUnlock(s_gpsDataMutex);
+    /* Chưa có fix nên s_isMovingNow là trạng thái lúc mất GPS; dây ACC tắt
+     * (tin được theo accMode) thì coi là đỗ */
+    active = (s_accWireOn == 1) || (s_isMovingNow && !WireAccOff());
+
+    if (hasFix || !HAL_GNSS_IsPowered()) return;
+    lostSec = (validTick != 0) ? (now - validTick) / HAL_TICKS_PER_SEC : now / HAL_TICKS_PER_SEC;
+    if (lostSec < (uint32_t)LBS_NO_FIX_WAIT_SEC) return;
+    if (!noPos && !active) return;
+    if (s_reqTick != 0 &&
+        (now - s_reqTick) < (uint32_t)(s_lastOk ? LBS_INTERVAL_SEC : LBS_RETRY_SEC) * HAL_TICKS_PER_SEC) return;
+
+    if (s_dayTick == 0 || (now - s_dayTick) >= (uint32_t)86400u * HAL_TICKS_PER_SEC) {
+        s_dayTick = (now != 0) ? now : 1;
+        s_dayCount = 0;
+        s_capLogged = 0;
+    }
+    if (s_dayCount >= LBS_MAX_PER_DAY) {
+        if (!s_capLogged) {
+            HAL_LOG("[GNSS/LBS] %d requests in 24h, stop until next window", s_dayCount);
+            s_capLogged = 1;
+        }
+        return;
+    }
+
+    if (HAL_LBS_Request(LBS_TIMEOUT_SEC) == 0) {
+        s_reqTick = (now != 0) ? now : 1;
+        s_pending = 1;
+        s_dayCount++;
+        HAL_LOG("[GNSS/LBS] request #%d: no fix %lus, %s",
+                s_dayCount, (unsigned long)lostSec, noPos ? "no position yet" : "moving / ACC on");
+    }
 #endif
 }

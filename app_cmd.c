@@ -419,16 +419,22 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     {
         GpsSnapshot_t gps = {0};
         GPS_Snapshot(&gps);
-        if (gps.valid) {
+        /* Có fix: #OK. Mất GPS: vị trí cuối (#LAST) hoặc vị trí trạm phát
+         * sóng (#LBS<độ chính xác>m). Chưa từng có vị trí: NO FIX */
+        if (gps.source != GPS_SRC_NONE) {
+            char tag[24];
             int latD = (int)gps.lat;
             double latM = (gps.lat - latD) * 60.0;
             if (latM < 0) latM = -latM;
             int lonD = (int)gps.lon;
             double lonM = (gps.lon - lonD) * 60.0;
             if (lonM < 0) lonM = -lonM;
+            if (gps.valid) snprintf(tag, sizeof(tag), "OK");
+            else if (gps.source == GPS_SRC_LBS) snprintf(tag, sizeof(tag), "LBS%dm", gps.accM);
+            else snprintf(tag, sizeof(tag), "LAST");
             snprintf(resp, sizeof(resp),
-                     "sa,27 https://maps.google.com/maps?q=N%%20%d%%20%.6f%%20E%%20%d%%20%.6f#OK",
-                     latD < 0 ? -latD : latD, latM, lonD < 0 ? -lonD : lonD, lonM);
+                     "sa,27 https://maps.google.com/maps?q=N%%20%d%%20%.6f%%20E%%20%d%%20%.6f#%s",
+                     latD < 0 ? -latD : latD, latM, lonD < 0 ? -lonD : lonD, lonM, tag);
         } else {
             snprintf(resp, sizeof(resp), "sa,27 NO FIX");
         }

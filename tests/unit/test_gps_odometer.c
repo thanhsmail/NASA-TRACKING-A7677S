@@ -200,12 +200,16 @@ int HAL_GNSS_GetRtc(HalDateTime_t *rtc)
 }
 int HAL_GNSS_SetRtc(const HalDateTime_t *rtc) { (void)rtc; return 0; }
 int HAL_GNSS_AgpsRequest(void) { return 0; }
+int HAL_GNSS_IsPowered(void) { return 1; }
+int HAL_LBS_Request(uint32_t timeoutSec) { (void)timeoutSec; return -1; }
+int HAL_LBS_GetResult(HalLbsResult_t *out) { (void)out; return 0; }
 void HAL_NET_NitzEnable(void) {}   /* app_utils.c */
 
 static int s_filePos;
 HalFile_t HAL_FS_Open(const char *path, const char *mode)
 {
-    (void)path;
+    /* Chỉ giả lập file km ngày; file vị trí cuối (rv26_pos.dat) coi như không có */
+    if (strstr(path, "_pos.") != NULL) return HAL_FS_INVALID_HANDLE;
     if (mode[0] == 'r' && s_fileLen < 0) return HAL_FS_INVALID_HANDLE;
     if (mode[0] == 'w') s_fileLen = 0;
     s_filePos = 0;

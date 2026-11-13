@@ -990,8 +990,12 @@ static NasaState_t Handle_StateTracking(void)
         return STATE_ERROR_RETRY;
     }
 
-    /* đang có mạng: tải AGPS nếu lâu chưa bắt được vệ tinh (ngủ thì GNSS tắt) */
-    if (!NASA_IsSleeping()) GPS_AgpsPoll();
+    /* đang có mạng: tải AGPS nếu lâu chưa bắt được vệ tinh, hỏi vị trí LBS khi
+     * mất GPS (ngủ thì GNSS tắt, giữ vị trí cuối) */
+    if (!NASA_IsSleeping()) {
+        GPS_AgpsPoll();
+        GPS_LbsPoll();
+    }
 
     if (s_requestReplayAll) {
         s_requestReplayAll = 0;
