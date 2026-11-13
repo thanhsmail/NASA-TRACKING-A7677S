@@ -20,6 +20,9 @@
 
 static uint8_t s_addr = 0;
 static int     s_isInitialized = 0;
+static int     s_fifoOn = 0;      /* FIFO stream (LIS3DSH_ReadAvgXYZ); tat khi self-test / nap SM */
+static int     s_stRc = -2;       /* ket qua self-test gan nhat, -2 = chua chay */
+static int16_t s_stDelta[3] = {0, 0, 0};
 
 static int ReadReg(uint8_t reg, uint8_t *buf, uint16_t len)
 {
@@ -44,6 +47,22 @@ static int Probe(uint8_t addr7)
         HAL_LOG("[LIS3DSH] addr 0x%02X: WHO_AM_I=0x%02X (expect 0x%02X)", addr7, id, LIS3DSH_WHO_AM_I_VAL);
         return -1;
     }
+    return 0;
+}
+
+/** Bat / tat FIFO stream; @return 0 neu thanh cong */
+static int FifoSet(int on)
+{
+    if (on == s_fifoOn) return 0;
+    if (on) {
+        if (WriteReg(LIS3DSH_REG_FIFO_CTRL, LIS3DSH_FIFO_STREAM) != 0 ||
+            WriteReg(LIS3DSH_REG_CTRL_REG6, LIS3DSH_CTRL6_ADD_INC | LIS3DSH_CTRL6_FIFO_EN) != 0) return -1;
+    } else {
+        /* Bypass xoa FIFO; OUT_x tro lai la mau moi nhat (self-test / SM doc STATUS) */
+        if (WriteReg(LIS3DSH_REG_FIFO_CTRL, LIS3DSH_FIFO_BYPASS) != 0 ||
+            WriteReg(LIS3DSH_REG_CTRL_REG6, LIS3DSH_CTRL6_ADD_INC) != 0) return -1;
+    }
+    s_fifoOn = on;
     return 0;
 }
 
@@ -82,6 +101,7 @@ int LIS3DSH_Init(void)
     uint8_t rb = 0;
 
     s_isInitialized = 0;
+    s_fifoOn = 0; /* soft reset ben duoi dua FIFO ve bypass */
     if (HAL_I2C_Init(LIS3DSH_I2C_CHANNEL, 1) != 0) {
         HAL_LOG("[LIS3DSH] HAL_I2C_Init failed! channel=%d", LIS3DSH_I2C_CHANNEL);
         return -1;
@@ -118,6 +138,24 @@ int LIS3DSH_Init(void)
     return 0;
 }
 
+int LIS3DSH_PowerDown(void)
+{
+    s_isInitialized = 0;
+    s_fifoOn = 0;
+    if (s_addr == 0) { /* chua khoi tao lan nao (tat tu luc khoi dong) */
+        if (HAL_I2C_Init(LIS3DSH_I2C_CHANNEL, 1) != 0) return -1;
+        if (Probe(LIS3DSH_ADDR_SEL_LOW) == 0) s_addr = LIS3DSH_ADDR_SEL_LOW;
+        else if (Probe(LIS3DSH_ADDR_SEL_HIGH) == 0) s_addr = LIS3DSH_ADDR_SEL_HIGH;
+        else return -1;
+    }
+    (void)WriteReg(LIS3DSH_REG_CTRL_REG1, 0x00); /* tat SM1 */
+    if (WriteReg(LIS3DSH_REG_CTRL_REG3, LIS3DSH_CTRL3_STRT) != 0) return -1; /* soft reset */
+    HAL_OS_TaskSleep(10);
+    /* Sau reset CTRL_REG4 = 0x07 (ODR power-down); ghi lai cho chac */
+    if (WriteReg(LIS3DSH_REG_CTRL_REG4, LIS3DSH_CTRL4_XYZ_EN) != 0) return -1;
+    return 0;
+}
+
 int LIS3DSH_IsReady(void)
 {
     return s_isInitialized;
@@ -138,6 +176,83 @@ int LIS3DSH_ReadXYZ(int16_t mg[3])
     return 0;
 }
 
+uint8_t LIS3DSH_GetAddr(void)
+{
+    return s_addr;
+}
+
+/**
+ * Kiem tra nhanh luc chay: chip con tra loi, dung WHO_AM_I, CTRL_REG4 con
+ * cau hinh cua LIS3DSH_Init (sut ap lam chip tu reset ve power-down thi
+ * CTRL_REG4 = 0x07), va doc 1 mau XYZ. Khi FIFO dang bat, mau doc ra la mau
+ * cu nhat trong FIFO (TurnPoll mat 1 mau, khong anh huong).
+ */
+int LIS3DSH_Check(Lis3dshCheck_t *out)
+{
+    uint8_t ctrl4 = (uint8_t)((LIS3DSH_ODR << 4) | LIS3DSH_CTRL4_BDU | LIS3DSH_CTRL4_XYZ_EN);
+    uint8_t id = 0, rb = 0, raw[6];
+    Lis3dshCheck_t c;
+    int k;
+
+    memset(&c, 0, sizeof(c));
+    c.whoAmI = -1;
+    c.ctrl4 = -1;
+    if (out) *out = c;
+    if (!s_isInitialized || s_addr == 0) return LIS3DSH_CHECK_I2C;
+    if (ReadReg(LIS3DSH_REG_WHO_AM_I, &id, 1) != 0) return LIS3DSH_CHECK_I2C;
+    c.whoAmI = id;
+    if (out) *out = c;
+    if (id != LIS3DSH_WHO_AM_I_VAL) return LIS3DSH_CHECK_ID;
+    if (ReadReg(LIS3DSH_REG_CTRL_REG4, &rb, 1) != 0) return LIS3DSH_CHECK_I2C;
+    c.ctrl4 = rb;
+    if (out) *out = c;
+    if (rb != ctrl4) return LIS3DSH_CHECK_CONFIG;
+    if (ReadReg(LIS3DSH_REG_OUT_X_L, raw, sizeof(raw)) != 0) return LIS3DSH_CHECK_I2C;
+    for (k = 0; k < 3; k++) {
+        c.raw[k] = (int16_t)((uint16_t)raw[2 * k] | ((uint16_t)raw[2 * k + 1] << 8));
+        c.mg[k] = (int16_t)((int32_t)c.raw[k] * LIS3DSH_MG_NUM / LIS3DSH_MG_DEN);
+    }
+    if (out) *out = c;
+    return LIS3DSH_CHECK_OK;
+}
+
+int LIS3DSH_GetLastSelfTest(int16_t deltaMg[3])
+{
+    if (deltaMg) memcpy(deltaMg, s_stDelta, sizeof(s_stDelta));
+    return s_stRc;
+}
+
+/**
+ * Trung binh cac mau dang co trong FIFO (toi da 32 mau = 1.28 s o 25 Hz), roi
+ * xa het. Goi deu moi ~1 s cho mot gia tri da loc rung xoc mat duong.
+ * Lan goi dau (hoac sau self-test / nap SM) chi bat FIFO, tra count = 0.
+ * @return 0 neu thanh cong (count = so mau, mg chi hop le khi count > 0)
+ */
+int LIS3DSH_ReadAvgXYZ(int32_t mg[3], int *count)
+{
+    uint8_t src = 0, raw[6];
+    int32_t sum[3] = {0, 0, 0};
+    int n, i, k;
+
+    if (count) *count = 0;
+    if (!s_isInitialized || !mg) return -1;
+    if (!s_fifoOn) return FifoSet(1);
+    if (ReadReg(LIS3DSH_REG_FIFO_SRC, &src, 1) != 0) return -1;
+    n = src & LIS3DSH_FIFO_SRC_FSS;
+    if (src & LIS3DSH_FIFO_SRC_OVRN) n = LIS3DSH_FIFO_DEPTH;
+    for (i = 0; i < n; i++) {
+        /* Moi lan doc 6 byte lay ra mau cu nhat trong FIFO */
+        if (ReadReg(LIS3DSH_REG_OUT_X_L, raw, sizeof(raw)) != 0) return -1;
+        for (k = 0; k < 3; k++) {
+            sum[k] += (int16_t)((uint16_t)raw[2 * k] | ((uint16_t)raw[2 * k + 1] << 8));
+        }
+    }
+    if (n == 0) return 0;
+    for (k = 0; k < 3; k++) mg[k] = sum[k] / n * LIS3DSH_MG_NUM / LIS3DSH_MG_DEN;
+    if (count) *count = n;
+    return 0;
+}
+
 /**
  * Self-test duong: do chenh lech trung binh (ST bat) - (ST tat).
  * Datasheet chi cho gia tri dien hinh (+-2 g: X/Y ~140 mg, Z ~590 mg), khong
@@ -146,7 +261,7 @@ int LIS3DSH_ReadXYZ(int16_t mg[3])
  * 100 ms (~2 mau) thi dX/dY con dao dong -200..-320 mg giua cac lan khoi dong.
  * @return 0 neu dat, 1 neu lech, -1 neu loi doc
  */
-int LIS3DSH_SelfTest(int16_t deltaMg[3])
+static int SelfTestRun(int16_t deltaMg[3])
 {
     static const int32_t typ[3] = {140, 140, 590};
     uint8_t ctrl4 = (uint8_t)((LIS3DSH_ODR << 4) | LIS3DSH_CTRL4_BDU | LIS3DSH_CTRL4_XYZ_EN);
@@ -155,6 +270,7 @@ int LIS3DSH_SelfTest(int16_t deltaMg[3])
     int k, rc = 0;
 
     if (!s_isInitialized) return -1;
+    if (FifoSet(0) != 0) return -1;
     if (WriteReg(LIS3DSH_REG_CTRL_REG4, ctrl4St) != 0) return -1;
     HAL_OS_TaskSleep(40); /* 200 ms: bo cac mau dang chuyen tiep */
     if (AverageXYZ(10, base) != 0) rc = -1;
@@ -174,6 +290,18 @@ int LIS3DSH_SelfTest(int16_t deltaMg[3])
         if (d < 0) d = -d;
         if (d < typ[k] / 2 || d > typ[k] * 2) rc = 1;
     }
+    return rc;
+}
+
+/** Self-test, luu ket qua cho LIS3DSH_GetLastSelfTest; @return 0 dat, 1 lech, -1 loi */
+int LIS3DSH_SelfTest(int16_t deltaMg[3])
+{
+    int16_t d[3] = {0, 0, 0};
+    int rc = SelfTestRun(d);
+
+    s_stRc = rc;
+    memcpy(s_stDelta, d, sizeof(d));
+    if (deltaMg) memcpy(deltaMg, d, sizeof(d));
     return rc;
 }
 
@@ -200,6 +328,7 @@ int LIS3DSH_MotionArm(int deltaMg, int *thrMg)
     int k;
 
     if (!s_isInitialized || deltaMg <= 0) return -1;
+    if (FifoSet(0) != 0) return -1;
     if (AverageXYZ(4, g) != 0) return -1;
     for (k = 0; k < 3; k++) {
         int32_t a = g[k] < 0 ? -g[k] : g[k];

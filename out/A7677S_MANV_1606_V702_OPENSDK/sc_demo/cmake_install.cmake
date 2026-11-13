@@ -1,4 +1,4 @@
-# Install script for directory: E:/test/Newfolder/NASA-TRACKING-A7677S/sc_demo
+# Install script for directory: E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/sc_demo
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -34,6 +34,6 @@ endif()
 
 # Set default install directory permissions.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "E:/test/Newfolder/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-objdump.exe")
+  set(CMAKE_OBJDUMP "E:/tailieumudule4G/RV4G/Firmware/NASA-TRACKING-A7677S/tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-objdump.exe")
 endif()
 

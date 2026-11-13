@@ -50,6 +50,7 @@
 #define SIM_REDETECT_AFTER_SEC 30      // Mất SIM bao lâu thì bắt đầu tắt / bật sóng
 #define SIM_REDETECT_INTERVAL_SEC 60   // Chu kỳ tắt / bật sóng khi vẫn chưa thấy SIM
 #define SIM_RADIO_OFF_SEC 3            // Thời gian tắt sóng mỗi lần
+#define SIM_RADIO_ON_RETRY 3           // Số lần thử CFUN=1 liền nhau (cách 1 s); vẫn lỗi thì thử lại mỗi SIM_POLL_SEC
 #define SIM_ICCID_CHECK_SEC 60         // Chu kỳ so ICCID để phát hiện đổi SIM nhanh
 #define NASA_SERVER_RECV_TIMEOUT_US 0
 
@@ -62,6 +63,15 @@
 #define HEADING_PERIOD_SHARP_SEC 2       // Giảm chu kỳ khi cua gấp
 #define HEADING_PERIOD_TURN_FACTOR 0.5   // Giảm chu kỳ khi cua
 #define HEADING_MIN_SPEED_KPH 8.0 // Vận tốc tối thiểu để phát hiện góc lái
+/* Xác nhận vào cua bằng gia tốc ngang của LIS3DSH (app_nasa.c TurnPoll): rút
+ * ngắn chu kỳ gửi ngay khi xe bắt đầu cua, không chờ hướng GPS lệch đủ 15° / 30°.
+ * Gia tốc ngang = v x tốc độ quay: 40 km/h quay 6°/s ~ 120 mg, 12°/s ~ 250 mg. */
+#define ACCEL_TURN_ENABLE 1
+#define ACCEL_TURN_MG 120             // >= ngưỡng này: cua -> chu kỳ chạy x HEADING_PERIOD_TURN_FACTOR
+#define ACCEL_TURN_SHARP_MG 250       // >= ngưỡng này: cua gấp -> HEADING_PERIOD_SHARP_SEC
+#define ACCEL_TURN_CONFIRM_SEC 2      // mức cao hơn giữ ngần này giây (vòng 1 s) mới nhận
+#define ACCEL_TURN_RELEASE_SEC 2      // hết cua giữ ngần này giây mới trả chu kỳ thường
+#define ACCEL_TURN_GRAVITY_TAU_SEC 60 // hằng số lọc trọng lực lúc xe chạy (giây)
 
 /* Odometer */
 #define ODOM_MIN_DIST_KM 0.001       // Quãng đường tối thiểu để tính Odometer
@@ -129,36 +139,37 @@
  * bộ đệm nên không báo lỗi). 0 = tắt */
 #define SERVER_SILENT_RECONNECT_SEC 0
 
-/* Ngủ tiết kiệm ắc quy xe (app_nasa.c, SleepPoll): ACC tắt và xe đứng yên liên tục
- * quá thời gian chờ thì tắt GNSS, tắt LED, giãn vòng lặp các task và cho phép
- * module vào sleep (sAPI_SystemSleepSet). Vẫn giữ kết nối Server để nhận lệnh.
- * Thức khi ACC bật (ngắt GPIO + đọc chân định kỳ), khi có SMS / lệnh, và định kỳ
- * để gửi !NASA,2. Chỉ ngủ khi tin được dây ACC (accMode 1, hoặc 2 và dây đã từng
- * báo ON); xe không đấu ACC thì không ngủ vì không có gì đánh thức khi xe chạy.
- * Bật / tắt và hai thời gian dưới chỉnh được bằng lệnh 42. */
+/* Ngủ sâu tiết kiệm ắc quy xe (app_nasa.c, SleepPoll / SleepDeepStep): ACC tắt và xe
+ * đứng yên liên tục quá thời gian chờ thì gửi bản tin cuối, ngắt Server, tắt sóng
+ * (CFUN=4), tắt GNSS, tắt LED, dừng mọi tác vụ và cho module vào sleep
+ * (sAPI_SystemSleepSet). Lúc ngủ chỉ còn nasa_reporter thức mỗi SLEEP_POLL_SEC giây
+ * để đọc chân ACC, ngắt cảm biến gia tốc và nuôi watchdog; các task khác chờ
+ * SLEEP_IDLE_TASK_SEC giây / lần hoặc tới khi được đánh thức. Chỉ ACC bật hoặc
+ * rung (LIS3DSH) đánh thức; SMS / lệnh Server không tới được vì sóng tắt. Chỉ ngủ
+ * khi tin được dây ACC (accMode 1, hoặc 2 và dây đã từng báo ON).
+ * Bật / tắt và thời gian chờ chỉnh được bằng lệnh 42. */
 #define SLEEP_ENABLE_DEFAULT 1
 #define SLEEP_DELAY_SEC_DEFAULT 1800       // ACC tắt + đứng yên 30 phút thì ngủ
 #define SLEEP_DELAY_SEC_MIN 60
 #define SLEEP_DELAY_SEC_MAX 86400
-#define SLEEP_WAKE_PERIOD_SEC_DEFAULT 3600 // Đang ngủ: thức mỗi 1 giờ gửi một bản tin vị trí
+/* Chu kỳ thức định kỳ: không còn dùng (ngủ sâu không thức định kỳ), chỉ giữ để
+ * trường sleepWakeSec / khóa slpw trong cấu hình đã lưu vẫn đọc được */
+#define SLEEP_WAKE_PERIOD_SEC_DEFAULT 3600
 #define SLEEP_WAKE_PERIOD_SEC_MIN 300
 #define SLEEP_WAKE_PERIOD_SEC_MAX 86400
-#define SLEEP_WAKE_GNSS_SEC 90             // Lần thức định kỳ: bật GNSS chờ fix tối đa ngần này giây rồi mới gửi. 0 = không bật, gửi vị trí cũ
-#define SLEEP_EVENT_HOLD_SEC 120           // Thức vì SMS / lệnh / ngắt ACC giả: thức ít nhất ngần này giây rồi mới ngủ lại
-#define SLEEP_LOOP_SEC 5                   // Đang ngủ: nasa_reporter và SmsRecvTask lặp mỗi 5 s (thay vì 1 s)
-#define SLEEP_GPIO_LOOP_TICKS 1200         // Đang ngủ: gpio_status lặp mỗi 6 s (vẫn nuôi watchdog phần cứng 16 s; ACC đã có ngắt đánh thức)
-#define SLEEP_NET_RETRY_SEC 600            // Đang ngủ mà mất Server: 10 phút mới thử kết nối lại (thức thì 30 s)
+#define SLEEP_EVENT_HOLD_SEC 120           // Thức vì rung / ngắt ACC giả: thức ít nhất ngần này giây rồi mới ngủ lại
+#define SLEEP_POLL_SEC 8                   // Đang ngủ: nasa_reporter thức mỗi 8 s đọc ACC / cảm biến, nuôi watchdog phần cứng (16 s)
+#define SLEEP_IDLE_TASK_SEC 60             // Đang ngủ: gpio_status, gnss_task, SmsRecvTask, agps, ntp chờ ngần này giây / lần (thức sớm khi được đánh thức)
+#define SLEEP_ACC_CONFIRM_TICKS 20         // Chân ACC mức bật: đọc lại sau 100 ms cho chắc rồi mới thức
 #define SLEEP_STATUS_LOG_SEC 600           // Đang ngủ: log cờ sleep / USB / điện áp mỗi ngần này giây (đối chiếu khi đo dòng). 0 = tắt
-#define SLEEP_MOVED_KM 0.150              // Lần thức định kỳ thấy xe cách chỗ bắt đầu ngủ quá 150 m (bị kéo / chở) thì thức hẳn
-/* Ắc quy yếu (đo khi ACC tắt): dưới ngưỡng SLEEP_LOW_BATT_CONFIRM lần liên tiếp
- * thì ngủ sau SLEEP_LOW_BATT_DELAY_SEC thay vì chờ đủ thời gian cấu hình, và
- * giãn chu kỳ thức. Hết yếu khi lên trên ngưỡng + 0,3 V. 0 = tắt. Ngưỡng cho xe
- * 12 V; xe 24 V không bao giờ chạm. */
+/* Ắc quy yếu (đo khi ACC tắt, lúc thức): dưới ngưỡng SLEEP_LOW_BATT_CONFIRM lần
+ * liên tiếp thì ngủ sau SLEEP_LOW_BATT_DELAY_SEC thay vì chờ đủ thời gian cấu
+ * hình. Hết yếu khi lên trên ngưỡng + 0,3 V. 0 = tắt. Ngưỡng cho xe 12 V; xe
+ * 24 V không bao giờ chạm. */
 #define SLEEP_LOW_BATT_VOLT 11.0f
 #define SLEEP_LOW_BATT_HYST_VOLT 0.3f
 #define SLEEP_LOW_BATT_CONFIRM 3
 #define SLEEP_LOW_BATT_DELAY_SEC 60
-#define SLEEP_LOW_BATT_WAKE_PERIOD_SEC 21600 // Ắc quy yếu: thức mỗi 6 giờ
 
 /* Log debug GNSS / AGPS: thời gian có fix, mất / có lại fix, lý do chưa tải AGPS,
  * trạng thái định kỳ ([GNSS/Stat]). 0 = tắt khi phát hành nếu log quá nhiều */
@@ -230,23 +241,27 @@
  * ASR1606). SC_MODULE_GPIO_00 chỉ có khi FEATURE_SIMCOM_NORI; dùng pad số cố
  * định. Đổi khi schematic PCB khác.
  *
- * Quan trọng: GPIO_05 (pad 120, pin19) nhận INT1 của LIS3DSH; CS flash đã
- * chuyển sang pin12 (pad 17) — không được dùng chung với LED/DOUT.
+ * Theo schematic_TRACKING (KiCad, 15/06/2026):
+ *  - LED_GPS  pin4  (GPIO_00, pad 80) / LED_MEM pin5 (GPIO_01, pad 32) / LED_NET pin7 (GPIO_03, pad 74)
+ *  - ACC      pin52 (GPIO_09, pad 28): Q5 C1815 đảo, kéo lên 10K về 1V8 -> mức thấp = ACC bật
+ *  - GPIO_OUT pin48 (GPIO_08, pad 77): Q4 C1815 hở collector ra J2 chân 4 (mức cao = đóng)
+ *  - GSENSOR_INT pin36 (GPIO_14, pad 12) = INT1 LIS3DSH
+ * CS flash ở pin12 (pad 17) — không được dùng chung với LED/DOUT.
  */
 #ifndef GPIO_LED_NET
-#define GPIO_LED_NET 80 /* SC_MODULE_GPIO_00 */
+#define GPIO_LED_NET 80 /* SC_MODULE_GPIO_00 / pin7 (LED_NET) */
 #endif
 #ifndef GPIO_LED_PWR
-#define GPIO_LED_PWR 32 /* SC_MODULE_GPIO_01 */
+#define GPIO_LED_PWR 32 /* SC_MODULE_GPIO_01 / pin5 (LED_MEM) */
 #endif
 #ifndef GPIO_LED_GNSS
-#define GPIO_LED_GNSS 74 /* SC_MODULE_GPIO_03 */
+#define GPIO_LED_GNSS 74/* SC_MODULE_GPIO_03 / pin4 (LED_GPS) */
 #endif
 #ifndef GPIO_DOUT
-#define GPIO_DOUT 28 /* SC_MODULE_GPIO_09 / pin52 */
+#define GPIO_DOUT 28 /* SC_MODULE_GPIO_09 / pin48 (GPIO_OUT) */
 #endif
 #ifndef GPIO_ACC_IN
-#define GPIO_ACC_IN 37 /* SC_MODULE_GPIO_10 */
+#define GPIO_ACC_IN 37 /* SC_MODULE_GPIO_10 / pin52 (ACC) */
 #endif
 
 /*
@@ -266,9 +281,9 @@
 #define FLASH_SPI_CS_ACTIVE_LEVEL 0 /* nối thẳng CS# (active low) */
 #endif
 
-/* INT1 của LIS3DSH: pin19 (pad 120). Đặt -1 nếu board không nối INT1 */
+/* INT1 của LIS3DSH: GSENSOR_INT pin36 (pad 12). Đặt -1 nếu board không nối INT1 */
 #ifndef LIS3DSH_INT1_PIN
-#define LIS3DSH_INT1_PIN 120 /* SC_MODULE_GPIO_05 / pin19 */
+#define LIS3DSH_INT1_PIN 12 /* SC_MODULE_GPIO_14 / pin36 */
 #endif
 
 #if (GPIO_LED_PWR == FLASH_SPI_CS_PIN) || (GPIO_LED_NET == FLASH_SPI_CS_PIN) || \
@@ -295,14 +310,33 @@
 #define LIS3DSH_ODR LIS3DSH_ODR_25HZ // ~ vài chục µA; đủ cho phát hiện rung / di chuyển
 #endif
 #define ACCEL_LOG_SEC 10 // Đang thức: log X/Y/Z (mg) mỗi ngần này giây để kiểm tra lắp đặt. 0 = tắt
+/* Kiểm tra sức khỏe LIS3DSH lúc thức (app_nasa.c AccelHealthPoll, lệnh na,44):
+ * WHO_AM_I, CTRL_REG4 còn đúng (mất = chip bị reset do sụt áp), dữ liệu không
+ * đứng yên, |g| hợp lý. Lỗi -> khởi tạo lại; mất cảm biến -> thử lại định kỳ. */
+#define ACCEL_HEALTH_SEC 30   // chu kỳ kiểm tra (giây). 0 = tắt
+#define ACCEL_REINIT_SEC 300  // không có cảm biến: thử khởi tạo lại mỗi ngần này giây
+#define ACCEL_FAIL_MAX 3      // số lần liên tiếp lỗi I2C / sai WHO_AM_I thì coi là hỏng
+#define ACCEL_STUCK_MAX 10    // số lần liên tiếp X/Y/Z thô y hệt nhau thì coi là treo dữ liệu
+#define ACCEL_G_MIN_MG 400    // |g| ngoài [MIN, MAX] liên tiếp ACCEL_BAD_G_MAX lần -> lỗi
+#define ACCEL_G_MAX_MG 1800
+#define ACCEL_BAD_G_MAX 5
 /* Đang ngủ: thức khi rung / bị dời. Lúc vào ngủ nạp SM1 với ngưỡng = trục lớn
  * nhất lúc đứng yên + MOTION_WAKE_DELTA_MG; INT1 chốt đến khi SleepPoll đọc
  * OUTS1 (mỗi vòng ngủ 5 s nên một lần rung ngắn chỉ tính 1 ngắt). Đủ
  * MOTION_WAKE_EVENTS ngắt trong MOTION_WAKE_WINDOW_SEC giây thì thức hẳn —
  * đóng cửa / xe khác chạy qua chỉ 1 ngắt, bị kéo / chở thì rung liên tục. */
+/* Ba giá trị dưới là mặc định, chỉnh được bằng lệnh 43 (lưu cấu hình) */
 #define MOTION_WAKE_DELTA_MG 150
+#define MOTION_WAKE_DELTA_MG_MIN 30        // dưới mức này nhiễu cảm biến + rung nền dễ báo giả
+#define MOTION_WAKE_DELTA_MG_MAX 900       // ngưỡng tối đa 127 LSB x 15,6 mg ~ 1980 mg tính cả trọng lực
 #define MOTION_WAKE_EVENTS 3
+#define MOTION_WAKE_EVENTS_MIN 1
+#define MOTION_WAKE_EVENTS_MAX 20
 #define MOTION_WAKE_WINDOW_SEC 60
+#define MOTION_WAKE_WINDOW_SEC_MIN 10
+#define MOTION_WAKE_WINDOW_SEC_MAX 600
+#define MOTION_TEST_SEC_DEFAULT 120        // Lệnh na,43,t: thời gian thử độ nhạy lúc đang thức
+#define MOTION_TEST_SEC_MAX 600
 
 /* Bitmask trạng thái thiết bị (Protocol RV26 — bản tin 2/7) */
 #define ST_GPS (1u << 0)

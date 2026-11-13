@@ -336,6 +336,13 @@ int HAL_NET_SetRadio(int on)
     return (sAPI_NetworkSetCfun(on ? SC_CFUN_1 : SC_CFUN_0) == SC_NET_SUCCESS) ? 0 : -1;
 }
 
+int HAL_NET_SetFlightMode(int on)
+{
+    int ok = (sAPI_NetworkSetCfun(on ? SC_CFUN_4 : SC_CFUN_1) == SC_NET_SUCCESS);
+    HAL_LOG_Print("[NET] CFUN=%d %s", on ? 4 : 1, ok ? "OK" : "fail");
+    return ok ? 0 : -1;
+}
+
 int HAL_NET_ActivatePdp(int pdpId)
 {
     return (sAPI_TcpipPdpActive(pdpId, 1) == 0) ? 0 : -1;
@@ -548,7 +555,8 @@ static void sTask_Agps(void *argv)
     (void)argv;
     for (;;) {
         if (!s_agpsRequested) {
-            sAPI_TaskSleep(200);
+            /* GNSS tat (ngu sau) thi khong co yeu cau AGPS: cho 60 s / lan */
+            sAPI_TaskSleep(s_gnssStarted ? 200 : 60 * 200);
             continue;
         }
         s_agpsRequested = 0;
@@ -756,6 +764,12 @@ static void GnssPowerOff(void)
 void HAL_GNSS_SetPower(int on)
 {
     s_gnssWantOn = on ? 1 : 0;
+    /* gnss_task co the dang cho 60 s (GNSS tat): gui tin rong cho no bat ngay */
+    if (on && s_gnssUrcMsgQ) {
+        SIM_MSG_T msg;
+        memset(&msg, 0, sizeof(msg));
+        (void)sAPI_MsgQSend(s_gnssUrcMsgQ, &msg);
+    }
 }
 
 int HAL_GNSS_IsPowered(void)
@@ -790,9 +804,11 @@ static void sTask_GnssUrcListener(void *argv)
     while (1) {
         uint32_t now;
         memset(&msg, 0, sizeof(msg));
-        /* Cho toi da 5 s thay vi cho mai, de con kiem tra GNSS im lang; GNSS
-         * dang tat (ngu) thi 10 s, van du nhanh so voi GNSS_TASK_HANG_SEC */
-        if (sAPI_MsgQRecv(s_gnssUrcMsgQ, &msg, (s_gnssStarted ? 5u : 10u) * 200u) == SC_SUCCESS) {
+        /* Cho toi da 5 s thay vi cho mai, de con kiem tra GNSS im lang. GNSS tat
+         * (ngu sau) thi 60 s, van duoi GNSS_TASK_HANG_SEC; HAL_GNSS_SetPower(1)
+         * gui tin rong de thuc som. Vua yeu cau bat thi 1 s */
+        if (sAPI_MsgQRecv(s_gnssUrcMsgQ, &msg,
+                          (s_gnssStarted ? 5u : (s_gnssWantOn ? 1u : 60u)) * 200u) == SC_SUCCESS) {
             if (msg.arg3) {
                 const char *str = (const char *)msg.arg3;
                 HAL_LOG("[GNSS/URC] %s", str);

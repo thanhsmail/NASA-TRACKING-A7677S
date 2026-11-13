@@ -64,7 +64,7 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 |---|---|---|---|---|
 | `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp `NASA_RunStep()`: kết nối, đăng nhập, gửi vị trí, nhận lệnh Server |
 | `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ SMS mới, đọc, thực thi lệnh, xóa SMS |
-| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | Chu kỳ 500 ms (6 giây khi ngủ): lọc ACC, LED, DOUT, nuôi watchdog phần cứng |
+| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | Chu kỳ 500 ms: lọc ACC, LED, DOUT, nuôi watchdog phần cứng. Khi ngủ chỉ chờ (tối đa 60 giây / lần) |
 | `gnss_task` | 10 | — | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Nhận dữ liệu GNSS từ SDK, đẩy vào `GPS_OnUrcString()` |
 | `fota_task` | 20 | 10 KB | [app_fota.c](app_fota.c) | Chỉ tạo khi có lệnh 33 lần đầu; tải và nạp firmware |
 | `ntp_sync` | 130 | — | [app_utils.c](app_utils.c) | Chỉ tạo khi đồng hồ RTC chưa hợp lệ |
@@ -90,7 +90,7 @@ Mỗi vòng `STATE_TRACKING` làm lần lượt:
 2. Phát bù hàng đợi backup thành bản tin 7 (mỗi lượt tối đa 5 mục).
 3. Kiểm tra đổi ngày (xóa bộ đếm ngày) và lịch tự reset (lệnh 32).
 4. Lấy snapshot GPS, chạy quy tắc dừng đỗ và quy tắc lái xe.
-5. Tính chu kỳ gửi: ACC tắt dùng chu kỳ dừng; ACC bật dùng chu kỳ chạy, rút ngắn khi xe đổi hướng (≥15° còn một nửa, ≥30° còn 2 giây, áp dụng từ 8 km/h).
+5. Tính chu kỳ gửi: ACC tắt dùng chu kỳ dừng; ACC bật dùng chu kỳ chạy, rút ngắn khi xe đổi hướng (≥15° còn một nửa, ≥30° còn 2 giây, áp dụng từ 8 km/h). Khi có LIS3DSH, gia tốc ngang xác nhận xe đang vào cua sẽ rút ngắn chu kỳ ngay từ đầu khúc cua (mục 12).
 6. Đến hạn hoặc có yêu cầu gửi ngay thì gửi bản tin; gửi lỗi thì ghi vào backup.
 
 Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong lúc chờ ACK đăng nhập, trong `STATE_ERROR_RETRY`), thiết bị vẫn chạy quy tắc dừng đỗ / lái xe và ghi vị trí vào backup theo đúng chu kỳ ở bước 5. Bản tin 5 và 6 phát sinh lúc này không được lưu (bỏ), nhưng trạng thái phiên lái và dừng đỗ vẫn được cập nhật nên bản tin kế tiếp sau khi có mạng vẫn đúng.
@@ -102,29 +102,119 @@ Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong 
 | `!NASA,1` | Đăng nhập |
 | `!NASA,2` | Vị trí định kỳ |
 | `!NASA,5` | Thời gian làm việc của lái xe (5-1 bắt đầu, 5-2 định kỳ, 5-3 kết thúc) |
-| `!NASA,6` | Dừng đỗ (6-1 bắt đầu, 6-2 đang đỗ, 6-3 kết thúc). Khi thiết bị ngủ, 6-2 chỉ gửi ở mỗi lần thức định kỳ |
+| `!NASA,6` | Dừng đỗ (6-1 bắt đầu, 6-2 đang đỗ, 6-3 kết thúc). Khi thiết bị ngủ sâu thì không gửi |
 | `!NASA,7` | Dữ liệu phát bù từ backup |
+| `!NASA,13` | Trả lời lệnh từ Server (mục 7) |
 
-Trả lời lệnh từ Server là một dòng văn bản thường kết thúc bằng CR LF (không phải bản tin `!NASA`).
+Trả lời lệnh từ Server là bản tin `!NASA,13,<msgId>,<ngày giờ>,<nội dung>,*<checksum>` kết thúc bằng CR LF (mục 7).
 
 ## 7. Lệnh điều khiển
 
-Lệnh đến từ SMS hoặc Server đều vào `CMD_Execute()` trong [app_cmd.c](app_cmd.c). Cú pháp: `na,<mã>,<tham số>` để đặt, `sa,<mã>` để đọc.
+Lệnh đến từ SMS hoặc Server đều vào `CMD_Execute()` trong [app_cmd.c](app_cmd.c). Gửi lệnh nào cũng làm thiết bị thức khỏi chế độ ngủ để xử lý và trả lời.
 
-| Mã | Chức năng | Mã | Chức năng |
-|---|---|---|---|
-| 1 | IP và cổng Server | 25 | Tên lái xe, số GPLX |
-| 2 | Ngõ ra DOUT (rơ-le) | 26 | Chu kỳ báo dừng đỗ |
-| 3 | Hệ vệ tinh: 1 GPS+BeiDou+QZSS (mặc định), 2 BeiDou, 3 GPS+QZSS | | |
-| 4 | Chu kỳ gửi khi chạy / dừng | 27 | Vị trí hiện tại |
-| 8 | Chế độ ACC | 29 | Thông tin thiết bị, kèm trạng thái flash và backup |
-| 9 | Khởi động lại | 32 | Lịch tự reset |
-| 10 | Ngưỡng tốc độ | 33 | Cập nhật firmware / đọc phiên bản |
-| 11 | Chế độ im lặng (tắt LED) | 34, 35 | Xóa backup / xóa toàn bộ dữ liệu |
-| 12 | Phát lại dữ liệu cũ | 37 | Chuyển tiếp SMS |
-| 14 | Đăng nhập / đăng xuất lái xe | 40 | Khóa / mở khóa cấu hình |
-| 17, 18 | Số điện thoại chủ xe 1, 2 | 41 | Khôi phục cài đặt gốc |
-| | | 42 | Chế độ ngủ: bật / tắt, thời gian chờ, chu kỳ thức (mục 11) |
+### Cú pháp
+
+```text
+na,<mã>[,<tham số 1>[,<tham số 2>...]]   đặt / thực hiện (SET)
+sa,<mã>                                   đọc (GET)
+```
+
+- Các tham số cách nhau bằng dấu phẩy, không có khoảng trắng.
+- Với lệnh cấu hình, `na` và `sa` đều trả lời giá trị hiện tại sau khi xử lý. Giá trị được lưu ngay vào flash SPI (2 sector) và EFS (`NASA_CFG_FILE`), nên giữ được qua khởi động lại.
+- Lệnh chỉ có dạng `na` (9, 12, 34, 35, 37, 41): gửi `sa,<mã>` thì không làm gì và không trả lời.
+- Thiếu tham số bắt buộc thì trả lời `ERROR`. Mã không có trong bảng thì trả lời `ERROR ma lenh khong ho tro`.
+- Giá trị ngoài khoảng cho phép: các lệnh 4, 10 và 8 giữ giá trị cũ; các lệnh 26, 32, 42 và 43 kẹp về giới hạn gần nhất.
+
+### Trả lời
+
+| Nguồn | Dạng trả lời |
+|---|---|
+| SMS | Gửi nguyên văn về số đã nhắn, ví dụ `sa,10 nguong van toc: 3 km/h` |
+| Server | `!NASA,13,<msgId>,<ngày giờ>,<nội dung>,*<checksum>` + CR LF; tiền tố `sa,<mã> ` được bỏ khỏi nội dung |
+
+### Quyền (lệnh 40)
+
+Mặc định `NASA_LOCK_FEATURE_ENABLE 0` trong [app_config.h](app_config.h): mọi nguồn đều được đổi mọi cấu hình. Khi đặt bằng 1 và cấu hình đang khóa (`na,40,close`), các lệnh 1, 17, 18, 33 (và lệnh cũ `update`) chỉ nhận từ Server hoặc từ số chủ xe 1 / 2. Nguồn khác nhận `Ban khong co quyen thuc hien chuc nang nay`. Riêng lệnh 41 thì luôn kiểm tra, kể cả khi tính năng khóa bị tắt: cấu hình đang khóa thì chỉ nhận từ Server hoặc số chủ xe 1 / 2.
+
+### Bảng lệnh
+
+| Mã | Chức năng | Đặt / thực hiện (`na`) | Mặc định / khoảng | Trả lời (ví dụ) |
+|---|---|---|---|---|
+| 1 | IP / tên miền và cổng Server | `na,1,<host>,<port>` | `103.57.209.16`, 2590; cổng 1–65535 | `sa,1 ip/port: 103.57.209.16 / 2590` |
+| 2 | Ngõ ra DOUT (rơ-le) | `na,2,<1\|on\|0\|off>` | tắt | `sa,2 dieu khien ra: bat` |
+| 3 | Hệ vệ tinh | `na,3,<1\|2\|3>`: 1 GPS+BeiDou+QZSS, 2 BeiDou, 3 GPS+QZSS | 1 | `sa,3 che do ve tinh: 1 GPS+BDS+QZSS (dang chay: 1)` |
+| 4 | Chu kỳ gửi vị trí khi chạy / khi dừng (giây) | `na,4,<chạy>,<dừng>` | 10 / 300; 5–3600 | `sa,4 tan suat truyen: 10/300` |
+| 8 | Cách xác định ACC | `na,8,<0\|1\|2>`: 0 theo vận tốc (không đấu dây), 1 theo dây ACC, 2 dây + vận tốc | 1 | `sa,8 co dau day ACC` |
+| 9 | Khởi động lại | `na,9` | | Trả lời `reset ok`, 5 giây sau reset |
+| 10 | Ngưỡng vận tốc coi là xe chạy (km/h) | `na,10,<km/h>` | 3; 0–200 | `sa,10 nguong van toc: 3 km/h` |
+| 11 | Chế độ im lặng (tắt LED) | `na,11,<0\|1>` | 0 | `sa,11 trang thai im lang: tat` |
+| 12 | Phát lại toàn bộ dữ liệu trong backup | `na,12,<từ>,<đến>` (hiện bỏ qua 2 mốc thời gian, phát lại tất cả) | | `bat dau truyen lai du lieu cu` |
+| 14 | Đăng nhập / đăng xuất lái xe (đảo trạng thái) | `na,14` | | `na`: `sa,14 dang nhap lai xe: <tên> / <GPLX>`; `sa`: `sa,14 trang thai lai xe: <tên> / <GPLX> / login` |
+| 17, 18 | Số điện thoại chủ xe 1, 2 | `na,17,<số>` | trống; tối đa 19 ký tự | `sa,17 so dien thoai 1: 0912345678` |
+| 25 | Tên lái xe và số GPLX | `na,25,<tên>,<GPLX>` (đổi người thì tự đăng xuất người cũ, đăng nhập người mới) | | `sa,25 lai xe: <tên> / <GPLX> / login` |
+| 26 | Thời gian xác nhận dừng đỗ (giây) | `na,26,<giây>` | 60; 0–900 | `sa,26 thoi gian ghi nhan dung/do: 60 giay` |
+| 27 | Vị trí hiện tại (chỉ đọc) | | | Xem bên dưới |
+| 29 | Thông tin thiết bị (chỉ đọc) | | | Xem bên dưới |
+| 32 | Lịch tự reset | `na,32,<bật>,<giờ>`: bật > 0 thì reset mỗi ngày lúc `<giờ>`:00 theo đồng hồ thiết bị; 0 = tắt | 0, 0; giờ 0–23 | `sa,32 lich reset lai thiet bi: 1,3` |
+| 33 | Cập nhật firmware / đọc phiên bản | `na,33,<URL>` (mục 8) | | `sa,33 firmware: <mã FW>` (thêm `(dang update)` khi đang chạy) |
+| 34 | Xóa backup | `na,34` | | `dang xoa du lieu hanh trinh` |
+| 35 | Xóa backup và đặt lại odometer | `na,35` | | `dang xoa tat ca du lieu` |
+| 37 | Gửi SMS từ SIM của thiết bị (kiểm tra số / nạp tiền) | `na,37,<số nhận>,<nội dung>` | | Trả lời lại nội dung đã gửi |
+| 40 | Khóa / mở khóa cấu hình | `na,40,<close\|open>` | mở | `sa,40 thiet bi da mo khoa cau hinh` |
+| 41 | Khôi phục cài đặt gốc (xóa cấu hình trên flash và EFS) | `na,41` | | `khoi phuc cai dat mac dinh ban dau` |
+| 42 | Ngủ sâu tiết kiệm ắc quy (mục 11) | `na,42,<0\|1>[,<chờ phút>]` | bật, 30 phút; 1–1440 phút | `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
+| 43 | Thức khi rung, độ nhạy (mục 12) | `na,43,<0\|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]`, `na,43,t[,<giây>]` | bật, 150 mg, 3 ngắt / 60 s | `sa,43 rung: bat, nguong +150mg ...` |
+| 44 | Cảm biến gia tốc: tình trạng, self-test, bật / tắt (mục 12) | `na,44,<0\|1>`, `na,44,t` | bật | `sa,44 cam bien gia toc: OK, addr 0x1E, ...` |
+
+Lệnh cũ vẫn nhận: `reset` hoặc `reset#` (trả lời `OK` rồi reset ngay), `update,<URL>` (như `na,33`).
+
+### Lệnh 27: vị trí hiện tại
+
+```text
+sa,27 https://maps.google.com/maps?q=N%2010%2048.757780%20E%20106%2040.054320#OK
+```
+
+Tọa độ dạng độ + phút. Đuôi sau `#` cho biết nguồn vị trí:
+
+| Đuôi | Nguồn |
+|---|---|
+| `#OK` | GNSS đang có fix (mẫu mới trong `GPS_FIX_STALE_SEC` = 5 giây) |
+| `#LBS<n>m` | Mất GPS, vị trí theo trạm phát sóng (LBS) với độ chính xác `n` mét |
+| `#LAST` | Mất GPS, vị trí tốt cuối cùng (lưu trong EFS, còn sau khởi động lại) |
+| `sa,27 NO FIX` | Chưa từng có vị trí |
+
+### Lệnh 29: thông tin thiết bị
+
+```text
+<tên> <IMEI> <ICCID> GSM: <CSQ> GPS: <số vệ tinh> <host> <port> <da ket noi|chua ket noi> <ACC> FL:<0|1> BK:<F|E><số ô> ERR:<n> SIM:<0|1>
+```
+
+| Trường | Ý nghĩa |
+|---|---|
+| `GSM` | Cường độ sóng (CSQ 0–31) |
+| `GPS` | Số vệ tinh, 0 khi đang mất fix |
+| ACC | 1 bật, 0 tắt, -1 đọc chân lỗi |
+| `FL` | Flash SPI rời nhận được hay không |
+| `BK` | Nơi lưu backup (`F` flash, `E` EFS) và số ô đang chờ phát bù |
+| `ERR` | Số lần ghi flash lỗi từ lúc khởi động |
+| `SIM` | SIM sẵn sàng |
+
+### Lệnh 44: cảm biến gia tốc
+
+```text
+sa,44          đọc tình trạng
+na,44,t        chạy self-test lúc đang thức (để xe đứng yên), vài giây sau gửi sa,44 xem kết quả
+na,44,0        tắt hẳn cảm biến (lưu cấu hình, khóa aoff)
+na,44,1        bật lại
+```
+
+Ví dụ trả lời:
+
+```text
+sa,44 cam bien gia toc: OK, addr 0x1E, x=-455 y=661 z=-555 |g|=975mg, self-test PASS (-177,-183,470), loi 0 lan (cuoi: OK), khoi tao lai 0
+```
+
+Trạng thái đầu tiên là một trong: `OK`, `TAT` (đã tắt bằng `na,44,0`), `khong co cam bien`, `loi I2C`, `sai WHO_AM_I`, `mat cau hinh (reset)`, `du lieu dung yen`, `|g| bat thuong`. Self-test: `PASS`, `LECH` (ngoài khoảng), `LOI` (đọc lỗi), `chua chay`. Cách kiểm tra và tác dụng khi tắt xem mục 12.
 
 ## 8. Cập nhật firmware (lệnh 33)
 
@@ -187,7 +277,7 @@ Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản c�
 | Điều kiện | Hành động |
 |---|---|
 | `nasa_reporter` không chạy vòng nào trong 180 giây | `gpio_status` reset thiết bị |
-| Mất kết nối Server liên tục 15 phút | Reset thiết bị |
+| Mất kết nối Server liên tục 15 phút (không tính lúc ngủ) | Reset thiết bị |
 | `gpio_status` (hoặc cả ứng dụng) treo, hoặc `gnss_task` không chạy vòng nào 120 giây | Watchdog phần cứng 16 giây reset module (bật sau khi khởi tạo xong) |
 | Không nhận được dòng GNSS nào 60 giây | Tắt / bật lại GNSS |
 | Không nhận được byte nào từ Server 10 phút | Ngắt và kết nối, đăng nhập lại |
@@ -196,9 +286,9 @@ Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản c�
 | SIM không sẵn sàng 2 lần hỏi liên tiếp (mỗi 5 giây), kéo dài quá 30 giây | Tắt / bật sóng (CFUN 0/1) mỗi 60 giây để module đọc lại khe SIM |
 | SIM sẵn sàng trở lại, hoặc ICCID đổi | Cấu hình lại SMS, ngắt kết nối và đăng nhập lại Server với ICCID mới |
 
-## 11. Chế độ ngủ tiết kiệm ắc quy
+## 11. Chế độ ngủ sâu tiết kiệm ắc quy
 
-Code nằm ở `SleepPoll()` trong [app_nasa.c](app_nasa.c), hằng số trong [app_config.h](app_config.h) (nhóm `SLEEP_*`, `MOTION_WAKE_*`).
+Code nằm ở `SleepPoll()` / `SleepDeepStep()` trong [app_nasa.c](app_nasa.c), hằng số trong [app_config.h](app_config.h) (nhóm `SLEEP_*`, `MOTION_WAKE_*`).
 
 ### Điều kiện vào ngủ
 
@@ -214,40 +304,41 @@ Phải thỏa tất cả, liên tục trong suốt thời gian chờ:
 | Đã qua 120 giây từ lần cuối có SMS, lệnh hoặc lần thức gần nhất | `SLEEP_EVENT_HOLD_SEC` |
 | Đang có phiên Server thì phải phát bù hết điểm mù | |
 
-### Khi ngủ
+### Khi ngủ (ngủ sâu)
+
+Lúc vào ngủ, thiết bị gửi `!NASA,2` vị trí cuối (không có Server thì lưu điểm mù), ngắt Server, tắt sóng (CFUN=4, SIM vẫn cấp nguồn) và tắt GNSS. Sau đó mọi tác vụ dừng, chỉ còn đọc chân ACC và cảm biến gia tốc.
 
 | Thành phần | Trạng thái |
 |---|---|
+| Sóng / Server | Tắt (CFUN=4), socket đã đóng. Không nhận được SMS hay lệnh Server |
 | GNSS | Tắt; dữ liệu GPS giữ giá trị cuối |
 | Module | Cho phép sleep hệ thống (`sAPI_SystemSleepSet`). **Module không ngủ khi đang cắm USB** |
 | LED | Tắt cả 3 |
 | LIS3DSH | Nạp chương trình phát hiện chuyển động, ngắt ra INT1 (mục 12) |
-| Kết nối Server | Giữ để nhận lệnh. Mất kết nối thì 10 phút mới thử lại; bản tin không gửi được thì lưu điểm mù |
-| Bản tin | `!NASA,2` lúc vào ngủ, ở mỗi lần thức định kỳ và lúc thức hẳn. `!NASA,6` loại 2 không theo chu kỳ 60 giây mà chỉ gửi ở mỗi lần thức định kỳ; số giây đỗ vẫn đếm liên tục |
-| Vòng lặp task | `nasa_reporter`, `SmsRecvTask` 5 giây; `gpio_status` 6 giây (vẫn nuôi watchdog 16 giây); `gnss_task` 10 giây |
+| Bản tin | Không gửi gì cho đến khi thức. Không có lần thức định kỳ |
+| `nasa_reporter` | Mỗi 8 giây (`SLEEP_POLL_SEC`): nuôi watchdog phần mềm và phần cứng, đọc chân ACC và ngắt INT1. Không chạy gì khác |
+| `gpio_status` | Chờ tối đa 60 giây / lần (`SLEEP_IDLE_TASK_SEC`), chỉ canh `nasa_reporter` treo |
+| `gnss_task`, `SmsRecvTask`, `agps_task`, `ntp_sync` | Chờ 60 giây / lần; `SmsRecvTask` không hỏi SIM |
 
-Mỗi 60 phút (`SLEEP_WAKE_PERIOD_SEC_DEFAULT`; ắc quy yếu thì 6 giờ), thiết bị thức định kỳ: bật GNSS chờ fix tối đa 90 giây, gửi `!NASA,2` và `!NASA,6` loại 2, rồi ngủ lại. Nếu vị trí mới cách chỗ bắt đầu ngủ quá 150 m thì thức hẳn.
+### Điều kiện thức
 
-### Điều kiện thức hẳn
+Chỉ ACC và cảm biến gia tốc đánh thức:
 
 | Nguồn | Cách phát hiện |
 |---|---|
-| ACC bật | Ngắt cạnh xuống chân ACC. `SleepPoll` đọc lại chân; nếu chân vẫn báo tắt thì coi là ngắt giả, ghi log và cho ngủ lại. Dự phòng: `gpio_status` đọc chân mỗi 6 giây |
-| SMS / lệnh Server | Mọi lệnh `na` / `sa` |
-| Rung / bị dời | LIS3DSH báo đủ 3 ngắt trong 60 giây (`MOTION_WAKE_EVENTS`, `MOTION_WAKE_WINDOW_SEC`). Một lần rung đơn (đóng cửa, xe khác chạy qua) không đủ |
-| Lệch vị trí | Lần thức định kỳ thấy xe cách chỗ ngủ quá 150 m |
-| Điều kiện ngủ không còn | Tắt chế độ ngủ, tắt thiết bị, FOTA, dây ACC báo bật |
+| ACC bật | `nasa_reporter` đọc chân ACC mỗi 8 giây, thấy mức bật thì đọc lại sau 100 ms rồi thức. Ngắt cạnh xuống chân ACC chỉ làm thức sớm hơn; nếu chân vẫn báo tắt thì coi là ngắt giả, ghi log và ngủ lại |
+| Rung / bị kéo, chở | LIS3DSH báo đủ 3 ngắt trong 60 giây (mặc định, chỉnh bằng lệnh 43). Một lần rung đơn (đóng cửa, xe khác chạy qua) không đủ |
 
-Lúc đang ngủ, vận tốc GPS không được xét nữa, vì GNSS tắt hoặc vừa bật lại còn trôi. Việc phát hiện xe bị dời do cảm biến rung và kiểm tra lệch 150 m đảm nhận.
+Khi thức: bật sóng (CFUN=1), bật GNSS, đánh thức `gpio_status`, rồi kích hoạt PDP, kết nối, đăng nhập và gửi `!NASA,2` ngay. Thức vì rung thì sau 120 giây, nếu ACC vẫn tắt và xe đứng yên, phải chờ lại đủ thời gian chờ mới ngủ tiếp.
 
 ### Lệnh 42
 
 ```text
-na,42,<0|1>[,<chờ phút>[,<thức mỗi phút>]]     ví dụ: na,42,1,30,60
+na,42,<0|1>[,<chờ phút>]     ví dụ: na,42,1,30
 sa,42
 ```
 
-Trả lời: `sa,42 ngu tiet kiem: bat, cho 30 phut, thuc moi 60 phut, dang thuc, acquy 12.7V`.
+Trả lời: `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.7V`. Tham số thứ 3 (chu kỳ thức) của bản trước vẫn được nhận nhưng bị bỏ qua.
 
 ### Log và đo dòng
 
@@ -260,7 +351,8 @@ Trả lời: `sa,42 ngu tiet kiem: bat, cho 30 phut, thuc moi 60 phut, dang thuc
 | `[SLEEP] asleep 600s: sleep flag=1 usb=0 V=12.6` | Mỗi 10 phút khi đang ngủ (`SLEEP_STATUS_LOG_SEC`) |
 | `[SLEEP] motion #1/3 in 60s window (OUTS1=0x..)` | Một ngắt rung |
 | `[SLEEP] ACC interrupt but pin 37 high (ACC off) -> ignore` | Ngắt ACC giả, ngủ lại |
-| `[SLEEP] exit: <lý do> after ...s asleep` | Thức hẳn: `ACC interrupt`, `motion`, `moved`, `server command`... |
+| `[SLEEP] exit: <lý do> after ...s asleep` | Thức: `ACC interrupt`, `ACC pin`, `motion`, `sleep disabled`... |
+| `[NET] CFUN=4 OK` / `[NET] CFUN=1 OK` | Tắt / bật sóng lúc vào / ra khỏi ngủ |
 
 Khi đo dòng lúc ngủ phải **rút USB**, vì log qua USB giữ module thức. Kết quả đo trên board ngày 03/11/2026 ở 12 V: 0,09 A khi thức và cắm USB, 0,06 A khi ngủ. Mức 0,06 A vẫn cao hơn nhiều so với lúc module ngủ thật (vài mA). Chưa tách được phần nào thuộc module, phần nào thuộc các mạch khác trên board (nguồn, RS232, anten GPS); cần đo riêng dòng vào chân VBAT.
 
@@ -275,7 +367,7 @@ Driver: [drv_lis3dsh.c](drv_lis3dsh.c), bus qua [hal/hal_i2c.h](hal/hal_i2c.h). 
 | SCL / SDA | I2C kênh 0 (CI2C, chân 38 / 37 của module) | 400 kHz, kéo lên Vdd_IO |
 | CS | Vdd_IO | Chọn giao tiếp I2C |
 | SEL / SDO | GND | Địa chỉ 7 bit `0x1E` (driver vẫn thử `0x1D` cho board khác) |
-| INT1 | pad 120 (GPIO_05, chân 19) | Ngắt chuyển động, tích cực mức thấp, chốt |
+| INT1 | pad 12 (GPIO_14, chân 36) | Ngắt chuyển động, tích cực mức thấp, chốt |
 | Vdd_IO | Cùng mức I/O của module (1,8 V) | |
 
 ### Cấu hình
@@ -298,11 +390,68 @@ Datasheet chỉ cho giá trị điển hình (X/Y khoảng 140 mg, Z khoảng 59
 Khi vào ngủ, `LIS3DSH_MotionArm()` nạp state machine SM1:
 
 - Chương trình: `ST1_1 = 0x05` (một trục bất kỳ có |a| > THRS1_1), `ST1_2 = 0x11` (báo ngắt rồi chạy lại). MASK = ±X ±Y ±Z, ngắt ra INT1.
-- Ngưỡng tính lại mỗi lần vào ngủ để bù trọng lực theo tư thế lắp: ngưỡng = trục lớn nhất lúc đứng yên + 150 mg (`MOTION_WAKE_DELTA_MG`), đơn vị 15,6 mg/LSB.
-- `SleepPoll` đọc `OUTS1` (`0x5F`) để xóa ngắt và đếm. Nếu chân INT1 không hỗ trợ đánh thức, firmware vẫn đọc mức chân mỗi vòng ngủ.
+- Ngưỡng tính lại mỗi lần vào ngủ để bù trọng lực theo tư thế lắp: ngưỡng = trục lớn nhất lúc đứng yên + độ lệch (mặc định 150 mg, lệnh 43), đơn vị 15,6 mg/LSB.
+- `SleepPoll` đọc `OUTS1` (`0x5F`) để xóa ngắt và đếm. Nếu chân INT1 không hỗ trợ đánh thức, firmware vẫn đọc mức chân mỗi vòng ngủ (8 giây).
 - Khi thức hẳn thì tắt SM1 (`LIS3DSH_MotionDisarm()`).
 
 Mã lệnh state machine và đơn vị ngưỡng lấy theo ví dụ wake-up của ST (AN3393), chưa đối chiếu được với tài liệu gốc. Cần kiểm trên board: gõ nhẹ vào board phải thấy `[SLEEP] motion #1/3`.
+
+### Xác nhận vào cua (tăng tần suất gửi vị trí)
+
+Khi xe đang thức và chạy từ 8 km/h, `TurnPoll()` trong [app_nasa.c](app_nasa.c) chạy mỗi vòng `nasa_reporter` (khoảng 1 giây):
+
+1. Đọc trung bình các mẫu trong FIFO của cảm biến (khoảng 25 mẫu / 1 giây), để lọc rung xóc mặt đường.
+2. Ước lượng véc-tơ trọng lực bằng lọc thông thấp: nhanh khi xe đứng, rất chậm khi xe chạy (hằng số 60 giây), đóng băng khi đang cua. Nhờ vậy không cần biết cảm biến lắp theo hướng nào.
+3. Gia tốc nằm ngang = phần vuông góc với trọng lực, nên xóc lên xuống bị loại. Trừ tiếp phần gia tốc dọc tính từ thay đổi vận tốc GPS (tăng / giảm tốc), phần còn lại là gia tốc ngang.
+4. Gia tốc ngang lớn hơn gia tốc dọc và vượt ngưỡng liên tục 2 giây thì nhận là vào cua. Ngưỡng thoát thấp hơn ngưỡng vào 30%, và phải dưới ngưỡng 2 giây mới trả chu kỳ thường.
+
+| Mức | Gia tốc ngang | Ví dụ ở 40 km/h | Chu kỳ gửi |
+|---|---|---|---|
+| Cua | ≥ 120 mg (`ACCEL_TURN_MG`) | quay khoảng 6°/s | Chu kỳ chạy × 0,5 (như rule ≥15°) |
+| Cua gấp | ≥ 250 mg (`ACCEL_TURN_SHARP_MG`) | quay khoảng 12°/s | 2 giây (như rule ≥30°) |
+
+Rule theo hướng GPS vẫn giữ nguyên; chu kỳ thực tế là mức ngắn hơn của hai cách. Cảm biến cho tín hiệu ngay khi xe bắt đầu cua, còn hướng GPS phải lệch đủ 15° / 30° so với bản tin trước mới có tác dụng. Tắt tính năng bằng `ACCEL_TURN_ENABLE 0` trong [app_config.h](app_config.h).
+
+FIFO tự tắt khi self-test, khi thử độ nhạy và khi nạp chương trình phát hiện rung lúc vào ngủ; lần đọc tiếp theo tự bật lại.
+
+### Chỉnh độ nhạy (lệnh 43)
+
+```text
+na,43,<0|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]   ví dụ: na,43,1,150,3,60
+na,43,t[,<giây>]                                   thử độ nhạy lúc đang thức (mặc định 120 s, tối đa 600 s)
+sa,43
+```
+
+| Tham số | Mặc định | Khoảng | Tác dụng |
+|---|---|---|---|
+| `0` / `1` | 1 | | Tắt / bật thức khi rung |
+| `+mg` | 150 | 30–900 | Độ lệch so với trục lớn nhất lúc đứng yên. Nhỏ = nhạy hơn |
+| Số ngắt | 3 | 1–20 | Cần bao nhiêu ngắt thì thức. Lớn = ít thức nhầm hơn |
+| Cửa sổ | 60 s | 10–600 | Các ngắt phải nằm trong khoảng này |
+
+Mỗi lần đang ngủ chỉ đếm được tối đa một ngắt mỗi vòng 5 giây, nên với 3 ngắt / 60 giây thì xe phải rung liên tục khoảng 10–15 giây.
+
+Cách chỉnh:
+1. Khi xe đang thức, gửi `na,43,t` rồi thử các tình huống: đóng cửa, người lên xe, gõ vào thân xe, đẩy hoặc kéo xe.
+2. Xem log: mỗi ngắt có một dòng `[ACCEL/TEST] motion #n ... x= y= z=`, cuối cùng có `[ACCEL/TEST] done: n irq in 120s (thr=...mg)`. Gửi `sa,43` cũng xem được số ngắt của lần thử.
+3. Rung nhẹ (đóng cửa) mà ra nhiều ngắt thì tăng `+mg` hoặc tăng số ngắt; kéo xe mà ít ngắt thì giảm `+mg`.
+
+Trả lời `sa,43`: `sa,43 rung: bat, nguong +150mg (lan nap cuoi 843mg), thuc khi 3 ngat/60s, thu: lan truoc 4 ngat/120s`. Giá trị lưu trong cấu hình (khóa `mwoff`, `mdel`, `mev`, `mwin`).
+
+### Kiểm tra lúc chạy và bật / tắt (lệnh 44)
+
+Khi thiết bị đang thức, `AccelHealthPoll()` trong [app_nasa.c](app_nasa.c) kiểm tra cảm biến mỗi 30 giây (`ACCEL_HEALTH_SEC`, 0 = tắt):
+
+| Kiểm tra | Coi là hỏng khi |
+|---|---|
+| Đọc được `WHO_AM_I` = `0x3F` | Lỗi I2C hoặc sai ID 3 lần liên tiếp (`ACCEL_FAIL_MAX`) |
+| CTRL_REG4 còn đúng cấu hình | Sai ngay lần đầu: chip đã tự reset (thường do sụt áp) |
+| X/Y/Z thô thay đổi giữa các lần đọc | Giống hệt nhau 10 lần liên tiếp (`ACCEL_STUCK_MAX`), tức khoảng 5 phút |
+| \|g\| trong khoảng 400–1800 mg (`ACCEL_G_MIN_MG` / `ACCEL_G_MAX_MG`) | Ngoài khoảng 5 lần liên tiếp (`ACCEL_BAD_G_MAX`) |
+
+Khi hỏng: khởi tạo lại cảm biến, chạy self-test, bật lại đánh thức bằng INT1. Không có cảm biến thì cứ 5 phút (`ACCEL_REINIT_SEC`) thử khởi tạo lại một lần. Lúc ngủ và lúc đang thử độ nhạy (`na,43,t`) thì không kiểm tra.
+
+`na,44,0` tắt hẳn cảm biến: soft reset về chế độ power-down của chip, lưu vào cấu hình (khóa `aoff`), nên khởi động lại vẫn tắt. Khi tắt thì không thức khi rung (lúc ngủ chỉ dây ACC đánh thức), không xác nhận vào cua, không log `[ACCEL]`, không kiểm tra định kỳ. `na,44,1` khởi tạo lại và chạy self-test. Cú pháp và trả lời của lệnh xem mục 7.
 
 ### Log
 
@@ -311,19 +460,31 @@ Mã lệnh state machine và đơn vị ngưỡng lấy theo ví dụ wake-up c�
 | `[LIS3DSH] OK addr=0x1E ch=0 CTRL4=0x4F` | Khởi tạo xong |
 | `[LIS3DSH] self-test PASS: dX=-174 dY=-181 dZ=464 mg` | Kết quả self-test |
 | `[ACCEL] x=-700 y=323 z=619 mg` | Khi thức, mỗi 10 giây (`ACCEL_LOG_SEC`, 0 = tắt), để kiểm tra lắp đặt |
-| `[LIS3DSH] motion armed: g=(-700,323,619) thr=54 (843 mg)` | Đã nạp chương trình lúc vào ngủ |
+| `[LIS3DSH] motion armed: g=(-700,323,619) thr=54 (843 mg)` | Đã nạp chương trình lúc vào ngủ hoặc lúc thử |
+| `[ACCEL/TEST] start 120s: delta=150mg thr=843mg, ...` | Bắt đầu thử độ nhạy (lệnh `na,43,t`) |
+| `[ACCEL/TEST] motion #2 OUTS1=0x.. x=.. y=.. z=.. mg` | Một ngắt trong lúc thử |
+| `[ACCEL/TEST] done: 4 irq in 120s (thr=843mg)` | Kết thúc thử |
+| `[TURN] turn: lat=150mg long=20mg v=42km/h yaw~7deg/s -> period 5s` | Bắt đầu cua (`turn` / `sharp`) và chu kỳ gửi mới |
+| `[TURN] end: ... -> period 10s` | Hết cua, trả chu kỳ thường |
+| `[ACCEL/HEALTH] I2C error (WHO_AM_I=-1) 1/3` | Một lần kiểm tra lỗi, chưa tới ngưỡng |
+| `[ACCEL/HEALTH] FAULT #1: loi I2C -> re-init` | Phát hiện hỏng, khởi tạo lại |
+| `[ACCEL/HEALTH] re-init OK (#1)` / `re-init failed, retry in 300s` | Kết quả khởi tạo lại |
+| `[ACCEL/HEALTH] self-test (cmd) PASS: ...` | Self-test theo lệnh `na,44,t` hoặc sau khởi tạo lại |
+| `[ACCEL] disabled by cmd 44 -> power down OK` | Đã tắt cảm biến (`na,44,0`) |
+| `[LIS3DSH] disabled (cmd 44) -> power down OK` | Khởi động khi cảm biến đang tắt |
+| `[ACCEL] enabled by cmd 44 -> init` | Bật lại (`na,44,1`) |
 
 ## 13. Phần cứng
 
 | Tín hiệu | Pad | Ghi chú |
 |---|---|---|
-| LED mạng | 80 | Nháy khi đã đăng nhập Server, sáng khi có sóng, tắt khi mất sóng |
-| LED nguồn | 32 | Trạng thái bộ nhớ backup: sáng = bộ nhớ trong (file EFS), nháy = bộ nhớ ngoài (flash SPI), tắt = cả hai lỗi |
-| LED GNSS | 74 | Nháy khi có từ 5 vệ tinh |
-| DOUT | 28 (GPIO_09, pin 52) | Rơ-le |
-| ACC_IN | 37 (GPIO_10, chân 66) | Mức thấp = ACC bật; ngắt cạnh xuống đánh thức khi ngủ |
+| LED mạng (LED_NET) | 74 (GPIO_03, chân 7) | Nháy khi đã đăng nhập Server, sáng khi có sóng, tắt khi mất sóng |
+| LED nguồn (LED_MEM) | 32 (GPIO_01, chân 5) | Trạng thái bộ nhớ backup: sáng = bộ nhớ trong (file EFS), nháy = bộ nhớ ngoài (flash SPI), tắt = cả hai lỗi |
+| LED GNSS (LED_GPS) | 80 (GPIO_00, chân 4) | Nháy khi có từ 5 vệ tinh |
+| DOUT | 77 (GPIO_08, chân 48) | Rơ-le, qua Q4 hở collector ra J2 chân 4 |
+| ACC_IN | 28 (GPIO_09, chân 52) | Mức thấp = ACC bật; ngắt cạnh xuống đánh thức khi ngủ |
 | CS flash | 17 (GPIO_35/SSP0_CS, chân 12) | Nối thẳng CS#: GPIO mức thấp = chọn flash (`FLASH_SPI_CS_ACTIVE_LEVEL`); driver tự thử mức ngược lại nếu không đọc được mã chip |
-| INT1 LIS3DSH | 120 (GPIO_05, chân 19) | Ngắt chuyển động, đánh thức khi ngủ |
+| INT1 LIS3DSH | 12 (GPIO_14, chân 36) | Ngắt chuyển động, đánh thức khi ngủ |
 | I2C LIS3DSH | CI2C kênh 0 (chân 37 SDA, 38 SCL) | Mục 12 |
 | ADC1 | — | Điện áp ắc-quy qua cầu chia 1/23 |
 

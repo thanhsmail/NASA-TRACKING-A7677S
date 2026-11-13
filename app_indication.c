@@ -21,6 +21,14 @@
 
 static HalTaskRef_t s_gpioStatusTaskRef = NULL;
 static uint8_t      s_gpioStatusTaskStack[1024 * 4];
+/* Ngủ sâu: gpio_status chờ trên hàng đợi này, nasa_reporter gửi khi thức */
+static HalMsgQRef_t s_gpioWakeQ = NULL;
+
+void INDICATION_Wake(void)
+{
+    uint32_t msg[4] = {0}; /* cỡ SIM_MSG_T của SDK */
+    if (s_gpioWakeQ) (void)HAL_OS_MsgQSend(s_gpioWakeQ, msg, HAL_OS_NO_WAIT);
+}
 
 /* Ngắt cạnh xuống chân ACC (active-low: ACC bật) đánh thức module khi đang ngủ */
 static void AccWakeIsr(void)
@@ -53,23 +61,45 @@ static void sTask_GpioStatusIndication(void *argv)
     }
     HAL_GPIO_Config(GPIO_DOUT,   HAL_GPIO_OUT, HAL_GPIO_PULL_UP);
     HAL_GPIO_Config(GPIO_ACC_IN, HAL_GPIO_IN,  HAL_GPIO_PULL_UP);
-    /* Chân không hỗ trợ đánh thức thì vẫn còn đọc chân mỗi 6 s khi ngủ (bên dưới) */
+    /* Chân không hỗ trợ đánh thức thì nasa_reporter vẫn đọc chân mỗi SLEEP_POLL_SEC giây khi ngủ */
     if (HAL_GPIO_WakeupEnable(GPIO_ACC_IN, HAL_GPIO_EDGE_FALL, AccWakeIsr) != 0) {
         HAL_LOG("[ACC] wakeup interrupt not available on pin %d, polling only", GPIO_ACC_IN);
     }
     HAL_GPIO_Write(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
+    if (HAL_OS_MsgQCreate(&s_gpioWakeQ, "gpio_wake", 4 * sizeof(uint32_t), 2) != 0) {
+        s_gpioWakeQ = NULL;
+        HAL_LOG("[GPIO Status] wake queue create fail, sleep wait by timer");
+    }
 
     while (1) {
-        int sleeping   = NASA_IsSleeping();
-        int silent     = CFG_GetSilentMode() || sleeping; /* ngủ: tắt hết LED */
-        int accLevel   = HAL_GPIO_Read(GPIO_ACC_IN);
-        /* Active-low: GPIO_ACC_IN LOW = ACC ON */
-        int currentAcc = (accLevel == 0) ? 1 : 0;
+        int silent     = CFG_GetSilentMode();
+        int accLevel;
+        int currentAcc;
 
-        /* Đang ngủ mà chân ACC báo bật: thức ngay, không chờ lọc nhiễu 6 vòng x 6 s */
-        if (sleeping && accLevel >= 0 && currentAcc && !s_accVal) {
-            NASA_WakeRequest("ACC pin");
+        if (NASA_IsSleeping()) {
+            /* Ngủ sâu: không lọc ACC, không đọc CSQ, không nháy LED, không nuôi
+             * watchdog phần cứng (nasa_reporter tự đọc chân ACC / cảm biến gia tốc
+             * và nuôi). Chỉ thức mỗi SLEEP_IDLE_TASK_SEC giây canh nasa_reporter treo */
+            uint32_t msg[4];
+            HAL_GPIO_Write(GPIO_LED_GNSS, 0);
+            HAL_GPIO_Write(GPIO_LED_NET,  0);
+            if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) HAL_GPIO_Write(GPIO_LED_PWR, 0);
+            if (NASA_IsWatchdogTimeout()) {
+                HAL_LOG("[WATCHDOG] Task nasa_reporter timeout >180s while asleep! SysReset...");
+                HAL_OS_TaskSleep(200);
+                HAL_OS_SysReset();
+            }
+            if (s_gpioWakeQ) {
+                (void)HAL_OS_MsgQRecv(s_gpioWakeQ, msg, SLEEP_IDLE_TASK_SEC * HAL_TICKS_PER_SEC);
+            } else {
+                HAL_OS_TaskSleep(SLEEP_IDLE_TASK_SEC * HAL_TICKS_PER_SEC);
+            }
+            continue;
         }
+
+        accLevel   = HAL_GPIO_Read(GPIO_ACC_IN);
+        /* Active-low: GPIO_ACC_IN LOW = ACC ON */
+        currentAcc = (accLevel == 0) ? 1 : 0;
 
         if (accLevel < 0) {
             /* Đọc lỗi: giữ nguyên trạng thái ACC cũ, không coi là ACC OFF */
@@ -161,8 +191,7 @@ static void sTask_GpioStatusIndication(void *argv)
 #endif
 
         HAL_GPIO_Write(GPIO_DOUT, CFG_GetDout() ? 1 : 0);
-        /* Ngủ: 6 s / vòng, vẫn nuôi watchdog phần cứng (16 s) đủ dày */
-        HAL_OS_TaskSleep(sleeping ? SLEEP_GPIO_LOOP_TICKS : 100);
+        HAL_OS_TaskSleep(100);
     }
 }
 

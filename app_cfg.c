@@ -56,6 +56,11 @@ static void CFG_SetDefaults(void)
     s_cfg.sleepEnabled     = SLEEP_ENABLE_DEFAULT;
     s_cfg.sleepDelaySec    = SLEEP_DELAY_SEC_DEFAULT;
     s_cfg.sleepWakeSec     = SLEEP_WAKE_PERIOD_SEC_DEFAULT;
+    s_cfg.motionWakeOff    = 0;
+    s_cfg.motionDeltaMg    = MOTION_WAKE_DELTA_MG;
+    s_cfg.motionEvents     = MOTION_WAKE_EVENTS;
+    s_cfg.motionWindowSec  = MOTION_WAKE_WINDOW_SEC;
+    s_cfg.accelOff         = 0;
 }
 
 static void TrimInPlace(char *s)
@@ -126,6 +131,16 @@ static void ApplyKeyValue(const char *key, const char *val)
         s_cfg.sleepDelaySec = atoi(val);
     } else if (strcmp(key, "slpw") == 0) {
         s_cfg.sleepWakeSec = atoi(val);
+    } else if (strcmp(key, "mwoff") == 0) {
+        s_cfg.motionWakeOff = atoi(val);
+    } else if (strcmp(key, "mdel") == 0) {
+        s_cfg.motionDeltaMg = atoi(val);
+    } else if (strcmp(key, "mev") == 0) {
+        s_cfg.motionEvents = atoi(val);
+    } else if (strcmp(key, "mwin") == 0) {
+        s_cfg.motionWindowSec = atoi(val);
+    } else if (strcmp(key, "aoff") == 0) {
+        s_cfg.accelOff = atoi(val) ? 1 : 0;
     }
 }
 
@@ -145,6 +160,37 @@ typedef struct {
 } CfgFlashSector_t;
 
 static FactoryConfig_t s_factoryCfg;
+
+/*
+ * Firmware cũ ghi AppConfig_t ngắn hơn (các trường mới luôn thêm vào CUỐI
+ * struct), CRC tính trên độ dài cũ. Thử lần lượt độ dài hiện tại rồi các độ
+ * dài cũ để nâng cấp firmware không làm mất cấu hình:
+ *  - thiếu trường tắt cảm biến (lệnh 44)
+ *  - thiếu thêm 4 trường rung (lệnh 43)
+ *  - thiếu thêm 3 trường ngủ (lệnh 42)
+ * Thêm trường mới vào AppConfig_t thì thêm một dòng vào bảng này.
+ */
+static const uint32_t s_cfgLegacyTailBytes[] = {
+    0,
+    1 * sizeof(int),
+    5 * sizeof(int),
+    8 * sizeof(int),
+};
+
+static int CfgFlashSectorValid(const CfgFlashSector_t *sec, uint32_t *cfgLen)
+{
+    unsigned i;
+
+    if (sec->magic != CFG_FLASH_MAGIC) return 0;
+    for (i = 0; i < sizeof(s_cfgLegacyTailBytes) / sizeof(s_cfgLegacyTailBytes[0]); i++) {
+        uint32_t len = (uint32_t)sizeof(AppConfig_t) - s_cfgLegacyTailBytes[i];
+        if (Buffer_GetChecksum((const uint8_t *)&sec->factory, sizeof(FactoryConfig_t) + len) == sec->crc32) {
+            *cfgLen = len;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static void CFG_SetFactoryDefaults(void)
 {
@@ -201,31 +247,26 @@ void CFG_Load(void)
     /* 1. Thử đọc từ SPI Flash Sector 0 (Primary) và Sector 1 (Mirror) */
     CfgFlashSector_t flashSec;
     int primaryOk = 0, mirrorOk = 0;
+    uint32_t cfgLen = 0;
 
     if (EN25_IsReady()) {
-        if (EN25_Read(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
-            if (flashSec.magic == CFG_FLASH_MAGIC) {
-                uint32_t crcCalc = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
-                if (crcCalc == flashSec.crc32) {
-                    primaryOk = 1;
-                    memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
-                    memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
-                    HAL_LOG("[CFG] Loaded from SPI Flash Sector 0 (Primary) OK");
-                }
-            }
+        if (EN25_Read(CFG_FLASH_SECTOR_PRIMARY * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0 &&
+            CfgFlashSectorValid(&flashSec, &cfgLen)) {
+            primaryOk = 1;
+            memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
+            memcpy(&s_cfg, &flashSec.config, cfgLen); /* phần thiếu (bản cũ) giữ mặc định */
+            HAL_LOG("[CFG] Loaded from SPI Flash Sector 0 (Primary) OK (%lu/%lu bytes)",
+                    (unsigned long)cfgLen, (unsigned long)sizeof(AppConfig_t));
         }
 
         if (!primaryOk) {
-            if (EN25_Read(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0) {
-                if (flashSec.magic == CFG_FLASH_MAGIC) {
-                    uint32_t crcCalc = Buffer_GetChecksum((const uint8_t *)&flashSec.factory, sizeof(FactoryConfig_t) + sizeof(AppConfig_t));
-                    if (crcCalc == flashSec.crc32) {
-                        mirrorOk = 1;
-                        memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
-                        memcpy(&s_cfg, &flashSec.config, sizeof(s_cfg));
-                        HAL_LOG("[CFG] Loaded from SPI Flash Sector 1 (Mirror Backup) OK");
-                    }
-                }
+            if (EN25_Read(CFG_FLASH_SECTOR_MIRROR * EN25_SECTOR_SIZE, (uint8_t *)&flashSec, sizeof(flashSec)) == 0 &&
+                CfgFlashSectorValid(&flashSec, &cfgLen)) {
+                mirrorOk = 1;
+                memcpy(&s_factoryCfg, &flashSec.factory, sizeof(s_factoryCfg));
+                memcpy(&s_cfg, &flashSec.config, cfgLen);
+                HAL_LOG("[CFG] Loaded from SPI Flash Sector 1 (Mirror Backup) OK (%lu/%lu bytes)",
+                        (unsigned long)cfgLen, (unsigned long)sizeof(AppConfig_t));
             }
         }
     }
@@ -299,7 +340,7 @@ void CFG_Load(void)
 int CFG_Save(void)
 {
     /* static: tranh ~1.2KB stack khi goi tu CMD trong task NASA */
-    static char s_saveBuf[768];
+    static char s_saveBuf[1024];
     static CfgFlashSector_t s_flashSec;
     int len;
     HalFile_t fp;
@@ -334,7 +375,7 @@ int CFG_Save(void)
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
                    "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\ngnss=%d\n"
-                   "slp=%d\nslpd=%d\nslpw=%d\n",
+                   "slp=%d\nslpd=%d\nslpw=%d\nmwoff=%d\nmdel=%d\nmev=%d\nmwin=%d\naoff=%d\n",
                    s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate,
                    s_cfg.periodMovingSec, s_cfg.periodStoppedSec, s_cfg.accMode, s_cfg.speedThreshKph,
                    s_cfg.silentMode, s_cfg.doutOn, s_cfg.phone1, s_cfg.phone2, s_cfg.phone3,
@@ -342,7 +383,9 @@ int CFG_Save(void)
                    s_cfg.configLocked, s_cfg.deviceEnabled, s_cfg.operateDays,
                    s_cfg.driverName, s_cfg.driverLicense, s_cfg.driverLoggedIn,
                    s_cfg.lastMday, s_cfg.gnssMode,
-                   s_cfg.sleepEnabled, s_cfg.sleepDelaySec, s_cfg.sleepWakeSec);
+                   s_cfg.sleepEnabled, s_cfg.sleepDelaySec, s_cfg.sleepWakeSec,
+                   s_cfg.motionWakeOff, s_cfg.motionDeltaMg, s_cfg.motionEvents, s_cfg.motionWindowSec,
+                   s_cfg.accelOff);
     if (len > 0) {
         HAL_FS_Delete(NASA_CFG_FILE);
         fp = HAL_FS_Open(NASA_CFG_FILE, "wb");
@@ -411,6 +454,27 @@ int CFG_GetSleepWakeSec(void)
     if (s_cfg.sleepWakeSec < SLEEP_WAKE_PERIOD_SEC_MIN || s_cfg.sleepWakeSec > SLEEP_WAKE_PERIOD_SEC_MAX)
         return SLEEP_WAKE_PERIOD_SEC_DEFAULT;
     return s_cfg.sleepWakeSec;
+}
+/* Cấu hình cũ (trước lệnh 43) không có các trường rung: ngoài khoảng thì dùng mặc định */
+int CFG_GetMotionWakeEnabled(void) { return s_cfg.motionWakeOff ? 0 : 1; }
+int CFG_GetAccelEnabled(void) { return s_cfg.accelOff ? 0 : 1; }
+int CFG_GetMotionDeltaMg(void)
+{
+    if (s_cfg.motionDeltaMg < MOTION_WAKE_DELTA_MG_MIN || s_cfg.motionDeltaMg > MOTION_WAKE_DELTA_MG_MAX)
+        return MOTION_WAKE_DELTA_MG;
+    return s_cfg.motionDeltaMg;
+}
+int CFG_GetMotionEvents(void)
+{
+    if (s_cfg.motionEvents < MOTION_WAKE_EVENTS_MIN || s_cfg.motionEvents > MOTION_WAKE_EVENTS_MAX)
+        return MOTION_WAKE_EVENTS;
+    return s_cfg.motionEvents;
+}
+int CFG_GetMotionWindowSec(void)
+{
+    if (s_cfg.motionWindowSec < MOTION_WAKE_WINDOW_SEC_MIN || s_cfg.motionWindowSec > MOTION_WAKE_WINDOW_SEC_MAX)
+        return MOTION_WAKE_WINDOW_SEC;
+    return s_cfg.motionWindowSec;
 }
 int CFG_GetParkConfirmSec(void) { return s_cfg.parkConfirmSec; }
 int CFG_IsLocked(void)
@@ -558,6 +622,29 @@ void CFG_SetSleep(int enabled, int delaySec, int wakeSec)
         if (wakeSec > SLEEP_WAKE_PERIOD_SEC_MAX) wakeSec = SLEEP_WAKE_PERIOD_SEC_MAX;
         s_cfg.sleepWakeSec = wakeSec;
     }
+}
+
+static int ClampInt(int v, int lo, int hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+void CFG_SetAccelEnabled(int enabled)
+{
+    s_cfg.accelOff = enabled ? 0 : 1;
+}
+
+void CFG_SetMotionWake(int enabled, int deltaMg, int events, int windowSec)
+{
+    if (enabled >= 0) s_cfg.motionWakeOff = enabled ? 0 : 1;
+    if (deltaMg >= 0)
+        s_cfg.motionDeltaMg = ClampInt(deltaMg, MOTION_WAKE_DELTA_MG_MIN, MOTION_WAKE_DELTA_MG_MAX);
+    if (events >= 0)
+        s_cfg.motionEvents = ClampInt(events, MOTION_WAKE_EVENTS_MIN, MOTION_WAKE_EVENTS_MAX);
+    if (windowSec >= 0)
+        s_cfg.motionWindowSec = ClampInt(windowSec, MOTION_WAKE_WINDOW_SEC_MIN, MOTION_WAKE_WINDOW_SEC_MAX);
 }
 
 void CFG_SetDriver(const char *name, const char *license, int loggedIn)

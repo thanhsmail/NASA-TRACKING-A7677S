@@ -152,6 +152,13 @@ void BuildDateTimeAutoFallback(char *dateTime, uint32_t dateTimeSize)
     (void)snprintf(dateTime, dateTimeSize, "0000-00-00 00:00:00");
 }
 
+static volatile int s_utilLowPower = 0;
+
+void UTIL_SetLowPower(int on)
+{
+    s_utilLowPower = on ? 1 : 0;
+}
+
 static void sTask_NtpSync(void *argv)
 {
     (void)argv;
@@ -161,7 +168,8 @@ static void sTask_NtpSync(void *argv)
     {
         if (!s_ntpSyncRequested)
         {
-            HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
+            /* Ngủ sâu: không thức mỗi giây */
+            HAL_OS_TaskSleep(s_utilLowPower ? SLEEP_IDLE_TASK_SEC * HAL_TICKS_PER_SEC : HAL_TICKS_PER_SEC);
             continue;
         }
         s_ntpSyncRequested = 0;

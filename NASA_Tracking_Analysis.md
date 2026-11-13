@@ -93,10 +93,10 @@ NASA-TRACKING-A7677S/
 
 | Task | Ưu tiên | Stack | Tạo ở | Chu kỳ / kích hoạt | Công việc |
 |---|---|---|---|---|---|
-| `gnss_task` | 10 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Mỗi URC (1 giây), chờ tối đa 5 giây (GNSS tắt khi ngủ: 10 giây) | Nhận `+CGNSSINFO`, gọi `GPS_OnUrcString()`; 60 giây không có URC thì bật lại GNSS; tắt / bật GNSS theo `HAL_GNSS_SetPower()` |
-| `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp liên tục, nghỉ 1 giây mỗi vòng TRACKING (ngủ: 5 giây) | `NASA_RunStep()`: chế độ ngủ, kết nối, đăng nhập, gửi bản tin, phát bù, quy tắc |
-| `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ URC SMS (timeout 1 giây, ngủ: 5 giây) | Đọc SMS → thực thi lệnh → xóa SMS; gọi `SIM_Poll()` |
-| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | 0,5 giây (100 tick, 200 tick/giây); ngủ: 2 giây | Lọc ACC, LED, DOUT, kiểm tra watchdog phần mềm, nuôi watchdog phần cứng; ngắt ACC đánh thức |
+| `gnss_task` | 10 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Mỗi URC (1 giây), chờ tối đa 5 giây (GNSS tắt khi ngủ: 60 giây) | Nhận `+CGNSSINFO`, gọi `GPS_OnUrcString()`; 60 giây không có URC thì bật lại GNSS; tắt / bật GNSS theo `HAL_GNSS_SetPower()` |
+| `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp liên tục, nghỉ 1 giây mỗi vòng TRACKING (ngủ sâu: 8 giây, chỉ đọc ACC / cảm biến) | `NASA_RunStep()`: chế độ ngủ, kết nối, đăng nhập, gửi bản tin, phát bù, quy tắc |
+| `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ URC SMS (timeout 1 giây, ngủ: 60 giây) | Đọc SMS → thực thi lệnh → xóa SMS; gọi `SIM_Poll()` (không gọi khi ngủ) |
+| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | 0,5 giây (100 tick, 200 tick/giây); ngủ: chờ hàng đợi tối đa 60 giây | Lọc ACC, LED, DOUT, kiểm tra watchdog phần mềm, nuôi watchdog phần cứng; ngắt ACC đánh thức |
 | `fota_task` | 20 | 10 KB | [app_fota.c](app_fota.c) | Chỉ tạo khi có lệnh 33 | Tải và nạp firmware |
 | `agps_task` | 25 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Chỉ tạo khi có yêu cầu AGPS đầu tiên | Gọi `sAPI_GnssAgpsSeviceOpen()` |
 | `ntp_sync` | 130 | — | [app_utils.c](app_utils.c) | Chỉ tạo khi RTC chưa hợp lệ | Hiện **chưa đồng bộ thật** (chỉ in log) |
@@ -273,7 +273,7 @@ Hai module chỉ nhận dữ liệu qua tham số (snapshot GPS, tick, giờ), k
 | Sự kiện | Khi nào |
 |---|---|
 | 6-1 | Xe chuyển sang đỗ |
-| 6-2 | Đang đỗ, mỗi `parkConfirmSec` giây (lệnh 26, mặc định 60, tối đa 900). Đang ngủ: không theo chu kỳ này, chỉ gửi một bản ở mỗi lần thức định kỳ (cùng `!NASA,2`); số giây đỗ vẫn đếm liên tục |
+| 6-2 | Đang đỗ, mỗi `parkConfirmSec` giây (lệnh 26, mặc định 60, tối đa 900). Đang ngủ sâu: không gửi; số giây đỗ vẫn tính tiếp khi thức |
 | 6-3 | Xe chạy lại; không sớm hơn 5 s sau 6-1 (`PARK_FRAME_GUARD_SEC`) |
 
 **Phiên lái xe** ([app_lxlt_rules.c](app_lxlt_rules.c), bản tin 5):
@@ -316,13 +316,13 @@ Bố cục flash rời (sector 4 KB):
 
 | Tín hiệu | Pad | Xử lý |
 |---|---|---|
-| ACC_IN | 37 (GPIO_10, pin 66) | Mức thấp = bật; đổi trạng thái sau 6 chu kỳ ổn định (~3 s); đọc lỗi thì giữ trạng thái cũ và log |
-| DOUT | 28 (GPIO_09, pin 52) | Theo cấu hình lệnh 2, ghi lại mỗi chu kỳ |
-| LED GNSS | 74 | Nháy khi ≥ 5 vệ tinh, sáng khi ít hơn |
-| LED mạng | 80 | Nháy = đã đăng nhập Server; sáng = có sóng; tắt = mất sóng |
-| LED nguồn | 32 | Nháy = backup trên flash rời; sáng = file trong module; tắt = không lưu được |
+| ACC_IN | 28 (GPIO_09, pin 52) | Mức thấp = bật; đổi trạng thái sau 6 chu kỳ ổn định (~3 s); đọc lỗi thì giữ trạng thái cũ và log |
+| DOUT | 77 (GPIO_08, pin 48) | Theo cấu hình lệnh 2, ghi lại mỗi chu kỳ; qua Q4 hở collector ra J2 chân 4 |
+| LED GNSS (LED_GPS) | 80 (GPIO_00, pin 4) | Nháy khi ≥ 5 vệ tinh, sáng khi ít hơn |
+| LED mạng (LED_NET) | 74 (GPIO_03, pin 7) | Nháy = đã đăng nhập Server; sáng = có sóng; tắt = mất sóng |
+| LED nguồn (LED_MEM) | 32 (GPIO_01, pin 5) | Nháy = backup trên flash rời; sáng = file trong module; tắt = không lưu được |
 | CS flash | 17 (GPIO_35/SSP0_CS, pin 12) | Nối thẳng CS# (mức 0 = chọn); driver tự lái, tự thử mức ngược lại |
-| INT1 LIS3DSH | 120 (GPIO_05, pin 19) | Ngắt chuyển động (state machine SM1), cạnh xuống; đánh thức khi ngủ |
+| INT1 LIS3DSH | 12 (GPIO_14, pin 36) | Ngắt chuyển động (state machine SM1), cạnh xuống; đánh thức khi ngủ |
 
 Chế độ im lặng (lệnh 11) tắt cả 3 LED. Mỗi chu kỳ task cũng kiểm tra `NASA_IsWatchdogTimeout()`.
 
@@ -356,9 +356,10 @@ Lệnh đến từ SMS ([app_sms.c](app_sms.c)) hoặc Server ([app_network.c](a
 | 37 | Gửi SMS hộ | `na,37,<số>,<nội dung>` |
 | 40 | Khóa / mở khóa cấu hình | `na,40,close|open` — hiện luôn mở (`NASA_LOCK_FEATURE_ENABLE = 0`) |
 | 41 | Khôi phục cài đặt gốc | `na,41` |
-| 42 | Ngủ tiết kiệm ắc quy: bật / tắt, phút chờ trước khi ngủ, phút giữa 2 lần thức | `na,42,1,30,60` / `na,42,0` / `sa,42` → `sa,42 ngu tiet kiem: bat, cho 30 phut, thuc moi 60 phut, dang thuc, acquy 12.6V` |
+| 42 | Ngủ sâu tiết kiệm ắc quy: bật / tắt, phút chờ trước khi ngủ (tham số thứ 3 cũ bị bỏ qua) | `na,42,1,30` / `na,42,0` / `sa,42` → `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
+| 43 | Độ nhạy cảm biến rung (LIS3DSH): bật / tắt thức khi rung, +mg so với trục lớn nhất lúc đứng yên, số ngắt, cửa sổ giây; `t` = thử lúc đang thức, log `[ACCEL/TEST]` | `na,43,1,150,3,60` / `na,43,t,120` / `sa,43` → `sa,43 rung: bat, nguong +150mg (lan nap cuoi 843mg), thuc khi 3 ngat/60s, thu: lan truoc 4 ngat/120s` |
 
-Mọi lệnh `na` / `sa` hợp lệ (SMS hoặc Server) đều gọi `NASA_WakeRequest()`: thiết bị đang ngủ thì thức, đang thức thì hoãn ngủ thêm 120 s.
+Mọi lệnh `na` / `sa` hợp lệ (SMS hoặc Server) đều gọi `NASA_WakeRequest()`: đang thức thì hoãn ngủ thêm 120 s. Lúc ngủ sâu sóng đã tắt nên lệnh không tới được thiết bị.
 
 ---
 
@@ -384,80 +385,85 @@ Thử lại tối đa 3 lần, cách 10 s. Kết quả báo về nguồn gửi l
 
 ---
 
-## 15. Ngủ tiết kiệm ắc quy xe
+## 15. Ngủ sâu tiết kiệm ắc quy xe
 
-Mục đích: xe tắt máy để lâu không làm cạn bình. Logic ở `SleepPoll()` trong [app_nasa.c](app_nasa.c), gọi đầu mỗi `NASA_RunStep()` và mỗi vòng chờ thử kết nối lại. Phần cứng đi qua HAL: `HAL_OS_SystemSleepEnable()` (`sAPI_SystemSleepSet`), `HAL_GPIO_WakeupEnable()` (`sAPI_GpioConfig` + `sAPI_GpioWakeupEnable`), `HAL_GNSS_SetPower()` (gnss_task tắt / bật chip).
+Mục đích: xe tắt máy để lâu không làm cạn bình. Khi ngủ, thiết bị dừng mọi tác vụ: ngắt Server, tắt sóng, tắt GNSS, tắt LED. Chỉ còn đọc chân ACC và cảm biến gia tốc để biết lúc nào phải thức.
+
+Logic nằm ở `SleepPoll()` và `SleepDeepStep()` trong [app_nasa.c](app_nasa.c). Phần cứng đi qua HAL: `HAL_OS_SystemSleepEnable()` (`sAPI_SystemSleepSet`), `HAL_GPIO_WakeupEnable()` (`sAPI_GpioConfig` + `sAPI_GpioWakeupEnable`), `HAL_NET_SetFlightMode()` (CFUN=4 / CFUN=1), `HAL_GNSS_SetPower()` (gnss_task tắt / bật chip).
 
 ```mermaid
 stateDiagram-v2
     [*] --> AWAKE
-    AWAKE --> SLEEP : ACC tắt + đứng yên ≥ thời gian chờ (30 phút, ắc quy yếu 60 s), đã phát bù xong, hết thời gian giữ thức
-    SLEEP --> SLEEP_FIX : đến chu kỳ thức (60 phút, ắc quy yếu 6 giờ)
-    SLEEP_FIX --> SLEEP : có fix mới hoặc chờ 90 s → gửi !NASA,2, tắt GNSS
-    SLEEP --> AWAKE : ACC bật / SMS / lệnh / tắt lệnh 42 / FOTA
-    SLEEP_FIX --> AWAKE : xe cách chỗ bắt đầu ngủ ≥ 150 m, hoặc như trên
+    AWAKE --> SLEEP : ACC tắt + đứng yên ≥ thời gian chờ (30 phút, ắc quy yếu 60 s), đã phát bù xong, hết thời gian giữ thức → gửi !NASA,2 cuối, ngắt Server, CFUN=4, GNSS tắt
+    SLEEP --> SLEEP : mỗi 8 s đọc chân ACC + ngắt LIS3DSH, nuôi watchdog
+    SLEEP --> AWAKE : chân ACC mức bật / đủ số ngắt rung / tắt ngủ bằng lệnh 42 → CFUN=1, GNSS bật, đăng nhập lại, gửi !NASA,2
 ```
 
 | Điều kiện | Giá trị | Ở đâu |
 |---|---|---|
 | Bật / tắt | Mặc định bật | `SLEEP_ENABLE_DEFAULT`, lệnh 42 |
 | Thời gian chờ trước khi ngủ | 30 phút (1 phút đến 24 giờ) | `SLEEP_DELAY_SEC_DEFAULT`, lệnh 42 |
-| Chu kỳ thức gửi vị trí | 60 phút (5 phút đến 24 giờ) | `SLEEP_WAKE_PERIOD_SEC_DEFAULT`, lệnh 42 |
-| Bật GNSS chờ fix mỗi lần thức | Tối đa 90 s; 0 = gửi vị trí cũ, không bật GNSS | `SLEEP_WAKE_GNSS_SEC` |
-| Giữ thức sau SMS / lệnh / ngắt ACC giả | 120 s | `SLEEP_EVENT_HOLD_SEC` |
-| Ắc quy yếu | Dưới 11,0 V 3 lần đo liên tiếp (mỗi 10 s, chỉ đo khi ACC tắt) → ngủ sau 60 s, thức mỗi 6 giờ; hết yếu khi lên 11,3 V | `SLEEP_LOW_BATT_*` |
-| Xe bị dời khi đang ngủ | ≥ 150 m so với lúc bắt đầu ngủ (đo ở lần thức định kỳ) → thức hẳn, đếm lại thời gian chờ | `SLEEP_MOVED_KM` |
+| Thức định kỳ | Không có. Trường `sleepWakeSec` / khóa `slpw` chỉ còn giữ để đọc cấu hình cũ | — |
+| Giữ thức sau khi thức vì rung / ngắt ACC giả | 120 s | `SLEEP_EVENT_HOLD_SEC` |
+| Ắc quy yếu | Dưới 11,0 V 3 lần đo liên tiếp (mỗi 10 s, chỉ đo khi đang thức và ACC tắt) → ngủ sau 60 s; hết yếu khi lên 11,3 V | `SLEEP_LOW_BATT_*` |
 
-Chỉ ngủ khi tin được dây ACC: `accMode` 1, hoặc 2 và dây đã từng báo ON từ lúc khởi động. Xe không đấu ACC (`accMode` 0) không bao giờ ngủ, vì khi GNSS tắt không còn gì phát hiện xe chạy. Đang có FOTA, thiết bị bị tắt (`en=0`) hoặc xe đang chạy theo GPS cũng không ngủ. Đã ngủ thì chỉ dây ACC mới đánh thức theo kiểu "ACC on": vận tốc GPS không còn được xét (GNSS tắt hoặc vừa bật lại còn trôi); xe bị dời do cảm biến rung và kiểm tra lệch 150 m ở lần thức định kỳ đảm nhận.
+Chỉ ngủ khi tin được dây ACC: `accMode` 1, hoặc 2 và dây đã từng báo ON từ lúc khởi động. Xe không đấu ACC (`accMode` 0) không bao giờ ngủ, vì lúc ngủ không còn gì phát hiện xe chạy ngoài dây ACC và cảm biến rung. Đang có FOTA, thiết bị bị tắt (`en=0`) hoặc xe đang chạy theo GPS cũng không ngủ.
+
+Lúc vào ngủ (`SleepEnter`):
+
+1. Gửi `!NASA,2` vị trí cuối (không có phiên Server thì lưu vào điểm mù), ghi backup và cấu hình xuống bộ nhớ.
+2. Ngắt socket Server, `STATE_INIT`.
+3. Tắt sóng bằng CFUN=4 (chế độ máy bay, SIM vẫn cấp nguồn).
+4. Tắt GNSS, nạp ngưỡng rung cho LIS3DSH (lệnh 43), cho phép sleep hệ thống.
 
 Khi ngủ:
 
-| Thành phần | Thay đổi |
+| Task | Lúc ngủ |
 |---|---|
-| GNSS | Tắt (`HAL_GNSS_SetPower(0)`); bật lại trong lần thức định kỳ và khi thức hẳn. Dữ liệu GPS giữ nguyên giá trị cuối |
-| Module | Cho phép sleep hệ thống; thức khi hết hẹn giờ task, có dữ liệu mạng / SMS, hoặc ngắt ACC. Module không ngủ khi đang cắm USB |
-| LED | Tắt cả 3 (như chế độ im lặng) |
-| Kết nối Server | Giữ nguyên để nhận lệnh. Mất kết nối: 10 phút mới thử lại (`SLEEP_NET_RETRY_SEC`); bản tin định kỳ không gửi được thì lưu điểm mù |
-| Bản tin | Một `!NASA,2` lúc vào ngủ, một mỗi lần thức định kỳ, một lúc thức hẳn; không gửi theo chu kỳ dừng 300 s, không lưu điểm mù theo chu kỳ. `!NASA,6` loại 2 cũng chỉ gửi ở lần thức định kỳ |
-| AGPS | Không tải |
-| Vòng lặp | `nasa_reporter` và `SmsRecvTask` 5 s / vòng, `gpio_status` 6 s / vòng, `gnss_task` 10 s / vòng |
+| `nasa_reporter` | `SleepDeepStep()`: nghỉ 8 s (`SLEEP_POLL_SEC`), nuôi watchdog phần mềm + phần cứng, đọc chân ACC và ngắt INT1. Không chạy máy trạng thái, quy tắc đỗ / lái xe, gửi bản tin hay đọc CSQ |
+| `gpio_status` | Tắt LED, chờ trên hàng đợi tối đa 60 s (`SLEEP_IDLE_TASK_SEC`); mỗi lần thức chỉ canh `nasa_reporter` treo 180 s. Không lọc ACC, không đọc CSQ, không nuôi watchdog phần cứng. `INDICATION_Wake()` thức nó ngay khi ra khỏi ngủ |
+| `gnss_task` | GNSS tắt, chờ URC tối đa 60 s / vòng; `HAL_GNSS_SetPower(1)` gửi tin rỗng để bật ngay |
+| `SmsRecvTask` | Không gọi `SIM_Poll()` (sóng tắt dễ bị nhầm là rút SIM), chờ 60 s / vòng |
+| `agps_task`, `ntp_sync` | Chờ 60 s / vòng thay vì 1 s |
+| Module | Sleep hệ thống; chỉ thức theo hẹn giờ trên và ngắt GPIO. Module không ngủ khi đang cắm USB |
 
-Đánh thức:
+Đánh thức (chỉ ACC và cảm biến gia tốc; sóng tắt nên SMS / lệnh Server không tới được):
 
 | Nguồn | Cách | Độ trễ |
 |---|---|---|
-| ACC bật | Ngắt cạnh xuống chân ACC (`AccWakeIsr`, tắt sleep hệ thống ngay trong ngắt như demo SDK); `SleepPoll` đọc lại chân, chân vẫn mức cao (ACC tắt) thì coi là ngắt giả, log và cho ngủ lại; dự phòng: `gpio_status` đọc chân mỗi 6 s, thấy mức bật là gọi `NASA_WakeRequest()` không chờ lọc nhiễu | ≤ 5 s đến khi `nasa_reporter` xử lý |
-| Rung / bị dời | LIS3DSH SM1 → INT1 (pad 120); đủ `MOTION_WAKE_EVENTS` ngắt trong `MOTION_WAKE_WINDOW_SEC` | ≤ 5 s mỗi ngắt |
-| SMS / lệnh Server | `CMD_Execute()` gọi `NASA_WakeRequest()` cho mọi lệnh `na` / `sa`; SMS không phải lệnh chỉ làm module thức tạm | ≤ 5 s |
-| Định kỳ | `SleepPoll()` đếm chu kỳ thức | — |
+| ACC bật | Mỗi vòng `SleepDeepStep` đọc thẳng chân ACC (active-low), mức bật thì đọc lại sau 100 ms rồi thức. Ngắt cạnh xuống (`AccWakeIsr`) chỉ làm thức sớm hơn; chân vẫn mức cao thì coi là ngắt giả, log và ngủ lại | ≤ 8 s |
+| Rung / bị kéo, chở | LIS3DSH SM1 → INT1 (pad 12, pin 36), ngắt chốt mức thấp nên đọc chân cũng thấy; đủ `MOTION_WAKE_EVENTS` ngắt trong `MOTION_WAKE_WINDOW_SEC` (lệnh 43) | ≤ 8 s mỗi ngắt |
+
+Sau khi thức: CFUN=1, bật GNSS, đánh thức `gpio_status`, rồi `STATE_INIT` → PDP → kết nối → đăng nhập → gửi `!NASA,2` ngay. Thời gian từ lúc bật ACC đến bản tin đầu tiên ≈ 8 s + thời gian đăng ký mạng.
 
 Watchdog và bộ đếm treo khi ngủ:
 
 | Cơ chế | Vì sao không reset nhầm |
 |---|---|
-| Watchdog phần cứng 16 s | `gpio_status` vẫn nuôi mỗi 6 s |
-| `GNSS_TASK_HANG_SEC` 120 s | `gnss_task` vẫn chạy vòng mỗi ≤ 10 s khi GNSS tắt; tắt có chủ đích nên không tính là im lặng (không tự bật lại GNSS) |
-| `nasa_reporter` 180 s | Vòng ngủ 5 s, mỗi vòng `NASA_FeedWatchdog()`; vòng chờ thử lại 10 phút cũng nuôi mỗi 5 s |
-| `CheckNetworkDisconnTimeout` 15 phút | Bỏ qua khi đang ngủ; đếm lại từ đầu lúc thức |
+| Watchdog phần cứng 16 s | `nasa_reporter` tự nuôi mỗi 8 s (thay cho `gpio_status` đang chờ) |
+| `GNSS_TASK_HANG_SEC` 120 s | `gnss_task` vẫn chạy vòng mỗi ≤ 60 s; GNSS tắt có chủ đích nên không tự bật lại vì im lặng; lúc ngủ `gpio_status` không xét tiêu chí này |
+| `nasa_reporter` 180 s | Nuôi mỗi 8 s; `gpio_status` vẫn kiểm mỗi 60 s, nên nếu `nasa_reporter` treo lúc ngủ thì vẫn reset |
+| `CheckNetworkDisconnTimeout` 15 phút | Không chạy khi ngủ; đếm lại từ đầu lúc thức |
 
 Log (lọc theo `[SLEEP]`):
 
 ```
 [SLEEP] ACC off & still: sleep after 1800s
-[SLEEP] enter: ACC off & still 1800s, V=12.4, server=1 -> GNSS off, LED off, wake every 3600s
-[SLEEP] system sleep enable ret=0 (now=1)
+[SLEEP] enter: ACC off & still 1800s, V=12.4, server=1 -> last report, server off, radio off, GNSS off, tasks idle
+[SLEEP] last report sent
+[NET] CFUN=4 OK
+[SLEEP] system sleep enable ret=0 (now=1, usb=0)
 [GNSS] power off (sleep)
-[SLEEP] periodic wake #1: GNSS on, wait fix <= 90s
+[SLEEP] asleep 600s: sleep flag=1 usb=0 V=12.4
+[SLEEP] motion #1/3 in 60s window (OUTS1=0x..)
+[SLEEP] ACC interrupt but pin 37 high (ACC off) -> ignore, usb=0
+[SLEEP] exit: ACC interrupt after 7260s asleep, V=12.3 -> radio on, GNSS on, tasks resume
+[NET] CFUN=1 OK
 [GNSS] power on (wake)
-[SLEEP] periodic report: fix=1 after 23s (sats=9) -> GNSS off, sleep again, next in 3600s
-[SLEEP] battery low 10.8V < 11.0V -> sleep after 60s, wake every 21600s
-[SLEEP] moved 420 m from sleep position while ACC off
-[SLEEP] exit: ACC interrupt after 7260s asleep (2 periodic wake), V=12.3
-[SLEEP] no server -> store periodic report to backup
-[GPIO] wakeup pin 37 edge 2 config rc=0 wakeup rc=0
+[SLEEP] no server -> store last position to backup
 ```
 
-Chưa kiểm trên thiết bị: chân pad 37 có hỗ trợ đánh thức hay không (xem dòng `[GPIO] wakeup` lúc khởi động; lỗi thì vẫn còn đọc chân mỗi 6 s), và dòng tiêu thụ thực tế khi ngủ (cần rút USB khi đo).
+Chưa kiểm trên thiết bị: dòng tiêu thụ khi ngủ (phải rút USB khi đo), thời gian đăng ký lại mạng sau CFUN=4 → 1, và pad 28 (ACC) / pad 12 (INT1) có đánh thức được không (dòng `[GPIO] wakeup` lúc khởi động). Nếu pad không đánh thức được thì thiết bị vẫn thức nhờ đọc chân mỗi 8 s.
 
 ---
 
