@@ -165,7 +165,7 @@ static FactoryConfig_t s_factoryCfg;
  * Firmware cũ ghi AppConfig_t ngắn hơn (các trường mới luôn thêm vào CUỐI
  * struct), CRC tính trên độ dài cũ. Thử lần lượt độ dài hiện tại rồi các độ
  * dài cũ để nâng cấp firmware không làm mất cấu hình:
- *  - thiếu trường tắt cảm biến (lệnh 44)
+ *  - thiếu trường tắt cảm biến (na,43,off)
  *  - thiếu thêm 4 trường rung (lệnh 43)
  *  - thiếu thêm 3 trường ngủ (lệnh 42)
  * Thêm trường mới vào AppConfig_t thì thêm một dòng vào bảng này.

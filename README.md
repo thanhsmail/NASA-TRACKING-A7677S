@@ -163,8 +163,9 @@ Mặc định `NASA_LOCK_FEATURE_ENABLE 0` trong [app_config.h](app_config.h): m
 | 40 | Khóa / mở khóa cấu hình | `na,40,<close\|open>` | mở | `sa,40 thiet bi da mo khoa cau hinh` |
 | 41 | Khôi phục cài đặt gốc (xóa cấu hình trên flash và EFS) | `na,41` | | `khoi phuc cai dat mac dinh ban dau` |
 | 42 | Ngủ sâu tiết kiệm ắc quy (mục 11) | `na,42,<0\|1>[,<chờ phút>]` | bật, 30 phút; 1–1440 phút | `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
-| 43 | Thức khi rung, độ nhạy (mục 12) | `na,43,<0\|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]`, `na,43,t[,<giây>]` | bật, 150 mg, 3 ngắt / 60 s | `sa,43 rung: bat, nguong +150mg ...` |
-| 44 | Cảm biến gia tốc: tình trạng, self-test, bật / tắt (mục 12) | `na,44,<0\|1>`, `na,44,t` | bật | `sa,44 cam bien gia toc: OK, addr 0x1E, ...` |
+| 43 | Cảm biến gia tốc: thức khi rung / nghiêng, độ nhạy, bật / tắt cảm biến; `sa,43` trả cấu hình và sức khỏe cảm biến (mục 12) | `na,43,<0\|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]`, `na,43,<off\|on>` | cảm biến bật; rung bật, 150 mg, 3 ngắt / 60 s | `sa,43 rung: bat, nguong +150mg ...; cam bien: OK, ...` |
+
+Lệnh 44 cũ (`na,44`, `sa,44`) đã gộp vào lệnh 43 và không còn nhận (trả lời `ERROR ma lenh khong ho tro`).
 
 Lệnh cũ vẫn nhận: `reset` hoặc `reset#` (trả lời `OK` rồi reset ngay), `update,<URL>` (như `na,33`).
 
@@ -199,22 +200,32 @@ Tọa độ dạng độ + phút. Đuôi sau `#` cho biết nguồn vị trí:
 | `ERR` | Số lần ghi flash lỗi từ lúc khởi động |
 | `SIM` | SIM sẵn sàng |
 
-### Lệnh 44: cảm biến gia tốc
+### Lệnh 43: cảm biến gia tốc
 
 ```text
-sa,44          đọc tình trạng
-na,44,t        chạy self-test lúc đang thức (để xe đứng yên), vài giây sau gửi sa,44 xem kết quả
-na,44,0        tắt hẳn cảm biến (lưu cấu hình, khóa aoff)
-na,44,1        bật lại
+sa,43                                              cấu hình thức khi rung / nghiêng + sức khỏe cảm biến
+na,43,<0|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]   tắt / bật thức khi rung / nghiêng, độ nhạy (mục 12)
+na,43,off                                          tắt hẳn cảm biến (lưu cấu hình, khóa aoff)
+na,43,on                                           bật lại (khởi tạo lại + self-test)
 ```
 
-Ví dụ trả lời:
+`off` / `on` không phân biệt hoa thường. Mọi dạng `na,43` trả lời giống `sa,43`:
 
 ```text
-sa,44 cam bien gia toc: OK, addr 0x1E, x=-455 y=661 z=-555 |g|=975mg, self-test PASS (-177,-183,470), loi 0 lan (cuoi: OK), khoi tao lai 0
+sa,43 rung: bat, nguong +150mg (nap 156mg 3truc), 3 ngat/60s, nghieng 8do; cam bien: OK, addr 0x1E, x=-455 y=661 z=-555 |g|=975mg, self-test PASS (-177,-183,470), loi 0 lan (cuoi: OK), khoi tao lai 0
 ```
 
-Trạng thái đầu tiên là một trong: `OK`, `TAT` (đã tắt bằng `na,44,0`), `khong co cam bien`, `loi I2C`, `sai WHO_AM_I`, `mat cau hinh (reset)`, `du lieu dung yen`, `|g| bat thuong`. Self-test: `PASS`, `LECH` (ngoài khoảng), `LOI` (đọc lỗi), `chua chay`. Cách kiểm tra và tác dụng khi tắt xem mục 12.
+| Trường | Ý nghĩa |
+|---|---|
+| `rung` | Thức khi rung / nghiêng lúc ngủ: `bat` / `tat`; `(khong INT1)` nếu chưa có cảm biến hoặc chân ngắt |
+| `nguong` / `nap` | Độ lệch đã đặt, giá trị thực nạp lần gần nhất và kiểu (`3truc`, `abs`, `-` = chưa nạp) |
+| `ngat/s` | Số ngắt cần trong cửa sổ để thức |
+| `nghieng` | Ngưỡng nghiêng `MOTION_TILT_DEG` |
+| `cam bien` | Tình trạng (bảng dưới; `dang bat lai` ngay sau `na,43,on`), địa chỉ I2C, X/Y/Z và \|g\| lần kiểm tra gần nhất, self-test gần nhất (lúc khởi động hoặc sau khởi tạo lại), số lần hỏng, lỗi cuối, số lần khởi tạo lại. Đang ngủ thì thêm `(dang ngu, khong kiem tra)` |
+
+Câu trả lời dài hơn 160 ký tự, nên qua SMS có thể bị tách hoặc cắt tùy nhà mạng.
+
+Tình trạng là một trong: `OK`, `TAT` (đã tắt bằng `na,43,off`), `khong co cam bien`, `loi I2C`, `sai WHO_AM_I`, `mat cau hinh (reset)`, `du lieu dung yen`, `|g| bat thuong`. Self-test: `PASS`, `LECH` (ngoài khoảng), `LOI` (đọc lỗi), `chua chay`. Cách kiểm tra và tác dụng khi tắt xem mục 12.
 
 ## 8. Cập nhật firmware (lệnh 33)
 
@@ -440,15 +451,16 @@ Khi xe đang thức và chạy từ 8 km/h, `TurnPoll()` trong [app_nasa.c](app_
 
 Rule theo hướng GPS vẫn giữ nguyên; chu kỳ thực tế là mức ngắn hơn của hai cách. Cảm biến cho tín hiệu ngay khi xe bắt đầu cua, còn hướng GPS phải lệch đủ 15° / 30° so với bản tin trước mới có tác dụng. Tắt tính năng bằng `ACCEL_TURN_ENABLE 0` trong [app_config.h](app_config.h).
 
-FIFO tự tắt khi self-test, khi thử độ nhạy và khi nạp chương trình phát hiện rung lúc vào ngủ; lần đọc tiếp theo tự bật lại.
+FIFO tự tắt khi self-test và khi nạp chương trình phát hiện rung lúc vào ngủ; lần đọc tiếp theo tự bật lại.
 
 ### Chỉnh độ nhạy (lệnh 43)
 
 ```text
 na,43,<0|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]   ví dụ: na,43,1,150,3,60
-na,43,t[,<giây>]                                   thử độ nhạy lúc đang thức (mặc định 120 s, tối đa 600 s)
 sa,43
 ```
+
+Cú pháp đầy đủ của lệnh 43 (cả bật / tắt cảm biến) và câu trả lời xem mục 7.
 
 | Tham số | Mặc định | Khoảng | Tác dụng |
 |---|---|---|---|
@@ -463,7 +475,7 @@ Mỗi lần đang ngủ chỉ đếm được tối đa một ngắt mỗi vòng
 
 mg là mili-g (1 g = 9,81 m/s², gia tốc trọng trường), nên 150 mg = 0,15 g ≈ 1,5 m/s². Ở kiểu `3truc`, mỗi lần gia tốc trên một trục bất kỳ (X, Y hoặc Z) lệch quá 150 mg so với lúc xe đứng yên, cảm biến báo **một ngắt**. Một ngắt chưa đủ để thức, phải đủ số ngắt trong cửa sổ (mặc định 3 ngắt / 60 giây). Nhờ vậy một cú đóng cửa đơn lẻ không làm thiết bị thức.
 
-Ngưỡng trong chip đi theo bước 15,6 mg, nên giá trị đặt được làm tròn. `sa,43` hiện giá trị thực ở mục `lan nap cuoi`.
+Ngưỡng trong chip đi theo bước 15,6 mg, nên giá trị đặt được làm tròn. `sa,43` hiện giá trị thực ở mục `nap`.
 
 | | Giá trị đặt | Thực nạp vào chip |
 |---|---|---|
@@ -492,14 +504,14 @@ Mức gia tốc từng tình huống dưới đây chỉ là ước lượng, c�
 
 Cảm biến lấy mẫu 25 lần / giây (40 ms một mẫu), nên cú gõ quá ngắn có thể lọt.
 
-Cách chỉnh:
-1. Khi xe đang thức, gửi `na,43,t` rồi thử các tình huống: đóng cửa, người lên xe, gõ vào thân xe, đẩy hoặc kéo xe.
-2. Xem log: mỗi ngắt có một dòng `[ACCEL/TEST] motion #n ... x= y= z=`, cuối cùng có `[ACCEL/TEST] done: n irq in 120s (thr=...mg)`. Gửi `sa,43` cũng xem được số ngắt của lần thử.
+Cách chỉnh (theo dõi log qua cổng debug, rút USB thì module mới ngủ thật):
+1. Cho thiết bị ngủ sớm để thử: `na,42,1,1` (ngủ sau 1 phút khi ACC tắt, đứng yên). Thử xong trả lại `na,42,1,30`.
+2. Khi đang ngủ, thử các tình huống: đóng cửa, người lên xe, gõ vào thân xe, đẩy hoặc kéo xe. Mỗi ngắt có một dòng `[SLEEP] motion #n/3 ...`; đủ số ngắt thì `[SLEEP] exit: motion`.
 3. Rung nhẹ (đóng cửa) mà ra nhiều ngắt thì tăng `+mg` hoặc tăng số ngắt; kéo xe mà ít ngắt thì giảm `+mg`.
 
-Trả lời `sa,43`: `sa,43 rung: bat, nguong +150mg (lan nap cuoi 156mg 3truc), thuc khi 3 ngat/60s, nghieng 8do, thu: lan truoc 4 ngat/120s` (`3truc` / `abs` / `-` = chưa nạp). Giá trị lưu trong cấu hình (khóa `mwoff`, `mdel`, `mev`, `mwin`).
+Giá trị lưu trong cấu hình (khóa `mwoff`, `mdel`, `mev`, `mwin`).
 
-### Kiểm tra lúc chạy và bật / tắt (lệnh 44)
+### Kiểm tra lúc chạy và bật / tắt (`sa,43`, `na,43,off` / `on`)
 
 Khi thiết bị đang thức, `AccelHealthPoll()` trong [app_nasa.c](app_nasa.c) kiểm tra cảm biến mỗi 30 giây (`ACCEL_HEALTH_SEC`, 0 = tắt):
 
@@ -510,9 +522,9 @@ Khi thiết bị đang thức, `AccelHealthPoll()` trong [app_nasa.c](app_nasa.c
 | X/Y/Z thô thay đổi giữa các lần đọc | Giống hệt nhau 10 lần liên tiếp (`ACCEL_STUCK_MAX`), tức khoảng 5 phút |
 | \|g\| trong khoảng 400–1800 mg (`ACCEL_G_MIN_MG` / `ACCEL_G_MAX_MG`) | Ngoài khoảng 5 lần liên tiếp (`ACCEL_BAD_G_MAX`) |
 
-Khi hỏng: khởi tạo lại cảm biến, chạy self-test, bật lại đánh thức bằng INT1. Không có cảm biến thì cứ 5 phút (`ACCEL_REINIT_SEC`) thử khởi tạo lại một lần. Lúc ngủ và lúc đang thử độ nhạy (`na,43,t`) thì không kiểm tra.
+Khi hỏng: khởi tạo lại cảm biến, chạy self-test, bật lại đánh thức bằng INT1. Không có cảm biến thì cứ 5 phút (`ACCEL_REINIT_SEC`) thử khởi tạo lại một lần. Lúc ngủ thì không kiểm tra. Xem kết quả bằng `sa,43`.
 
-`na,44,0` tắt hẳn cảm biến: soft reset về chế độ power-down của chip, lưu vào cấu hình (khóa `aoff`), nên khởi động lại vẫn tắt. Khi tắt thì không thức khi rung (lúc ngủ chỉ dây ACC đánh thức), không xác nhận vào cua, không log `[ACCEL]`, không kiểm tra định kỳ. `na,44,1` khởi tạo lại và chạy self-test. Cú pháp và trả lời của lệnh xem mục 7.
+`na,43,off` tắt hẳn cảm biến: soft reset về chế độ power-down của chip, lưu vào cấu hình (khóa `aoff`), nên khởi động lại vẫn tắt. Khi tắt thì không thức khi rung (lúc ngủ chỉ dây ACC đánh thức), không xác nhận vào cua, không log `[ACCEL]`, không kiểm tra định kỳ. `na,43,on` khởi tạo lại và chạy self-test. Cú pháp và trả lời của lệnh xem mục 7.
 
 ### Log
 
@@ -522,20 +534,17 @@ Khi hỏng: khởi tạo lại cảm biến, chạy self-test, bật lại đán
 | `[LIS3DSH] self-test PASS: dX=-174 dY=-181 dZ=464 mg` | Kết quả self-test |
 | `[ACCEL] x=-700 y=323 z=619 mg` | Khi thức, mỗi 10 giây (`ACCEL_LOG_SEC`, 0 = tắt), để kiểm tra lắp đặt |
 | `[LIS3DSH] SM2 check SETT2=0x19: CS=0 fired=1 (need 1), CS=g fired=0 (need 0)` | Tự kiểm kiểu `3truc` |
-| `[LIS3DSH] motion armed DELTA: g=(-700,323,619) CS=(-45,21,40) thr=10 (+-156 mg all axes)` | Đã nạp kiểu `3truc` lúc vào ngủ hoặc lúc thử |
+| `[LIS3DSH] motion armed DELTA: g=(-700,323,619) CS=(-45,21,40) thr=10 (+-156 mg all axes)` | Đã nạp kiểu `3truc` lúc vào ngủ |
 | `[LIS3DSH] motion armed ABS: g=(..) thr=54 (843 mg, gravity axis only)` | Tự kiểm không qua, đã lùi về kiểu `abs` |
-| `[ACCEL/TEST] start 120s: delta=150mg thr=843mg, ...` | Bắt đầu thử độ nhạy (lệnh `na,43,t`) |
-| `[ACCEL/TEST] motion #2 OUTS=0x.. x=.. y=.. z=.. mg` | Một ngắt trong lúc thử |
-| `[ACCEL/TEST] done: 4 irq in 120s (thr=843mg)` | Kết thúc thử |
 | `[TURN] turn: lat=150mg long=20mg v=42km/h yaw~7deg/s -> period 5s` | Bắt đầu cua (`turn` / `sharp`) và chu kỳ gửi mới |
 | `[TURN] end: ... -> period 10s` | Hết cua, trả chu kỳ thường |
 | `[ACCEL/HEALTH] I2C error (WHO_AM_I=-1) 1/3` | Một lần kiểm tra lỗi, chưa tới ngưỡng |
 | `[ACCEL/HEALTH] FAULT #1: loi I2C -> re-init` | Phát hiện hỏng, khởi tạo lại |
 | `[ACCEL/HEALTH] re-init OK (#1)` / `re-init failed, retry in 300s` | Kết quả khởi tạo lại |
-| `[ACCEL/HEALTH] self-test (cmd) PASS: ...` | Self-test theo lệnh `na,44,t` hoặc sau khởi tạo lại |
-| `[ACCEL] disabled by cmd 44 -> power down OK` | Đã tắt cảm biến (`na,44,0`) |
-| `[LIS3DSH] disabled (cmd 44) -> power down OK` | Khởi động khi cảm biến đang tắt |
-| `[ACCEL] enabled by cmd 44 -> init` | Bật lại (`na,44,1`) |
+| `[ACCEL/HEALTH] self-test (re-init) PASS: ...` | Self-test sau khởi tạo lại |
+| `[ACCEL] disabled by cmd 43 off -> power down OK` | Đã tắt cảm biến (`na,43,off`) |
+| `[LIS3DSH] disabled (na,43,off) -> power down OK` | Khởi động khi cảm biến đang tắt |
+| `[ACCEL] enabled by cmd 43 on -> init` | Bật lại (`na,43,on`) |
 
 ## 13. Phần cứng
 

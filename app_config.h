@@ -310,7 +310,7 @@
 #define LIS3DSH_ODR LIS3DSH_ODR_25HZ // ~ vài chục µA; đủ cho phát hiện rung / di chuyển
 #endif
 #define ACCEL_LOG_SEC 10 // Đang thức: log X/Y/Z (mg) mỗi ngần này giây để kiểm tra lắp đặt. 0 = tắt
-/* Kiểm tra sức khỏe LIS3DSH lúc thức (app_nasa.c AccelHealthPoll, lệnh na,44):
+/* Kiểm tra sức khỏe LIS3DSH lúc thức (app_nasa.c AccelHealthPoll, xem bằng sa,43):
  * WHO_AM_I, CTRL_REG4 còn đúng (mất = chip bị reset do sụt áp), dữ liệu không
  * đứng yên, |g| hợp lý. Lỗi -> khởi tạo lại; mất cảm biến -> thử lại định kỳ. */
 #define ACCEL_HEALTH_SEC 30   // chu kỳ kiểm tra (giây). 0 = tắt
@@ -352,8 +352,6 @@
 #define NOACC_MOVE_END_SEC 300
 #define NOACC_MOVE_SMS_ENABLE 1
 #define NOACC_MOVE_SMS_MIN_SEC 1800        // tối thiểu giữa 2 lần SMS cảnh báo (kéo xe dừng / đi nhiều lần)
-#define MOTION_TEST_SEC_DEFAULT 120       // Lệnh na,43,t: thời gian thử độ nhạy lúc đang thức
-#define MOTION_TEST_SEC_MAX 600
 
 /* Bitmask trạng thái thiết bị (Protocol RV26 — bản tin 2/7) */
 #define ST_GPS (1u << 0)

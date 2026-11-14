@@ -577,66 +577,57 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
                  (double)NASA_GetVoltage());
         break;
 
-    /* --- Mã 43: Độ nhạy cảm biến rung (thức khi rung lúc ngủ):
-     *     na,43,<0|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]   đặt (lưu cấu hình)
-     *     na,43,t[,<giây>]                                   thử lúc đang thức, xem log [ACCEL/TEST] --- */
+    /* --- Mã 43: Cảm biến gia tốc LIS3DSH:
+     *     sa,43                                              cấu hình thức khi rung / nghiêng + sức khỏe cảm biến
+     *     na,43,<0|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]   tắt / bật thức khi rung, độ nhạy (lưu cấu hình)
+     *     na,43,off | na,43,on                               tắt hẳn / bật lại cảm biến (lưu cấu hình) --- */
     case 43:
     {
-        int thrMg = 0, testOn = 0, testCount = 0, testSec = 0, present;
+        int thrMg = 0, present;
+        int justOn = 0;
 
         if (isSet) {
-            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
-            if (a[0] == 't' || a[0] == 'T') {
-                int sec = (NextToken(&save, b, sizeof(b)) && b[0]) ? atoi(b) : 0;
-                NASA_MotionTestStart(sec);
-            } else {
+            char *p;
+            if (!NextToken(&save, a, sizeof(a)) || !a[0]) { Reply(reply, ctx, src, "ERROR"); return; }
+            /* Chữ thường, cắt khoảng trắng / CR LF / '#' cuối (SMS) để so khớp từ khóa */
+            for (p = a; *p; p++) {
+                if (*p <= ' ' || *p == '#') { *p = '\0'; break; }
+                if (*p >= 'A' && *p <= 'Z') *p = (char)(*p - 'A' + 'a');
+            }
+            if (strcmp(a, "off") == 0 || strcmp(a, "on") == 0) {
+                justOn = (strcmp(a, "on") == 0);
+                CFG_SetAccelEnabled(justOn);
+                CFG_Save();
+                NASA_AccelPowerRequest();
+            } else if (strcmp(a, "0") == 0 || strcmp(a, "1") == 0) {
                 int deltaMg = -1, events = -1, windowSec = -1;
                 if (NextToken(&save, b, sizeof(b)) && b[0]) deltaMg = atoi(b);
                 if (NextToken(&save, b, sizeof(b)) && b[0]) events = atoi(b);
                 if (NextToken(&save, b, sizeof(b)) && b[0]) windowSec = atoi(b);
                 CFG_SetMotionWake(atoi(a), deltaMg, events, windowSec);
                 CFG_Save();
-            }
-        }
-        present = NASA_MotionInfo(&thrMg, &testOn, &testCount, &testSec);
-        {
-            int mode = LIS3DSH_MotionLastMode();
-            /* lech = +-nguong tren ca 3 truc (SM2); tuyet doi = chi truc mang trong luc (SM1, du phong) */
-            const char *modeStr = (mode == LIS3DSH_MOTION_DELTA) ? "3truc" :
-                                  (mode == LIS3DSH_MOTION_ABS) ? "abs" : "-";
-            snprintf(resp, sizeof(resp),
-                     "sa,43 rung: %s%s, nguong +%dmg (lan nap cuoi %dmg %s), thuc khi %d ngat/%ds, nghieng %ddo, thu: %s %d ngat/%ds",
-                     CFG_GetMotionWakeEnabled() ? "bat" : "tat", present ? "" : " (khong co cam bien)",
-                     CFG_GetMotionDeltaMg(), thrMg, modeStr, CFG_GetMotionEvents(), CFG_GetMotionWindowSec(),
-                     MOTION_TILT_DEG, testOn ? "dang chay," : "lan truoc", testCount, testSec);
-        }
-        break;
-    }
-
-    /* --- Mã 44: Kiểm tra cảm biến gia tốc LIS3DSH:
-     *     sa,44     tình trạng (kiểm tra định kỳ ACCEL_HEALTH_SEC, self-test gần nhất)
-     *     na,44,t   chạy self-test lúc đang thức (để xe đứng yên), vài giây sau gửi sa,44 xem kết quả
-     *     na,44,<0|1>  tắt / bật cảm biến (lưu cấu hình). Tắt: không thức khi rung, không xác nhận cua --- */
-    case 44:
-    {
-        char st[300];
-
-        if (isSet) {
-            if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
-            if (a[0] == 't' || a[0] == 'T') {
-                NASA_AccelSelfTestRequest();
-            } else if (a[0] == '0' || a[0] == '1') {
-                CFG_SetAccelEnabled(a[0] == '1');
-                CFG_Save();
-                NASA_AccelPowerRequest();
             } else {
                 Reply(reply, ctx, src, "ERROR");
                 return;
             }
         }
-        (void)NASA_AccelStatus(st, sizeof(st));
-        snprintf(resp, sizeof(resp), "sa,44 cam bien gia toc: %s%s", st,
-                 NASA_IsSleeping() ? " (dang ngu, khong kiem tra)" : "");
+        present = NASA_MotionInfo(&thrMg);
+        {
+            char st[260];
+            int mode = LIS3DSH_MotionLastMode();
+            /* 3truc = +-nguong tren ca 3 truc (SM2); abs = chi truc mang trong luc (SM1, du phong) */
+            const char *modeStr = (mode == LIS3DSH_MOTION_DELTA) ? "3truc" :
+                                  (mode == LIS3DSH_MOTION_ABS) ? "abs" : "-";
+
+            /* Vừa na,43,on: nasa_reporter khởi tạo lại ở vòng kế tiếp */
+            if (justOn) snprintf(st, sizeof(st), "dang bat lai");
+            else (void)NASA_AccelStatus(st, sizeof(st));
+            snprintf(resp, sizeof(resp),
+                     "sa,43 rung: %s%s, nguong +%dmg (nap %dmg %s), %d ngat/%ds, nghieng %ddo; cam bien: %s%s",
+                     CFG_GetMotionWakeEnabled() ? "bat" : "tat", present ? "" : " (khong INT1)",
+                     CFG_GetMotionDeltaMg(), thrMg, modeStr, CFG_GetMotionEvents(), CFG_GetMotionWindowSec(),
+                     MOTION_TILT_DEG, st, NASA_IsSleeping() ? " (dang ngu, khong kiem tra)" : "");
+        }
         break;
     }
 

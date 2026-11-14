@@ -102,12 +102,6 @@ static int      s_naRefOk = 0;                /* có chỗ đỗ để đo quãn
 static int      s_naRefFresh = 0;             /* chỗ đỗ lấy từ fix GNSS thật (không phải vị trí cũ) */
 static double   s_naRefLat = 0.0, s_naRefLon = 0.0;
 static uint32_t s_naSmsTick = 0;              /* lần SMS cảnh báo trước, 0 = chưa */
-/* Thử độ nhạy lúc thức (lệnh na,43,t): nạp SM1, đếm ngắt và log X/Y/Z */
-static volatile int s_motionTestReqSec = 0;   /* đặt từ task lệnh, nasa_reporter thực hiện */
-static int      s_motionTestOn = 0;
-static uint32_t s_motionTestEndTick = 0;
-static int      s_motionTestSec = 0;
-static int      s_motionTestCount = 0;        /* số ngắt của lần thử đang chạy / gần nhất */
 /* Vào cua theo gia tốc ngang (LIS3DSH, TurnPoll): 0 = không, 1 = cua, 2 = cua gấp */
 static int      s_turnLevel = 0;
 static int      s_turnPending = 0;            /* số giây liên tiếp mức mới khác mức hiện tại */
@@ -775,7 +769,6 @@ static void SleepEnter(uint32_t idleSec)
     s_sleepStatusTick = s_sleepStartTick;
     s_motionCount = 0;
     s_motionWinTick = 0;
-    s_motionTestOn = 0; /* lần thử độ nhạy (nếu có) nhường cho chế độ ngủ */
     s_motionArmed = 0;
     if (s_motionWakeOk && CFG_GetMotionWakeEnabled() && CFG_GetAccelEnabled()) {
         if (LIS3DSH_MotionArm(CFG_GetMotionDeltaMg(), &s_motionThrMg) == 0) {
@@ -1278,7 +1271,7 @@ static void AccelLogPoll(void)
     }
 }
 
-/* ---- Kiểm tra sức khỏe LIS3DSH (AccelHealthPoll, lệnh na,44) ---- */
+/* ---- Kiểm tra sức khỏe LIS3DSH (AccelHealthPoll; xem bằng sa,43, tắt / bật bằng na,43,off|on) ---- */
 enum {
     ACCEL_FAULT_NONE = 0,
     ACCEL_FAULT_ABSENT,   /* không tìm thấy / khởi tạo lỗi */
@@ -1305,8 +1298,7 @@ static int16_t  s_accelLastRaw[3];
 static int16_t  s_accelLastMg[3];
 static int      s_accelLastG = 0;                    /* |g| lần đo gần nhất (mg), 0 = chưa có */
 static uint32_t s_accelCheckTick = 0;                /* lần kiểm tra trước, 0 = chưa */
-static volatile int s_accelSelfTestReq = 0;          /* lệnh na,44,t: nasa_reporter chạy self-test */
-static volatile int s_accelPowerReq = 0;            /* lệnh na,44,0|1: nasa_reporter bật / tắt cảm biến */
+static volatile int s_accelPowerReq = 0;            /* lệnh na,43,off|on: nasa_reporter bật / tắt cảm biến */
 
 static void AccelHealthReset(void)
 {
@@ -1370,39 +1362,29 @@ static void AccelHealthPoll(void)
     if (s_accelPowerReq) {
         s_accelPowerReq = 0;
         if (!CFG_GetAccelEnabled()) {
-            if (s_motionTestOn) {
-                s_motionTestOn = 0;
-                HAL_LOG("[ACCEL/TEST] stopped: sensor disabled");
-            }
             s_turnLevel = 0;
             s_turnPending = 0;
-            s_accelSelfTestReq = 0;
             AccelHealthReset();
             s_accelFault = ACCEL_FAULT_NONE;
-            HAL_LOG("[ACCEL] disabled by cmd 44 -> power down %s", LIS3DSH_PowerDown() == 0 ? "OK" : "fail");
+            HAL_LOG("[ACCEL] disabled by cmd 43 off -> power down %s", LIS3DSH_PowerDown() == 0 ? "OK" : "fail");
             return;
         }
         if (!LIS3DSH_IsReady()) {
-            HAL_LOG("[ACCEL] enabled by cmd 44 -> init");
+            HAL_LOG("[ACCEL] enabled by cmd 43 on -> init");
             s_accelCheckTick = NonZeroTick(now);
             (void)AccelReinit();
             return;
         }
     }
-    if (!CFG_GetAccelEnabled()) return; /* tắt bằng lệnh 44: không kiểm tra, không thử khởi tạo lại */
-    if (ACCEL_HEALTH_SEC <= 0 || NASA_IsSleeping() || s_motionTestOn) return;
+    if (!CFG_GetAccelEnabled()) return; /* tắt bằng na,43,off: không kiểm tra, không thử khởi tạo lại */
+    if (ACCEL_HEALTH_SEC <= 0 || NASA_IsSleeping()) return;
     if (!LIS3DSH_IsReady()) {
         s_accelFault = ACCEL_FAULT_ABSENT;
-        s_accelSelfTestReq = 0;
         if (s_accelCheckTick != 0 && (now - s_accelCheckTick) < SecToTicks(ACCEL_REINIT_SEC)) return;
         s_accelCheckTick = NonZeroTick(now);
         HAL_LOG("[ACCEL/HEALTH] sensor not ready, try init");
         (void)AccelReinit();
         return;
-    }
-    if (s_accelSelfTestReq) {
-        s_accelSelfTestReq = 0;
-        AccelSelfTestRun("cmd");
     }
     if (s_accelCheckTick != 0 && (now - s_accelCheckTick) < SecToTicks(ACCEL_HEALTH_SEC)) return;
     s_accelCheckTick = NonZeroTick(now);
@@ -1447,14 +1429,15 @@ static void AccelHealthPoll(void)
     }
 }
 
-void NASA_AccelSelfTestRequest(void)
-{
-    s_accelSelfTestReq = 1;
-}
-
 void NASA_AccelPowerRequest(void)
 {
     s_accelPowerReq = 1;
+}
+
+const char *NASA_AccelStateName(void)
+{
+    if (!CFG_GetAccelEnabled()) return "TAT";
+    return s_accelFaultName[LIS3DSH_IsReady() ? s_accelFault : ACCEL_FAULT_ABSENT];
 }
 
 int NASA_AccelStatus(char *buf, int len)
@@ -1467,78 +1450,17 @@ int NASA_AccelStatus(char *buf, int len)
     if (!buf || len <= 0) return 0;
     n = snprintf(buf, (size_t)len,
                  "%s, addr 0x%02X, x=%d y=%d z=%d |g|=%dmg, self-test %s (%d,%d,%d), loi %d lan (cuoi: %s), khoi tao lai %d",
-                 !CFG_GetAccelEnabled() ? "TAT" :
-                 s_accelFaultName[LIS3DSH_IsReady() ? s_accelFault : ACCEL_FAULT_ABSENT],
+                 NASA_AccelStateName(),
                  LIS3DSH_GetAddr(), s_accelLastMg[0], s_accelLastMg[1], s_accelLastMg[2], s_accelLastG,
                  stName, d[0], d[1], d[2], s_accelFaultCount, s_accelFaultName[s_accelLastFault],
                  s_accelReinitCount);
     return (n < 0) ? 0 : n;
 }
 
-void NASA_MotionTestStart(int sec)
-{
-    if (sec <= 0) sec = MOTION_TEST_SEC_DEFAULT;
-    if (sec > MOTION_TEST_SEC_MAX) sec = MOTION_TEST_SEC_MAX;
-    s_motionTestReqSec = sec;
-}
-
-int NASA_MotionInfo(int *thrMg, int *testOn, int *testCount, int *testSec)
+int NASA_MotionInfo(int *thrMg)
 {
     if (thrMg) *thrMg = s_motionThrMg;
-    if (testOn) *testOn = (s_motionTestOn || s_motionTestReqSec) ? 1 : 0;
-    if (testCount) *testCount = s_motionTestCount;
-    if (testSec) *testSec = s_motionTestSec;
     return s_motionWakeOk;
-}
-
-/**
- * Thử độ nhạy lúc đang thức: nạp SM1 như lúc vào ngủ (ngưỡng theo lệnh 43),
- * mỗi ngắt log số thứ tự và X/Y/Z để chỉnh ngưỡng mà không phải chờ ngủ.
- */
-static void MotionTestPoll(void)
-{
-    uint32_t now = GetTickNow();
-    int reqSec = s_motionTestReqSec;
-
-    if (reqSec) {
-        s_motionTestReqSec = 0;
-        if (!s_motionWakeOk || !LIS3DSH_IsReady()) {
-            HAL_LOG("[ACCEL/TEST] LIS3DSH / INT1 not available%s", CFG_GetAccelEnabled() ? "" : " (disabled, cmd 44)");
-        } else if (NASA_IsSleeping()) {
-            HAL_LOG("[ACCEL/TEST] skipped: device asleep");
-        } else if (LIS3DSH_MotionArm(CFG_GetMotionDeltaMg(), &s_motionThrMg) == 0) {
-            s_motionTestOn = 1;
-            s_motionTestSec = reqSec;
-            s_motionTestCount = 0;
-            s_motionIrq = 0;
-            s_motionTestEndTick = GetTickNow() + SecToTicks((uint32_t)reqSec); /* nạp mất ~1 s (tự kiểm) */
-            HAL_LOG("[ACCEL/TEST] start %ds: delta=%dmg thr=%dmg, wake needs %d irq in %ds",
-                    reqSec, CFG_GetMotionDeltaMg(), s_motionThrMg,
-                    CFG_GetMotionEvents(), CFG_GetMotionWindowSec());
-        }
-    }
-    if (!s_motionTestOn) return;
-    if (NASA_IsSleeping()) {
-        s_motionTestOn = 0; /* SleepEnter đã nạp lại SM1 cho chế độ ngủ */
-        return;
-    }
-    if (s_motionIrq || HAL_GPIO_Read(LIS3DSH_INT1_PIN) == 0) {
-        int16_t mg[3] = {0, 0, 0};
-        int outs;
-
-        s_motionIrq = 0;
-        outs = LIS3DSH_MotionClear();
-        (void)LIS3DSH_ReadXYZ(mg);
-        s_motionTestCount++;
-        HAL_LOG("[ACCEL/TEST] motion #%d OUTS=0x%02X x=%d y=%d z=%d mg",
-                s_motionTestCount, outs & 0xFF, mg[0], mg[1], mg[2]);
-    }
-    if ((int32_t)(now - s_motionTestEndTick) >= 0) {
-        s_motionTestOn = 0;
-        (void)LIS3DSH_MotionDisarm();
-        HAL_LOG("[ACCEL/TEST] done: %d irq in %ds (thr=%dmg)",
-                s_motionTestCount, s_motionTestSec, s_motionThrMg);
-    }
 }
 
 static void TurnSetLevel(int level, double speedKph)
@@ -1574,7 +1496,7 @@ static void TurnPoll(void)
     double speed, gn, dot, h2, lat2;
     float alpha;
 
-    if (!ACCEL_TURN_ENABLE || !LIS3DSH_IsReady() || NASA_IsSleeping() || s_motionTestOn) {
+    if (!ACCEL_TURN_ENABLE || !LIS3DSH_IsReady() || NASA_IsSleeping()) {
         s_turnLevel = 0;
         s_turnPending = 0;
         return;
@@ -1788,7 +1710,6 @@ void NASA_RunStep(void)
     NoAccMovePoll();
     AccelHealthPoll();
     AccelLogPoll();
-    MotionTestPoll();
     TurnPoll();
     ApplySimChange();
     CheckNetworkDisconnTimeout();

@@ -34,7 +34,7 @@ typedef struct {
     int      motionDeltaMg;     /* cmd 43: ngưỡng = trục lớn nhất lúc đứng yên + ngần này mg */
     int      motionEvents;      /* cmd 43: số ngắt rung ... */
     int      motionWindowSec;   /* cmd 43: ... trong ngần này giây thì thức */
-    int      accelOff;          /* cmd 44: 1 = tắt hẳn cảm biến gia tốc LIS3DSH */
+    int      accelOff;          /* na,43,off: 1 = tắt hẳn cảm biến gia tốc LIS3DSH */
 } AppConfig_t;
 
 typedef struct {
