@@ -103,9 +103,9 @@ void userSpace_Main(void *arg)
     HAL_LOG("==== NASA FW %s HW %s A7677S ====", NASA_FW_CODE, NASA_HW_CODE);
 
     EN25_Init();    // Khoi tao Flash
-    CFG_Init();     // Khoi tao cau hinh (truoc LIS3DSH: lenh 44 co the da tat cam bien)
+    CFG_Init();     // Khoi tao cau hinh (truoc LIS3DSH: na,43,off co the da tat cam bien)
     if (!CFG_GetAccelEnabled()) {
-        HAL_LOG("[LIS3DSH] disabled (cmd 44) -> power down %s", LIS3DSH_PowerDown() == 0 ? "OK" : "fail");
+        HAL_LOG("[LIS3DSH] disabled (na,43,off) -> power down %s", LIS3DSH_PowerDown() == 0 ? "OK" : "fail");
     } else if (LIS3DSH_Init() == 0) { // Khoi tao cam bien gia toc (khong co thi chay nhu cu)
         int16_t d[3] = {0};
         int st = LIS3DSH_SelfTest(d);

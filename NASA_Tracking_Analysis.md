@@ -357,7 +357,7 @@ Lệnh đến từ SMS ([app_sms.c](app_sms.c)) hoặc Server ([app_network.c](a
 | 40 | Khóa / mở khóa cấu hình | `na,40,close|open` — hiện luôn mở (`NASA_LOCK_FEATURE_ENABLE = 0`) |
 | 41 | Khôi phục cài đặt gốc | `na,41` |
 | 42 | Ngủ sâu tiết kiệm ắc quy: bật / tắt, phút chờ trước khi ngủ (tham số thứ 3 cũ bị bỏ qua) | `na,42,1,30` / `na,42,0` / `sa,42` → `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
-| 43 | Độ nhạy cảm biến rung (LIS3DSH): bật / tắt thức khi rung, +mg so với trục lớn nhất lúc đứng yên, số ngắt, cửa sổ giây; `t` = thử lúc đang thức, log `[ACCEL/TEST]` | `na,43,1,150,3,60` / `na,43,t,120` / `sa,43` → `sa,43 rung: bat, nguong +150mg (lan nap cuoi 843mg), thuc khi 3 ngat/60s, thu: lan truoc 4 ngat/120s` |
+| 43 | Cảm biến gia tốc LIS3DSH (gộp lệnh 44 cũ): bật / tắt thức khi rung, +mg, số ngắt, cửa sổ giây; `off` / `on` = tắt hẳn / bật cảm biến; `sa,43` = cấu hình + sức khỏe cảm biến | `na,43,1,150,3,60` / `na,43,off` / `sa,43` → `sa,43 rung: bat, nguong +150mg (nap 156mg 3truc), 3 ngat/60s, nghieng 8do; cam bien: OK, addr 0x1E, ... self-test PASS ...` |
 
 Mọi lệnh `na` / `sa` hợp lệ (SMS hoặc Server) đều gọi `NASA_WakeRequest()`: đang thức thì hoãn ngủ thêm 120 s. Lúc ngủ sâu sóng đã tắt nên lệnh không tới được thiết bị.
 
