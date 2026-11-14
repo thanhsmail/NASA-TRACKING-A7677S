@@ -11,6 +11,7 @@
 #include "hal/hal_net.h"
 #include "hal/hal_gpio.h"
 #include "hal/hal_adc.h"
+#include "hal/hal_sms.h"
 #include "app_config.h"
 #include "app_utils.h"
 #include "app_gps.h"
@@ -87,7 +88,20 @@ static volatile int s_accIrq = 0;             /* đặt từ ngắt chân ACC, S
 static uint32_t s_sleepStatusTick = 0;        /* lần log trạng thái ngủ trước */
 static int      s_motionCount = 0;            /* số lần ngắt trong cửa sổ hiện tại */
 static uint32_t s_motionWinTick = 0;          /* đầu cửa sổ đếm, 0 = chưa có ngắt */
-static int      s_motionThrMg = 0;            /* ngưỡng tuyệt đối lần nạp gần nhất (mg), 0 = chưa nạp */
+static int      s_motionThrMg = 0;            /* ngưỡng lần nạp gần nhất (mg), 0 = chưa nạp */
+static int      s_motionArmed = 0;            /* SleepEnter nạp cảm biến rung thành công (MotionPoll chỉ tin INT1 khi này) */
+/* Nghiêng lúc ngủ (TiltPoll): véc-tơ trọng lực lúc vào ngủ */
+static int32_t  s_tiltRef[3];
+static int      s_tiltRefOk = 0;
+static int      s_tiltLastDeg10 = -1;         /* góc lệch lần đọc gần nhất x10, -1 = chưa đọc */
+/* Xe di chuyển khi tắt ACC (NoAccMovePoll) */
+static int      s_naActive = 0;
+static uint32_t s_naSpeedTick = 0;            /* vận tốc > ngưỡng liên tục từ lúc này, 0 = không */
+static uint32_t s_naStopTick = 0;             /* đang cảnh báo: đứng yên từ lúc này, 0 = không */
+static int      s_naRefOk = 0;                /* có chỗ đỗ để đo quãng dời */
+static int      s_naRefFresh = 0;             /* chỗ đỗ lấy từ fix GNSS thật (không phải vị trí cũ) */
+static double   s_naRefLat = 0.0, s_naRefLon = 0.0;
+static uint32_t s_naSmsTick = 0;              /* lần SMS cảnh báo trước, 0 = chưa */
 /* Thử độ nhạy lúc thức (lệnh na,43,t): nạp SM1, đếm ngắt và log X/Y/Z */
 static volatile int s_motionTestReqSec = 0;   /* đặt từ task lệnh, nasa_reporter thực hiện */
 static int      s_motionTestOn = 0;
@@ -616,6 +630,7 @@ static const char *SleepBlockReason(void)
     if (s_pwrState == PWR_AWAKE) {
         if (IsAccOn()) return "ACC on";
         if (GPS_IsMoving()) return "moving";
+        if (s_naActive) return "moving without ACC";
         if (FOTA_IsBusy()) return "FOTA";
     }
     return NULL;
@@ -632,7 +647,7 @@ static int MotionPoll(uint32_t now)
 {
     int outs;
 
-    if (!s_motionWakeOk || !CFG_GetMotionWakeEnabled() || !CFG_GetAccelEnabled()) return 0;
+    if (!s_motionArmed || !CFG_GetMotionWakeEnabled() || !CFG_GetAccelEnabled()) return 0;
     /* Chân không hỗ trợ đánh thức: vẫn thấy được ngắt chốt (mức thấp) mỗi vòng */
     if (!s_motionIrq && HAL_GPIO_Read(LIS3DSH_INT1_PIN) != 0) return 0;
     s_motionIrq = 0;
@@ -642,12 +657,69 @@ static int MotionPoll(uint32_t now)
         s_motionCount = 0;
     }
     s_motionCount++;
-    HAL_LOG("[SLEEP] motion #%d/%d in %ds window (OUTS1=0x%02X)",
+    HAL_LOG("[SLEEP] motion #%d/%d in %ds window (OUTS=0x%02X)",
             s_motionCount, CFG_GetMotionEvents(), CFG_GetMotionWindowSec(), outs & 0xFF);
     if (s_motionCount >= CFG_GetMotionEvents()) return 1;
     /* Ngắt đánh thức đã tắt sleep hệ thống: chưa đủ thì cho ngủ lại */
     (void)HAL_OS_SystemSleepEnable(1);
     return 0;
+}
+
+/** Góc (độ) giữa 2 véc-tơ trọng lực; -1 nếu không phải trọng lực tĩnh (đang rung / lắc) */
+static double TiltDeg(const int32_t a[3], const int32_t b[3])
+{
+    double na = sqrt((double)a[0] * a[0] + (double)a[1] * a[1] + (double)a[2] * a[2]);
+    double nb = sqrt((double)b[0] * b[0] + (double)b[1] * b[1] + (double)b[2] * b[2]);
+    double c;
+
+    if (na < 700.0 || na > 1300.0 || nb < 700.0 || nb > 1300.0) return -1.0;
+    c = ((double)a[0] * b[0] + (double)a[1] * b[1] + (double)a[2] * b[2]) / (na * nb);
+    if (c > 1.0) c = 1.0;
+    if (c < -1.0) c = -1.0;
+    return acos(c) * 57.29578;
+}
+
+/** Lúc vào ngủ: lưu véc-tơ trọng lực làm mốc nghiêng */
+static void TiltArm(void)
+{
+    s_tiltRefOk = 0;
+    s_tiltLastDeg10 = -1;
+    if (MOTION_TILT_DEG <= 0 || !LIS3DSH_IsReady() || !CFG_GetAccelEnabled() ||
+        !CFG_GetMotionWakeEnabled()) return;
+    if (LIS3DSH_ReadGravity(s_tiltRef, MOTION_TILT_SAMPLES * 2) != 0 ||
+        TiltDeg(s_tiltRef, s_tiltRef) < 0.0) {
+        HAL_LOG("[SLEEP] tilt reference read fail -> tilt wake off");
+        return;
+    }
+    s_tiltRefOk = 1;
+    HAL_LOG("[SLEEP] tilt armed: g=(%ld,%ld,%ld) wake if > %d deg",
+            (long)s_tiltRef[0], (long)s_tiltRef[1], (long)s_tiltRef[2], MOTION_TILT_DEG);
+}
+
+/** Đang ngủ: góc nghiêng so với lúc vào ngủ; @return 1 nếu lệch quá ngưỡng 2 lần đọc cách 1 s */
+static int TiltPoll(void)
+{
+    int32_t g[3];
+    double deg, deg2;
+
+    if (!s_tiltRefOk || !CFG_GetMotionWakeEnabled() || !CFG_GetAccelEnabled()) return 0;
+    if (LIS3DSH_ReadGravity(g, MOTION_TILT_SAMPLES) != 0) return 0;
+    deg = TiltDeg(s_tiltRef, g);
+    if (deg < 0.0) return 0; /* đang rung: để cảm biến rung xử lý */
+    s_tiltLastDeg10 = (int)(deg * 10.0 + 0.5);
+    if (deg < (double)MOTION_TILT_DEG) return 0;
+
+    HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
+    if (LIS3DSH_ReadGravity(g, MOTION_TILT_SAMPLES) != 0) return 0;
+    deg2 = TiltDeg(s_tiltRef, g);
+    if (deg2 < (double)MOTION_TILT_DEG) {
+        HAL_LOG("[SLEEP] tilt %.1f deg then %.1f deg -> transient, ignore", deg, deg2);
+        return 0;
+    }
+    HAL_LOG("[SLEEP] tilt %.1f / %.1f deg > %d deg: g=(%ld,%ld,%ld) ref=(%ld,%ld,%ld)",
+            deg, deg2, MOTION_TILT_DEG, (long)g[0], (long)g[1], (long)g[2],
+            (long)s_tiltRef[0], (long)s_tiltRef[1], (long)s_tiltRef[2]);
+    return 1;
 }
 
 /** Không có phiên Server lúc vào ngủ: lưu vị trí cuối vào điểm mù */
@@ -701,15 +773,21 @@ static void SleepEnter(uint32_t idleSec)
 
     s_sleepStartTick = NonZeroTick(GetTickNow());
     s_sleepStatusTick = s_sleepStartTick;
-    s_accIrq = 0;
-    s_motionIrq = 0;
     s_motionCount = 0;
     s_motionWinTick = 0;
     s_motionTestOn = 0; /* lần thử độ nhạy (nếu có) nhường cho chế độ ngủ */
-    if (s_motionWakeOk && CFG_GetMotionWakeEnabled() && CFG_GetAccelEnabled() &&
-        LIS3DSH_MotionArm(CFG_GetMotionDeltaMg(), &s_motionThrMg) != 0) {
-        HAL_LOG("[SLEEP] motion wake arm failed, ACC wake only");
+    s_motionArmed = 0;
+    if (s_motionWakeOk && CFG_GetMotionWakeEnabled() && CFG_GetAccelEnabled()) {
+        if (LIS3DSH_MotionArm(CFG_GetMotionDeltaMg(), &s_motionThrMg) == 0) {
+            s_motionArmed = 1;
+        } else {
+            HAL_LOG("[SLEEP] motion wake arm failed, ACC / tilt wake only");
+        }
     }
+    TiltArm();
+    /* Tự kiểm SM2 lúc nạp cố ý gây ngắt INT1: xóa cờ sau khi nạp */
+    s_accIrq = 0;
+    s_motionIrq = 0;
     s_pwrState = PWR_SLEEP;
     UTIL_SetLowPower(1);
     if (HAL_OS_UsbConnected()) {
@@ -729,6 +807,8 @@ static void SleepExit(const char *reason)
     UTIL_SetLowPower(0);
     (void)HAL_OS_SystemSleepEnable(0);
     if (s_motionWakeOk) (void)LIS3DSH_MotionDisarm();
+    s_motionArmed = 0;
+    s_tiltRefOk = 0;
     if (HAL_NET_SetFlightMode(0) != 0) HAL_LOG("[SLEEP] radio on (CFUN=1) fail");
     HAL_GNSS_SetPower(1);
     INDICATION_Wake(); /* gpio_status chạy lại ngay: lọc ACC, LED, nuôi watchdog */
@@ -817,12 +897,19 @@ static void SleepPoll(void)
         SleepExit("motion");
         return;
     }
+    if (TiltPoll()) {
+        s_idleStartTick = NonZeroTick(GetTickNow());
+        SleepExit("tilt");
+        return;
+    }
     if (SLEEP_STATUS_LOG_SEC > 0 &&
         (now - s_sleepStatusTick) >= SecToTicks(SLEEP_STATUS_LOG_SEC)) {
         s_sleepStatusTick = NonZeroTick(now);
-        HAL_LOG("[SLEEP] asleep %lus: sleep flag=%d usb=%d V=%.1f",
+        HAL_LOG("[SLEEP] asleep %lus: sleep flag=%d usb=%d V=%.1f tilt=%d.%d deg",
                 (unsigned long)((now - s_sleepStartTick) / HAL_TICKS_PER_SEC),
-                HAL_OS_SystemSleepIsEnabled(), HAL_OS_UsbConnected(), (double)NASA_GetVoltage());
+                HAL_OS_SystemSleepIsEnabled(), HAL_OS_UsbConnected(), (double)NASA_GetVoltage(),
+                (s_tiltLastDeg10 < 0) ? -1 : s_tiltLastDeg10 / 10,
+                (s_tiltLastDeg10 < 0) ? 0 : s_tiltLastDeg10 % 10);
     }
 }
 
@@ -876,8 +963,8 @@ static void OfflineSample(void)
      * trong điểm mù giống hệt lúc có mạng. */
     {
         uint32_t nowTick = GetTickNow();
-        int periodSec = IsAccOn() ? GetAdaptivePeriodSec(gps.speedKph, gps.headingDeg)
-                                  : StoppedPeriodSec();
+        int periodSec = (IsAccOn() || s_naActive) ? GetAdaptivePeriodSec(gps.speedKph, gps.headingDeg)
+                                                  : StoppedPeriodSec();
 
         if (s_lastTrackingTick == 0) {
             /* Vừa khởi động: chỉ đặt mốc, không lưu bản ghi thừa khi kết nối bình thường */
@@ -1031,7 +1118,8 @@ static NasaState_t Handle_StateTracking(void)
                 uint32_t nowTick = GetTickNow();
                 uint32_t periodTicks;
 
-                if (!accOn) periodSec = StoppedPeriodSec();
+                /* Xe bị dời khi tắt ACC: báo dày như lúc chạy */
+                if (!accOn && !s_naActive) periodSec = StoppedPeriodSec();
                 else periodSec = GetAdaptivePeriodSec(gpsTemp.speedKph, gpsTemp.headingDeg);
 
                 periodTicks = (uint32_t)periodSec * (uint32_t)HAL_TICKS_PER_SEC;
@@ -1423,7 +1511,7 @@ static void MotionTestPoll(void)
             s_motionTestSec = reqSec;
             s_motionTestCount = 0;
             s_motionIrq = 0;
-            s_motionTestEndTick = now + SecToTicks((uint32_t)reqSec);
+            s_motionTestEndTick = GetTickNow() + SecToTicks((uint32_t)reqSec); /* nạp mất ~1 s (tự kiểm) */
             HAL_LOG("[ACCEL/TEST] start %ds: delta=%dmg thr=%dmg, wake needs %d irq in %ds",
                     reqSec, CFG_GetMotionDeltaMg(), s_motionThrMg,
                     CFG_GetMotionEvents(), CFG_GetMotionWindowSec());
@@ -1442,7 +1530,7 @@ static void MotionTestPoll(void)
         outs = LIS3DSH_MotionClear();
         (void)LIS3DSH_ReadXYZ(mg);
         s_motionTestCount++;
-        HAL_LOG("[ACCEL/TEST] motion #%d OUTS1=0x%02X x=%d y=%d z=%d mg",
+        HAL_LOG("[ACCEL/TEST] motion #%d OUTS=0x%02X x=%d y=%d z=%d mg",
                 s_motionTestCount, outs & 0xFF, mg[0], mg[1], mg[2]);
     }
     if ((int32_t)(now - s_motionTestEndTick) >= 0) {
@@ -1543,6 +1631,145 @@ static void TurnPoll(void)
     }
 }
 
+/** Dây ACC báo tắt và tin được (accMode 1, hoặc 2 đã từng thấy dây bật) */
+static int WireAccOffTrusted(void)
+{
+    int mode = CFG_GetAccMode();
+
+    if (s_accRaw != 0) return 0; /* bật hoặc chưa đọc được chân */
+    return (mode == 1 || (mode == 2 && s_accWireSeenOn)) ? 1 : 0;
+}
+
+static double DistanceM(double lat1, double lon1, double lat2, double lon2)
+{
+    const double rad = 3.14159265358979 / 180.0;
+    double dLat = (lat2 - lat1) * rad;
+    double dLon = (lon2 - lon1) * rad;
+    double a = sin(dLat / 2) * sin(dLat / 2) +
+               cos(lat1 * rad) * cos(lat2 * rad) * sin(dLon / 2) * sin(dLon / 2);
+    if (a > 1.0) a = 1.0;
+    return 6371000.0 * 2.0 * asin(sqrt(a));
+}
+
+/** SMS cảnh báo xe bị dời khi tắt ACC tới số chủ xe 1, 2 (lệnh 17, 18) */
+static void NoAccMoveSms(const GpsSnapshot_t *gps, int distM)
+{
+    char msg[160];
+    int i, sent = 0;
+    uint32_t now = GetTickNow();
+
+    if (!NOACC_MOVE_SMS_ENABLE) return;
+    if (s_naSmsTick != 0 && (now - s_naSmsTick) < SecToTicks(NOACC_MOVE_SMS_MIN_SEC)) {
+        HAL_LOG("[NOACC] SMS skipped (last %lus ago)",
+                (unsigned long)((now - s_naSmsTick) / HAL_TICKS_PER_SEC));
+        return;
+    }
+    snprintf(msg, sizeof(msg), "CANH BAO %s: xe di chuyen khi tat may, %.0fkm/h, cach cho do %dm "
+             "https://maps.google.com/maps?q=%.6f,%.6f",
+             CFG_GetPlate(), gps->speedKph, distM, gps->lat, gps->lon);
+    for (i = 1; i <= 2; i++) {
+        const char *ph = CFG_GetPhone(i);
+        if (!ph || !ph[0]) continue;
+        NASA_FeedWatchdog();
+        HAL_LOG("[NOACC] SMS to %s %s", ph, (HAL_SMS_Send(ph, msg) == 0) ? "OK" : "fail");
+        sent = 1;
+    }
+    if (sent) s_naSmsTick = NonZeroTick(now);
+    else HAL_LOG("[NOACC] no owner phone (cmd 17/18) -> no SMS");
+}
+
+static void NoAccMoveReset(void)
+{
+    s_naActive = 0;
+    s_naRefOk = 0;
+    s_naRefFresh = 0;
+    s_naSpeedTick = 0;
+    s_naStopTick = 0;
+}
+
+/**
+ * Xe di chuyển khi tắt ACC (bị đẩy / kéo / chở), gọi mỗi vòng lúc thức. Lúc dây
+ * ACC tắt, FilterMovingStatus coi xe đứng yên bất kể vận tốc, nên ở đây xét
+ * thẳng vận tốc GPS (fix thật) và quãng dời khỏi chỗ đỗ.
+ */
+static void NoAccMovePoll(void)
+{
+    GpsSnapshot_t gps = {0};
+    uint32_t now = GetTickNow();
+    double thresh = (double)CFG_GetSpeedThresh();
+    int fresh, fast, distM = -1;
+
+    if (!NOACC_MOVE_ENABLE || !WireAccOffTrusted()) {
+        if (s_naActive) HAL_LOG("[NOACC] end: ACC on");
+        NoAccMoveReset();
+        return;
+    }
+    if (thresh <= 0.0) thresh = 3.0;
+    GPS_Snapshot(&gps);
+    fresh = (gps.valid && gps.source == GPS_SRC_GNSS && (gps.lat != 0.0 || gps.lon != 0.0));
+    fast = (fresh && gps.speedKph > thresh) ? 1 : 0;
+
+    /* Chỗ đỗ: fix thật lúc đứng yên; chưa có thì tạm lấy vị trí GNSS cuối đã lưu */
+    if (!s_naActive && !s_naRefFresh && fresh && !fast) {
+        s_naRefLat = gps.lat;
+        s_naRefLon = gps.lon;
+        s_naRefOk = 1;
+        s_naRefFresh = 1;
+    } else if (!s_naRefOk && gps.source == GPS_SRC_HOLD && (gps.lat != 0.0 || gps.lon != 0.0)) {
+        s_naRefLat = gps.lat;
+        s_naRefLon = gps.lon;
+        s_naRefOk = 1;
+    }
+
+    if (!s_naActive) {
+        uint32_t confirm = SecToTicks(NOACC_MOVE_CONFIRM_SEC);
+
+        if (!fast) {
+            s_naSpeedTick = 0;
+            return;
+        }
+        if (s_naSpeedTick == 0) {
+            s_naSpeedTick = NonZeroTick(now);
+            return;
+        }
+        if (s_naRefOk) {
+            distM = (int)DistanceM(s_naRefLat, s_naRefLon, gps.lat, gps.lon);
+            if ((now - s_naSpeedTick) < confirm || distM < NOACC_MOVE_MIN_DIST_M) return;
+        } else if ((now - s_naSpeedTick) < 3u * confirm) {
+            return; /* không biết chỗ đỗ: chỉ tin vận tốc, chờ lâu hơn */
+        }
+        s_naActive = 1;
+        s_naStopTick = 0;
+        HAL_LOG("[NOACC] start: ACC off but %.1fkm/h for %lus, %dm from park (%s) -> report now, no sleep",
+                gps.speedKph, (unsigned long)((now - s_naSpeedTick) / HAL_TICKS_PER_SEC), distM,
+                s_naRefOk ? (s_naRefFresh ? "fix" : "last pos") : "unknown");
+        s_trackingImmediateSend = 1;
+        s_immediateMsgType = 2;
+        NoAccMoveSms(&gps, distM);
+        return;
+    }
+
+    /* Đang cảnh báo: đứng yên (hoặc mất fix) đủ lâu thì hết; chỗ đỗ mới lấy lại từ đầu */
+    if (fast) {
+        s_naStopTick = 0;
+        return;
+    }
+    if (s_naStopTick == 0) {
+        s_naStopTick = NonZeroTick(now);
+        return;
+    }
+    if ((now - s_naStopTick) < SecToTicks(NOACC_MOVE_END_SEC)) return;
+    HAL_LOG("[NOACC] end: still %ds", NOACC_MOVE_END_SEC);
+    NoAccMoveReset();
+    s_trackingImmediateSend = 1;
+    s_immediateMsgType = 2;
+}
+
+int NASA_IsMovingNoAcc(void)
+{
+    return s_naActive;
+}
+
 // Xử lý logic chính của NASA
 void NASA_RunStep(void)
 {
@@ -1558,6 +1785,7 @@ void NASA_RunStep(void)
     NASA_FeedWatchdog();
     SleepPoll();
     if (NASA_IsSleeping()) return; /* vừa vào ngủ: vòng sau chạy SleepDeepStep */
+    NoAccMovePoll();
     AccelHealthPoll();
     AccelLogPoll();
     MotionTestPoll();
@@ -1595,6 +1823,7 @@ void NASA_RunStep(void)
                 HAL_OS_TaskSleep(HAL_TICKS_PER_SEC);
                 SleepPoll();
                 if (NASA_IsSleeping()) break; /* vào ngủ sâu: không thử kết nối nữa */
+                NoAccMovePoll();
                 OfflineSample();
             }
         }

@@ -27,6 +27,14 @@
 #define LIS3DSH_REG_MASK1_A     0x5A
 #define LIS3DSH_REG_SETT1       0x5B
 #define LIS3DSH_REG_OUTS1       0x5F /* doc = xoa ngat SM1 (che do chot) */
+#define LIS3DSH_REG_CS_X        0x13 /* constant shift X/Y/Z 0x13..0x15 (SM2, CS mode), FS/128 / LSB */
+#define LIS3DSH_REG_STAT        0x18 /* LONG SYNCW SYNC1 SYNC2 INT_SM1 INT_SM2 DOR DRDY */
+#define LIS3DSH_REG_ST2_1       0x60 /* SM2 code ST2_1..ST2_16 (0x60..0x6F) */
+#define LIS3DSH_REG_THRS1_2     0x77
+#define LIS3DSH_REG_MASK2_B     0x79
+#define LIS3DSH_REG_MASK2_A     0x7A
+#define LIS3DSH_REG_SETT2       0x7B /* P_DET THR3_SA ABS RADI D_CS THR3_MA R_TAM SITR */
+#define LIS3DSH_REG_OUTS2       0x7F /* doc = xoa ngat SM2 (che do chot) */
 
 /* ODR (CTRL_REG4[7:4]) */
 #define LIS3DSH_ODR_POWER_DOWN  0x0
@@ -42,7 +50,13 @@
 #define LIS3DSH_CTRL3_STRT      0x01
 #define LIS3DSH_CTRL3_INT1_EN   0x08 /* IEA = 0: tich cuc muc thap; IEL = 0: chot */
 #define LIS3DSH_CTRL1_SM1_EN    0x01 /* SM1_PIN = 0: ra INT1 */
+#define LIS3DSH_CTRL2_SM2_EN    0x01 /* SM2_PIN = 0: ra INT1 */
 #define LIS3DSH_SETT1_SITR      0x01
+#define LIS3DSH_SETT2_SITR      0x01
+#define LIS3DSH_SETT2_D_CS      0x08
+#define LIS3DSH_SETT2_RADI      0x10
+#define LIS3DSH_STAT_INT_SM2    0x04
+#define LIS3DSH_STAT_INT_SM1    0x08
 #define LIS3DSH_MASK_XYZ        0xFC /* +-X +-Y +-Z, bo vector V */
 #define LIS3DSH_CTRL5_BW_50HZ   0xC0
 #define LIS3DSH_CTRL5_ST_POS    0x02 /* ST2:ST1 = 01: self-test duong */
@@ -82,8 +96,19 @@ int LIS3DSH_IsReady(void);
 int LIS3DSH_ReadXYZ(int16_t mg[3]);
 int LIS3DSH_ReadAvgXYZ(int32_t mg[3], int *count);
 int LIS3DSH_SelfTest(int16_t deltaMg[3]);
+/* Kieu phat hien rung (LIS3DSH_MotionArm) */
+#define LIS3DSH_MOTION_NONE     0
+#define LIS3DSH_MOTION_ABS      1 /* SM1: |a| > truc lon nhat + delta (chi truc mang trong luc nhay) */
+#define LIS3DSH_MOTION_DELTA    2 /* SM2 + constant shift: |a - g| > delta tren ca 3 truc */
+
+/** Nap phat hien rung; @return 0 neu thanh cong. thrMg = nguong da nap (mg) */
 int LIS3DSH_MotionArm(int deltaMg, int *thrMg);
 int LIS3DSH_MotionDisarm(void);
+/** Doc OUTS de xoa ngat chot; @return OUTS (truc vuot nguong), -1 neu loi */
 int LIS3DSH_MotionClear(void);
+/** Kieu cua lan nap thanh cong gan nhat (LIS3DSH_MOTION_x, giu ca sau khi go) */
+int LIS3DSH_MotionLastMode(void);
+/** Trung binh n mau moi (FIFO tat, doc duoc khi SM dang chay); @return 0 neu thanh cong */
+int LIS3DSH_ReadGravity(int32_t mg[3], int n);
 
 #endif /* _DRV_LIS3DSH_H_ */

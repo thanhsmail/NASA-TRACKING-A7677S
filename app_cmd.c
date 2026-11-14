@@ -25,6 +25,7 @@
 #include "app_network.h"
 #include "app_backup.h"
 #include "drv_en25qh64a.h"
+#include "drv_lis3dsh.h"
 #include "app_sim.h"
 #include "app_utils.h"
 #include "app_nasa.h"
@@ -572,7 +573,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         snprintf(resp, sizeof(resp), "sa,42 ngu sau: %s, cho %d phut, thuc khi ACC bat / rung, dang %s, acquy %.1fV",
                  CFG_GetSleepEnabled() ? "bat" : "tat",
                  CFG_GetSleepDelaySec() / 60,
-                 NASA_IsSleeping() ? "ngu" : "thuc", (double)NASA_GetVoltage());
+                 NASA_IsSleeping() ? "ngu" : (NASA_IsMovingNoAcc() ? "thuc (xe di chuyen khi tat ACC)" : "thuc"),
+                 (double)NASA_GetVoltage());
         break;
 
     /* --- Mã 43: Độ nhạy cảm biến rung (thức khi rung lúc ngủ):
@@ -597,11 +599,17 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             }
         }
         present = NASA_MotionInfo(&thrMg, &testOn, &testCount, &testSec);
-        snprintf(resp, sizeof(resp),
-                 "sa,43 rung: %s%s, nguong +%dmg (lan nap cuoi %dmg), thuc khi %d ngat/%ds, thu: %s %d ngat/%ds",
-                 CFG_GetMotionWakeEnabled() ? "bat" : "tat", present ? "" : " (khong co cam bien)",
-                 CFG_GetMotionDeltaMg(), thrMg, CFG_GetMotionEvents(), CFG_GetMotionWindowSec(),
-                 testOn ? "dang chay," : "lan truoc", testCount, testSec);
+        {
+            int mode = LIS3DSH_MotionLastMode();
+            /* lech = +-nguong tren ca 3 truc (SM2); tuyet doi = chi truc mang trong luc (SM1, du phong) */
+            const char *modeStr = (mode == LIS3DSH_MOTION_DELTA) ? "3truc" :
+                                  (mode == LIS3DSH_MOTION_ABS) ? "abs" : "-";
+            snprintf(resp, sizeof(resp),
+                     "sa,43 rung: %s%s, nguong +%dmg (lan nap cuoi %dmg %s), thuc khi %d ngat/%ds, nghieng %ddo, thu: %s %d ngat/%ds",
+                     CFG_GetMotionWakeEnabled() ? "bat" : "tat", present ? "" : " (khong co cam bien)",
+                     CFG_GetMotionDeltaMg(), thrMg, modeStr, CFG_GetMotionEvents(), CFG_GetMotionWindowSec(),
+                     MOTION_TILT_DEG, testOn ? "dang chay," : "lan truoc", testCount, testSec);
+        }
         break;
     }
 

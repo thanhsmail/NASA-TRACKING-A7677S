@@ -35,6 +35,8 @@ int  NASA_IsStarted(void);
 
 /** 1 = đang ngủ tiết kiệm ắc quy (GNSS tắt, LED tắt, các task lặp thưa) */
 int  NASA_IsSleeping(void);
+/** 1 = xe đang bị dời khi dây ACC tắt (đẩy / kéo / chở): báo dày, không ngủ */
+int  NASA_IsMovingNoAcc(void);
 /**
  * Yêu cầu thức khỏi chế độ ngủ (SMS / lệnh / ngắt ACC). Gọi được từ task khác
  * và từ ngắt GPIO; reason phải là chuỗi hằng. Đang thức thì hoãn ngủ thêm

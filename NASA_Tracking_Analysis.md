@@ -322,7 +322,7 @@ Bố cục flash rời (sector 4 KB):
 | LED mạng (LED_NET) | 74 (GPIO_03, pin 7) | Nháy = đã đăng nhập Server; sáng = có sóng; tắt = mất sóng |
 | LED nguồn (LED_MEM) | 32 (GPIO_01, pin 5) | Nháy = backup trên flash rời; sáng = file trong module; tắt = không lưu được |
 | CS flash | 17 (GPIO_35/SSP0_CS, pin 12) | Nối thẳng CS# (mức 0 = chọn); driver tự lái, tự thử mức ngược lại |
-| INT1 LIS3DSH | 12 (GPIO_14, pin 36) | Ngắt chuyển động (state machine SM1), cạnh xuống; đánh thức khi ngủ |
+| INT1 LIS3DSH | 12 (GPIO_14, pin 36) | Ngắt chuyển động (SM2 lệch 3 trục, dự phòng SM1), cạnh xuống; đánh thức khi ngủ |
 
 Chế độ im lặng (lệnh 11) tắt cả 3 LED. Mỗi chu kỳ task cũng kiểm tra `NASA_IsWatchdogTimeout()`.
 
@@ -432,9 +432,10 @@ Khi ngủ:
 | Nguồn | Cách | Độ trễ |
 |---|---|---|
 | ACC bật | Mỗi vòng `SleepDeepStep` đọc thẳng chân ACC (active-low), mức bật thì đọc lại sau 100 ms rồi thức. Ngắt cạnh xuống (`AccWakeIsr`) chỉ làm thức sớm hơn; chân vẫn mức cao thì coi là ngắt giả, log và ngủ lại | ≤ 8 s |
-| Rung / bị kéo, chở | LIS3DSH SM1 → INT1 (pad 12, pin 36), ngắt chốt mức thấp nên đọc chân cũng thấy; đủ `MOTION_WAKE_EVENTS` ngắt trong `MOTION_WAKE_WINDOW_SEC` (lệnh 43) | ≤ 8 s mỗi ngắt |
+| Rung / bị kéo, chở | LIS3DSH SM2 (\|a − g\| trên cả 3 trục; tự kiểm không qua thì SM1 \|a\| > trục lớn nhất + độ lệch) → INT1 (pad 12, pin 36), ngắt chốt mức thấp nên đọc chân cũng thấy; đủ `MOTION_WAKE_EVENTS` ngắt trong `MOTION_WAKE_WINDOW_SEC` (lệnh 43) | ≤ 8 s mỗi ngắt |
+| Bị nghiêng (cẩu, kéo êm) | Mỗi vòng `SleepDeepStep` đọc véc-tơ trọng lực, lệch > `MOTION_TILT_DEG` (8°) so với lúc vào ngủ, đọc lại sau 1 s vẫn lệch | ≤ 9 s |
 
-Sau khi thức: CFUN=1, bật GNSS, đánh thức `gpio_status`, rồi `STATE_INIT` → PDP → kết nối → đăng nhập → gửi `!NASA,2` ngay. Thời gian từ lúc bật ACC đến bản tin đầu tiên ≈ 8 s + thời gian đăng ký mạng.
+Sau khi thức: CFUN=1, bật GNSS, đánh thức `gpio_status`, rồi `STATE_INIT` → PDP → kết nối → đăng nhập → gửi `!NASA,2` ngay. Thức vì rung / nghiêng thì đếm lại đủ thời gian chờ. Lúc thức mà dây ACC tắt, `NoAccMovePoll()` xét vận tốc GPS và quãng dời khỏi chỗ đỗ: > ngưỡng 10 s và ≥ 50 m thì gửi ngay, chu kỳ như lúc chạy, không ngủ, SMS chủ xe (`NOACC_MOVE_*`); đứng yên 300 s hoặc ACC bật thì hết. Thời gian từ lúc bật ACC đến bản tin đầu tiên ≈ 8 s + thời gian đăng ký mạng.
 
 Watchdog và bộ đếm treo khi ngủ:
 
