@@ -6,7 +6,8 @@
  * Moi tuong tac phan cung di qua HAL layer.
  *
  * Cau hinh mac dinh: +-2 g (0.06 mg/LSB), loc chong rang cua 50 Hz, BDU,
- * ODR = LIS3DSH_ODR (app_config.h). Chua dung ngat / state machine.
+ * ODR = LIS3DSH_ODR (app_config.h). Ngat chi dung cho phat hien rung luc ngu
+ * (LIS3DSH_MotionArm: SM2 kieu DELTA, du phong SM1 kieu ABS).
  */
 #include "hal/hal_log.h"
 #include "hal/hal_os.h"
@@ -23,6 +24,8 @@ static int     s_isInitialized = 0;
 static int     s_fifoOn = 0;      /* FIFO stream (LIS3DSH_ReadAvgXYZ); tat khi self-test / nap SM */
 static int     s_stRc = -2;       /* ket qua self-test gan nhat, -2 = chua chay */
 static int16_t s_stDelta[3] = {0, 0, 0};
+static int s_motionMode = LIS3DSH_MOTION_NONE;     /* dang nap */
+static int s_motionLastMode = LIS3DSH_MOTION_NONE; /* lan nap thanh cong gan nhat */
 
 static int ReadReg(uint8_t reg, uint8_t *buf, uint16_t len)
 {
@@ -102,6 +105,7 @@ int LIS3DSH_Init(void)
 
     s_isInitialized = 0;
     s_fifoOn = 0; /* soft reset ben duoi dua FIFO ve bypass */
+    s_motionMode = LIS3DSH_MOTION_NONE;
     if (HAL_I2C_Init(LIS3DSH_I2C_CHANNEL, 1) != 0) {
         HAL_LOG("[LIS3DSH] HAL_I2C_Init failed! channel=%d", LIS3DSH_I2C_CHANNEL);
         return -1;
@@ -149,6 +153,7 @@ int LIS3DSH_PowerDown(void)
         else return -1;
     }
     (void)WriteReg(LIS3DSH_REG_CTRL_REG1, 0x00); /* tat SM1 */
+    (void)WriteReg(LIS3DSH_REG_CTRL_REG2, 0x00); /* tat SM2 */
     if (WriteReg(LIS3DSH_REG_CTRL_REG3, LIS3DSH_CTRL3_STRT) != 0) return -1; /* soft reset */
     HAL_OS_TaskSleep(10);
     /* Sau reset CTRL_REG4 = 0x07 (ODR power-down); ghi lai cho chac */
@@ -305,40 +310,127 @@ int LIS3DSH_SelfTest(int16_t deltaMg[3])
     return rc;
 }
 
+int LIS3DSH_ReadGravity(int32_t mg[3], int n)
+{
+    if (!s_isInitialized || !mg || n <= 0) return -1;
+    if (FifoSet(0) != 0) return -1;
+    return AverageXYZ(n, mg);
+}
+
 /*
- * Phat hien chuyen dong bang state machine SM1 -> INT1 (chot, tich cuc thap).
+ * Phat hien chuyen dong bang state machine -> INT1 (chot, tich cuc thap).
  *
  * Datasheet khong mo ta opcode; chuong trinh lay theo vi du wake-up cua ST
- * (AN3393): ST1_1 = 0x05 (reset NOP, next GNTH1: mot truc |a| > THRS1_1),
- * ST1_2 = 0x11 (CONT: bao ngat roi chay lai), MASK = +-X +-Y +-Z, SETT1.SITR.
- * Nguong 8 bit so voi FS/128 (+-2 g: 15.6 mg/LSB). CHUA doi chieu tai lieu
- * goc: phai kiem chung tren board (go nhe vao board phai thay ngat).
+ * (AN3393): STx_1 = 0x05 (reset NOP, next GNTH1: mot truc |a| > THRS1),
+ * STx_2 = 0x11 (CONT: bao ngat roi chay lai), MASK = +-X +-Y +-Z, SETTx.SITR.
+ * Nguong 8 bit so voi FS/128 (+-2 g: 15.6 mg/LSB).
  *
- * GNTH1 so tri tuyet doi gia toc ca trong luc, nen nguong dat = truc lon nhat
- * luc dung yen + deltaMg: ngat khi mot truc vuot muc trong luc hien tai.
+ * Kieu DELTA (uu tien): SM2 doc du lieu da tru constant shift (SETT2.RADI,
+ * CS_X/Y/Z = trong luc luc dung yen), nen ca 3 truc cung nhay deltaMg: xe bi
+ * day / keo theo phuong ngang cung bat duoc. Nghia bit D_CS va thang do CS
+ * chua doi chieu duoc tai lieu goc, nen luc nap tu kiem 2 buoc tren chip:
+ *   1. CS = 0, nguong = nua truc lon nhat: truc mang trong luc PHAI ngat
+ *      (chung minh SM2 + INT1 chay va dang so du lieu sau CS);
+ *   2. CS = trong luc, cung nguong: luc dung yen KHONG duoc ngat
+ *      (chung minh CS dung dau, dung thang do).
+ * Thu ca 2 gia tri D_CS; khong cai nao qua thi lui ve kieu ABS.
+ *
+ * Kieu ABS (du phong, cach cu): SM1 so tri tuyet doi ca trong luc, nguong =
+ * truc lon nhat luc dung yen + deltaMg, nen chi truc mang trong luc nhay.
  */
-#define LIS3DSH_THRS_UMG 15625 /* micro-g / LSB nguong o +-2 g */
+#define LIS3DSH_THRS_UMG 15625 /* micro-g / LSB nguong / CS o +-2 g */
+#define LIS3DSH_SM_CHECK_TICKS 40 /* 200 ms = 5 mau o 25 Hz cho moi buoc tu kiem */
 
-int LIS3DSH_MotionArm(int deltaMg, int *thrMg)
+static const uint8_t s_smProg[2] = {0x05, 0x11};
+
+static int32_t MgToThrLsb(int32_t mg)
 {
-    static const uint8_t prog[2] = {0x05, 0x11};
-    int32_t g[3];
-    int32_t maxAbs = 0, thr;
-    uint8_t dummy;
-    int k;
+    int32_t v = (mg * 1000 + (mg >= 0 ? LIS3DSH_THRS_UMG / 2 : -LIS3DSH_THRS_UMG / 2)) / LIS3DSH_THRS_UMG;
+    return v;
+}
 
-    if (!s_isInitialized || deltaMg <= 0) return -1;
-    if (FifoSet(0) != 0) return -1;
-    if (AverageXYZ(4, g) != 0) return -1;
-    for (k = 0; k < 3; k++) {
-        int32_t a = g[k] < 0 ? -g[k] : g[k];
-        if (a > maxAbs) maxAbs = a;
+static int32_t ClampI32(int32_t v, int32_t lo, int32_t hi)
+{
+    return (v < lo) ? lo : (v > hi) ? hi : v;
+}
+
+/** Nap SM2 (dang tat) voi nguong / CS / SETT2 roi bat lai; @return 0 neu thanh cong */
+static int Sm2Load(uint8_t thr, const int8_t cs[3], uint8_t sett2)
+{
+    uint8_t dummy;
+
+    if (WriteReg(LIS3DSH_REG_CTRL_REG2, 0x00) != 0) return -1;
+    if (WriteReg(LIS3DSH_REG_ST2_1, s_smProg[0]) != 0 ||
+        WriteReg(LIS3DSH_REG_ST2_1 + 1, s_smProg[1]) != 0 ||
+        WriteReg(LIS3DSH_REG_THRS1_2, thr) != 0 ||
+        WriteReg(LIS3DSH_REG_MASK2_B, LIS3DSH_MASK_XYZ) != 0 ||
+        WriteReg(LIS3DSH_REG_MASK2_A, LIS3DSH_MASK_XYZ) != 0 ||
+        WriteReg(LIS3DSH_REG_SETT2, sett2) != 0 ||
+        WriteReg(LIS3DSH_REG_CS_X, (uint8_t)cs[0]) != 0 ||
+        WriteReg(LIS3DSH_REG_CS_X + 1, (uint8_t)cs[1]) != 0 ||
+        WriteReg(LIS3DSH_REG_CS_X + 2, (uint8_t)cs[2]) != 0 ||
+        WriteReg(LIS3DSH_REG_CTRL_REG3, LIS3DSH_CTRL3_INT1_EN) != 0) {
+        return -1;
     }
-    thr = ((maxAbs + deltaMg) * 1000 + LIS3DSH_THRS_UMG / 2) / LIS3DSH_THRS_UMG;
-    if (thr > 127) thr = 127;
-    if (thr < 1) thr = 1;
+    (void)ReadReg(LIS3DSH_REG_OUTS2, &dummy, 1); /* xoa ngat cu */
+    return WriteReg(LIS3DSH_REG_CTRL_REG2, LIS3DSH_CTRL2_SM2_EN);
+}
+
+/** Cho vai mau roi xem SM2 co ngat khong (doc OUTS2 xoa luon); @return 1 co, 0 khong, -1 loi */
+static int Sm2Fired(void)
+{
+    uint8_t stat = 0, outs = 0;
+
+    HAL_OS_TaskSleep(LIS3DSH_SM_CHECK_TICKS);
+    if (ReadReg(LIS3DSH_REG_STAT, &stat, 1) != 0) return -1;
+    if (ReadReg(LIS3DSH_REG_OUTS2, &outs, 1) != 0) return -1;
+    return ((stat & LIS3DSH_STAT_INT_SM2) || outs != 0) ? 1 : 0;
+}
+
+/** Kieu DELTA tren SM2; @return 0 neu tu kiem dat va da nap nguong deltaMg */
+static int ArmDelta(const int32_t g[3], int32_t maxAbs, int deltaMg, int *thrMg)
+{
+    static const uint8_t setts[2] = {
+        LIS3DSH_SETT2_RADI | LIS3DSH_SETT2_D_CS | LIS3DSH_SETT2_SITR,
+        LIS3DSH_SETT2_RADI | LIS3DSH_SETT2_SITR
+    };
+    const int8_t zero[3] = {0, 0, 0};
+    int8_t cs[3];
+    uint8_t thrCheck = (uint8_t)ClampI32(MgToThrLsb(maxAbs / 2), 1, 127);
+    uint8_t thr = (uint8_t)ClampI32(MgToThrLsb(deltaMg), 1, 127);
+    int i, k, f1, f2;
+
+    for (k = 0; k < 3; k++) cs[k] = (int8_t)ClampI32(MgToThrLsb(g[k]), -128, 127);
+
+    for (i = 0; i < 2; i++) {
+        if (Sm2Load(thrCheck, zero, setts[i]) != 0) return -1;
+        f1 = Sm2Fired();
+        if (Sm2Load(thrCheck, cs, setts[i]) != 0) return -1;
+        f2 = Sm2Fired();
+        HAL_LOG("[LIS3DSH] SM2 check SETT2=0x%02X: CS=0 fired=%d (need 1), CS=g fired=%d (need 0)",
+                setts[i], f1, f2);
+        if (f1 == 1 && f2 == 0) {
+            if (Sm2Load(thr, cs, setts[i]) != 0) return -1;
+            if (thrMg) *thrMg = (int)((int32_t)thr * LIS3DSH_THRS_UMG / 1000);
+            HAL_LOG("[LIS3DSH] motion armed DELTA: g=(%ld,%ld,%ld) CS=(%d,%d,%d) thr=%d (+-%ld mg all axes)",
+                    (long)g[0], (long)g[1], (long)g[2], cs[0], cs[1], cs[2], thr,
+                    (long)((int32_t)thr * LIS3DSH_THRS_UMG / 1000));
+            return 0;
+        }
+    }
+    (void)WriteReg(LIS3DSH_REG_CTRL_REG2, 0x00);
+    return -1;
+}
+
+/** Kieu ABS tren SM1 (cach cu); @return 0 neu thanh cong */
+static int ArmAbs(const int32_t g[3], int32_t maxAbs, int deltaMg, int *thrMg)
+{
+    const uint8_t *prog = s_smProg;
+    uint8_t dummy;
+    int32_t thr = ClampI32(MgToThrLsb(maxAbs + deltaMg), 1, 127);
 
     /* Tat SM truoc khi nap chuong trinh */
+    if (WriteReg(LIS3DSH_REG_CTRL_REG2, 0x00) != 0) return -1;
     if (WriteReg(LIS3DSH_REG_CTRL_REG1, 0x00) != 0) return -1;
     if (WriteReg(LIS3DSH_REG_ST1_1, prog[0]) != 0 ||
         WriteReg(LIS3DSH_REG_ST1_1 + 1, prog[1]) != 0 ||
@@ -354,8 +446,38 @@ int LIS3DSH_MotionArm(int deltaMg, int *thrMg)
     if (WriteReg(LIS3DSH_REG_CTRL_REG1, LIS3DSH_CTRL1_SM1_EN) != 0) return -1;
 
     if (thrMg) *thrMg = (int)(thr * LIS3DSH_THRS_UMG / 1000);
-    HAL_LOG("[LIS3DSH] motion armed: g=(%ld,%ld,%ld) thr=%ld (%ld mg)",
+    HAL_LOG("[LIS3DSH] motion armed ABS: g=(%ld,%ld,%ld) thr=%ld (%ld mg, gravity axis only)",
             (long)g[0], (long)g[1], (long)g[2], (long)thr, (long)(thr * LIS3DSH_THRS_UMG / 1000));
+    return 0;
+}
+
+int LIS3DSH_MotionArm(int deltaMg, int *thrMg)
+{
+    int32_t g[3];
+    int32_t maxAbs = 0;
+    int k;
+
+    s_motionMode = LIS3DSH_MOTION_NONE;
+    if (!s_isInitialized || deltaMg <= 0) return -1;
+    if (FifoSet(0) != 0) return -1;
+    if (AverageXYZ(4, g) != 0) return -1;
+    for (k = 0; k < 3; k++) {
+        int32_t a = g[k] < 0 ? -g[k] : g[k];
+        if (a > maxAbs) maxAbs = a;
+    }
+    (void)WriteReg(LIS3DSH_REG_CTRL_REG1, 0x00); /* SM1 khong dung o kieu DELTA */
+
+    if (ArmDelta(g, maxAbs, deltaMg, thrMg) == 0) {
+        s_motionMode = LIS3DSH_MOTION_DELTA;
+    } else {
+        HAL_LOG("[LIS3DSH] SM2 delta mode not usable -> fallback ABS (SM1)");
+        if (ArmAbs(g, maxAbs, deltaMg, thrMg) != 0) {
+            HAL_LOG("[LIS3DSH] motion arm failed");
+            return -1;
+        }
+        s_motionMode = LIS3DSH_MOTION_ABS;
+    }
+    s_motionLastMode = s_motionMode;
     return 0;
 }
 
@@ -363,19 +485,27 @@ int LIS3DSH_MotionDisarm(void)
 {
     uint8_t dummy;
 
+    s_motionMode = LIS3DSH_MOTION_NONE;
     if (!s_isInitialized) return -1;
     if (WriteReg(LIS3DSH_REG_CTRL_REG1, 0x00) != 0) return -1;
+    (void)WriteReg(LIS3DSH_REG_CTRL_REG2, 0x00);
     (void)WriteReg(LIS3DSH_REG_CTRL_REG3, 0x00);
     (void)ReadReg(LIS3DSH_REG_OUTS1, &dummy, 1); /* nha chan INT1 ve muc nghi */
+    (void)ReadReg(LIS3DSH_REG_OUTS2, &dummy, 1);
     return 0;
 }
 
-/** Doc OUTS1 de xoa ngat chot; @return gia tri OUTS1 (co truc nao vuot), -1 neu loi */
 int LIS3DSH_MotionClear(void)
 {
     uint8_t outs = 0;
+    uint8_t reg = (s_motionMode == LIS3DSH_MOTION_ABS) ? LIS3DSH_REG_OUTS1 : LIS3DSH_REG_OUTS2;
 
     if (!s_isInitialized) return -1;
-    if (ReadReg(LIS3DSH_REG_OUTS1, &outs, 1) != 0) return -1;
+    if (ReadReg(reg, &outs, 1) != 0) return -1;
     return outs;
+}
+
+int LIS3DSH_MotionLastMode(void)
+{
+    return s_motionLastMode;
 }

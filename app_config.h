@@ -335,7 +335,24 @@
 #define MOTION_WAKE_WINDOW_SEC 60
 #define MOTION_WAKE_WINDOW_SEC_MIN 10
 #define MOTION_WAKE_WINDOW_SEC_MAX 600
-#define MOTION_TEST_SEC_DEFAULT 120        // Lệnh na,43,t: thời gian thử độ nhạy lúc đang thức
+/* Nghiêng lúc ngủ: mỗi SLEEP_POLL_SEC đọc véc-tơ trọng lực, lệch so với lúc vào
+ * ngủ quá ngần này độ (đọc lại sau 1 s vẫn lệch) thì thức — bắt xe bị cẩu / kéo
+ * êm không đủ rung. 0 = tắt. Đi theo bật / tắt thức khi rung (lệnh 43) */
+#define MOTION_TILT_DEG 8
+#define MOTION_TILT_SAMPLES 4              // số mẫu trung bình mỗi lần đọc (25 Hz: 160 ms)
+/* Xe di chuyển khi tắt ACC (bị đẩy / kéo / chở): dây ACC tắt (accMode 1, hoặc 2
+ * đã từng thấy dây bật) mà vận tốc GPS (fix thật) > ngưỡng lệnh 10 liên tục
+ * NOACC_MOVE_CONFIRM_SEC giây và đã rời chỗ đỗ >= NOACC_MOVE_MIN_DIST_M mét
+ * (chưa có chỗ đỗ thì chờ gấp 3 lần). Khi đó: gửi !NASA,2 ngay, chu kỳ gửi như
+ * lúc chạy, không ngủ; SMS cảnh báo tới số chủ xe 1, 2 (lệnh 17, 18). Hết khi
+ * đứng yên NOACC_MOVE_END_SEC giây hoặc ACC bật */
+#define NOACC_MOVE_ENABLE 1
+#define NOACC_MOVE_CONFIRM_SEC 10
+#define NOACC_MOVE_MIN_DIST_M 50
+#define NOACC_MOVE_END_SEC 300
+#define NOACC_MOVE_SMS_ENABLE 1
+#define NOACC_MOVE_SMS_MIN_SEC 1800        // tối thiểu giữa 2 lần SMS cảnh báo (kéo xe dừng / đi nhiều lần)
+#define MOTION_TEST_SEC_DEFAULT 120       // Lệnh na,43,t: thời gian thử độ nhạy lúc đang thức
 #define MOTION_TEST_SEC_MAX 600
 
 /* Bitmask trạng thái thiết bị (Protocol RV26 — bản tin 2/7) */

@@ -314,9 +314,9 @@ Lúc vào ngủ, thiết bị gửi `!NASA,2` vị trí cuối (không có Serve
 | GNSS | Tắt; dữ liệu GPS giữ giá trị cuối |
 | Module | Cho phép sleep hệ thống (`sAPI_SystemSleepSet`). **Module không ngủ khi đang cắm USB** |
 | LED | Tắt cả 3 |
-| LIS3DSH | Nạp chương trình phát hiện chuyển động, ngắt ra INT1 (mục 12) |
+| LIS3DSH | Nạp chương trình phát hiện rung ra INT1 và lưu véc-tơ trọng lực làm mốc nghiêng (mục 12) |
 | Bản tin | Không gửi gì cho đến khi thức. Không có lần thức định kỳ |
-| `nasa_reporter` | Mỗi 8 giây (`SLEEP_POLL_SEC`): nuôi watchdog phần mềm và phần cứng, đọc chân ACC và ngắt INT1. Không chạy gì khác |
+| `nasa_reporter` | Mỗi 8 giây (`SLEEP_POLL_SEC`): nuôi watchdog phần mềm và phần cứng, đọc chân ACC, ngắt INT1 và góc nghiêng (4 mẫu, khoảng 160 ms). Không chạy gì khác |
 | `gpio_status` | Chờ tối đa 60 giây / lần (`SLEEP_IDLE_TASK_SEC`), chỉ canh `nasa_reporter` treo |
 | `gnss_task`, `SmsRecvTask`, `agps_task`, `ntp_sync` | Chờ 60 giây / lần; `SmsRecvTask` không hỏi SIM |
 
@@ -328,8 +328,22 @@ Chỉ ACC và cảm biến gia tốc đánh thức:
 |---|---|
 | ACC bật | `nasa_reporter` đọc chân ACC mỗi 8 giây, thấy mức bật thì đọc lại sau 100 ms rồi thức. Ngắt cạnh xuống chân ACC chỉ làm thức sớm hơn; nếu chân vẫn báo tắt thì coi là ngắt giả, ghi log và ngủ lại |
 | Rung / bị kéo, chở | LIS3DSH báo đủ 3 ngắt trong 60 giây (mặc định, chỉnh bằng lệnh 43). Một lần rung đơn (đóng cửa, xe khác chạy qua) không đủ |
+| Bị nghiêng (cẩu lên xe cứu hộ, kéo êm) | Véc-tơ trọng lực lệch quá 8° (`MOTION_TILT_DEG`, 0 = tắt) so với lúc vào ngủ, đọc lại sau 1 giây vẫn lệch. Đi theo bật / tắt thức khi rung (lệnh 43) |
 
-Khi thức: bật sóng (CFUN=1), bật GNSS, đánh thức `gpio_status`, rồi kích hoạt PDP, kết nối, đăng nhập và gửi `!NASA,2` ngay. Thức vì rung thì sau 120 giây, nếu ACC vẫn tắt và xe đứng yên, phải chờ lại đủ thời gian chờ mới ngủ tiếp.
+Khi thức: bật sóng (CFUN=1), bật GNSS, đánh thức `gpio_status`, rồi kích hoạt PDP, kết nối, đăng nhập và gửi `!NASA,2` ngay. Thức vì rung hoặc nghiêng thì phải chờ lại đủ thời gian chờ (30 phút) mới ngủ tiếp, để kịp phát hiện xe bị dời (mục dưới).
+
+### Xe di chuyển khi tắt ACC
+
+Lúc dây ACC báo tắt, bộ lọc chạy / dừng của GPS coi xe đứng yên bất kể vận tốc. `NoAccMovePoll()` trong [app_nasa.c](app_nasa.c) xét riêng trường hợp xe bị đẩy, kéo hoặc chở đi khi tắt máy (chạy mỗi vòng lúc thức, kể cả trong 30 phút chờ trước khi ngủ):
+
+| Bước | Điều kiện |
+|---|---|
+| Chỗ đỗ | Fix GNSS thật đầu tiên lúc đứng yên sau khi tắt ACC; chưa có thì tạm lấy vị trí GNSS cuối đã lưu |
+| Bắt đầu | Vận tốc GPS (fix thật) > ngưỡng lệnh 10 liên tục 10 giây (`NOACC_MOVE_CONFIRM_SEC`) và cách chỗ đỗ ≥ 50 m (`NOACC_MOVE_MIN_DIST_M`). Không biết chỗ đỗ thì phải liên tục 30 giây |
+| Khi đang bị dời | Gửi `!NASA,2` ngay (bit ACC = 0, vận tốc > 0), chu kỳ gửi như lúc chạy, không ngủ; SMS cảnh báo tới số chủ xe 1, 2 (lệnh 17, 18), cách nhau tối thiểu 30 phút (`NOACC_MOVE_SMS_*`) |
+| Kết thúc | Đứng yên (hoặc mất fix) 300 giây (`NOACC_MOVE_END_SEC`), hoặc ACC bật |
+
+SMS: `CANH BAO <biển số>: xe di chuyen khi tat may, 12km/h, cach cho do 80m https://maps.google.com/maps?q=<lat>,<lon>`. Tắt cả tính năng bằng `NOACC_MOVE_ENABLE 0`, chỉ tắt SMS bằng `NOACC_MOVE_SMS_ENABLE 0` trong [app_config.h](app_config.h). `sa,42` báo `dang thuc (xe di chuyen khi tat ACC)` khi đang trong trạng thái này.
 
 ### Lệnh 42
 
@@ -348,10 +362,13 @@ Trả lời: `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thu
 | `[SLEEP] enter: ...` | Vào ngủ |
 | `[SLEEP] USB connected: module stays in full power ...` | Đang cắm USB, module sẽ không ngủ thật |
 | `[SLEEP] system sleep enable ret=0 (now=1, usb=0)` | Cờ sleep hệ thống và trạng thái USB |
-| `[SLEEP] asleep 600s: sleep flag=1 usb=0 V=12.6` | Mỗi 10 phút khi đang ngủ (`SLEEP_STATUS_LOG_SEC`) |
-| `[SLEEP] motion #1/3 in 60s window (OUTS1=0x..)` | Một ngắt rung |
+| `[SLEEP] asleep 600s: sleep flag=1 usb=0 V=12.6 tilt=0.4 deg` | Mỗi 10 phút khi đang ngủ (`SLEEP_STATUS_LOG_SEC`) |
+| `[SLEEP] motion #1/3 in 60s window (OUTS=0x..)` | Một ngắt rung |
+| `[SLEEP] tilt armed: g=(..) wake if > 8 deg` | Đã lưu mốc nghiêng lúc vào ngủ |
+| `[SLEEP] tilt 9.5 / 9.8 deg > 8 deg: ...` | Bị nghiêng, sắp thức (`... -> transient, ignore` nếu lần đọc lại hết lệch) |
+| `[NOACC] start: ACC off but 12.0km/h for 10s, 80m from park (fix) ...` | Xe bị dời khi tắt ACC; `[NOACC] SMS to ...`, `[NOACC] end: ...` |
 | `[SLEEP] ACC interrupt but pin 37 high (ACC off) -> ignore` | Ngắt ACC giả, ngủ lại |
-| `[SLEEP] exit: <lý do> after ...s asleep` | Thức: `ACC interrupt`, `ACC pin`, `motion`, `sleep disabled`... |
+| `[SLEEP] exit: <lý do> after ...s asleep` | Thức: `ACC interrupt`, `ACC pin`, `motion`, `tilt`, `sleep disabled`... |
 | `[NET] CFUN=4 OK` / `[NET] CFUN=1 OK` | Tắt / bật sóng lúc vào / ra khỏi ngủ |
 
 Khi đo dòng lúc ngủ phải **rút USB**, vì log qua USB giữ module thức. Kết quả đo trên board ngày 03/11/2026 ở 12 V: 0,09 A khi thức và cắm USB, 0,06 A khi ngủ. Mức 0,06 A vẫn cao hơn nhiều so với lúc module ngủ thật (vài mA). Chưa tách được phần nào thuộc module, phần nào thuộc các mạch khác trên board (nguồn, RS232, anten GPS); cần đo riêng dòng vào chân VBAT.
@@ -387,14 +404,25 @@ Datasheet chỉ cho giá trị điển hình (X/Y khoảng 140 mg, Z khoảng 59
 
 ### Phát hiện chuyển động lúc ngủ
 
-Khi vào ngủ, `LIS3DSH_MotionArm()` nạp state machine SM1:
+Khi vào ngủ, `LIS3DSH_MotionArm()` nạp state machine. Chương trình giống nhau: `STx_1 = 0x05` (một trục bất kỳ vượt THRS1), `STx_2 = 0x11` (báo ngắt rồi chạy lại), MASK = ±X ±Y ±Z, ngắt chốt ra INT1, đơn vị ngưỡng 15,6 mg/LSB. Có hai kiểu:
 
-- Chương trình: `ST1_1 = 0x05` (một trục bất kỳ có |a| > THRS1_1), `ST1_2 = 0x11` (báo ngắt rồi chạy lại). MASK = ±X ±Y ±Z, ngắt ra INT1.
-- Ngưỡng tính lại mỗi lần vào ngủ để bù trọng lực theo tư thế lắp: ngưỡng = trục lớn nhất lúc đứng yên + độ lệch (mặc định 150 mg, lệnh 43), đơn vị 15,6 mg/LSB.
-- `SleepPoll` đọc `OUTS1` (`0x5F`) để xóa ngắt và đếm. Nếu chân INT1 không hỗ trợ đánh thức, firmware vẫn đọc mức chân mỗi vòng ngủ (8 giây).
-- Khi thức hẳn thì tắt SM1 (`LIS3DSH_MotionDisarm()`).
+| Kiểu | State machine | So sánh | Độ nhạy |
+|---|---|---|---|
+| `3truc` (ưu tiên) | SM2, `SETT2.RADI` + constant shift `CS_X/Y/Z` (`0x13`–`0x15`) = trọng lực lúc đứng yên | \|a − g\| > độ lệch | Cả 3 trục cùng nhạy 150 mg: bắt được đẩy / kéo theo phương ngang |
+| `abs` (dự phòng) | SM1 | \|a\| > trục lớn nhất lúc đứng yên + độ lệch | Chỉ trục mang trọng lực nhạy; trục ngang phải vượt khoảng 1,15 g |
 
-Mã lệnh state machine và đơn vị ngưỡng lấy theo ví dụ wake-up của ST (AN3393), chưa đối chiếu được với tài liệu gốc. Cần kiểm trên board: gõ nhẹ vào board phải thấy `[SLEEP] motion #1/3`.
+Nghĩa bit `D_CS` và thang đo `CS` chưa đối chiếu được với tài liệu gốc, nên mỗi lần nạp driver tự kiểm 2 bước trên chip (khoảng 200 ms mỗi bước, thử cả 2 giá trị `D_CS`):
+
+1. `CS = 0`, ngưỡng = nửa trục lớn nhất: trục mang trọng lực **phải** ngắt (SM2 và INT1 chạy, đang so dữ liệu sau CS).
+2. `CS = g`, cùng ngưỡng: lúc đứng yên **không được** ngắt (CS đúng dấu, đúng thang đo).
+
+Qua cả 2 bước thì nạp ngưỡng thật; không qua thì lùi về kiểu `abs` và ghi log. `sa,43` cho biết kiểu của lần nạp gần nhất.
+
+- `SleepPoll` đọc `OUTS2` (`0x7F`, kiểu `abs` là `OUTS1` `0x5F`) để xóa ngắt và đếm. Nếu chân INT1 không hỗ trợ đánh thức, firmware vẫn đọc mức chân mỗi vòng ngủ (8 giây). Nạp lỗi thì không đọc INT1 (tránh thức nhầm vì chân nằm mức thấp), chỉ còn ACC và nghiêng.
+- Mỗi vòng ngủ còn đọc véc-tơ trọng lực (`LIS3DSH_ReadGravity`) so với mốc lúc vào ngủ để phát hiện nghiêng (mục 11).
+- Khi thức hẳn thì tắt state machine (`LIS3DSH_MotionDisarm()`).
+
+Cần kiểm trên board: log `[LIS3DSH] SM2 check ...` và `motion armed DELTA` lúc vào ngủ; đẩy nhẹ ngang thân xe (không chỉ gõ từ trên xuống) phải thấy `[SLEEP] motion #1/3`.
 
 ### Xác nhận vào cua (tăng tần suất gửi vị trí)
 
@@ -425,18 +453,51 @@ sa,43
 | Tham số | Mặc định | Khoảng | Tác dụng |
 |---|---|---|---|
 | `0` / `1` | 1 | | Tắt / bật thức khi rung |
-| `+mg` | 150 | 30–900 | Độ lệch so với trục lớn nhất lúc đứng yên. Nhỏ = nhạy hơn |
+| `+mg` | 150 | 30–900 | Kiểu `3truc`: độ lệch trên mỗi trục so với lúc đứng yên; kiểu `abs`: so với trục lớn nhất. Nhỏ = nhạy hơn |
 | Số ngắt | 3 | 1–20 | Cần bao nhiêu ngắt thì thức. Lớn = ít thức nhầm hơn |
 | Cửa sổ | 60 s | 10–600 | Các ngắt phải nằm trong khoảng này |
 
-Mỗi lần đang ngủ chỉ đếm được tối đa một ngắt mỗi vòng 5 giây, nên với 3 ngắt / 60 giây thì xe phải rung liên tục khoảng 10–15 giây.
+Mỗi lần đang ngủ chỉ đếm được tối đa một ngắt mỗi vòng 8 giây (`SLEEP_POLL_SEC`), nên với 3 ngắt / 60 giây thì xe phải rung liên tục khoảng 16–24 giây.
+
+#### Ý nghĩa của `+mg`
+
+mg là mili-g (1 g = 9,81 m/s², gia tốc trọng trường), nên 150 mg = 0,15 g ≈ 1,5 m/s². Ở kiểu `3truc`, mỗi lần gia tốc trên một trục bất kỳ (X, Y hoặc Z) lệch quá 150 mg so với lúc xe đứng yên, cảm biến báo **một ngắt**. Một ngắt chưa đủ để thức, phải đủ số ngắt trong cửa sổ (mặc định 3 ngắt / 60 giây). Nhờ vậy một cú đóng cửa đơn lẻ không làm thiết bị thức.
+
+Ngưỡng trong chip đi theo bước 15,6 mg, nên giá trị đặt được làm tròn. `sa,43` hiện giá trị thực ở mục `lan nap cuoi`.
+
+| | Giá trị đặt | Thực nạp vào chip |
+|---|---|---|
+| Min | 30 mg | 31 mg (2 bước) |
+| Mặc định | 150 mg | 156 mg (10 bước) |
+| Max | 900 mg | 906 mg (58 bước) |
+
+- Gửi `na,43` ngoài khoảng 30–900 thì giá trị bị kẹp về biên gần nhất; cấu hình đã lưu mà ngoài khoảng thì dùng lại 150.
+- Max 900: thanh ghi ngưỡng tối đa 127 bước ≈ 1984 mg. Kiểu `abs` (dự phòng) phải tính cả trọng lực (≈ 1000 mg) cộng độ lệch, nên độ lệch chỉ lên được khoảng 980 mg; 900 là mức an toàn.
+- Min 30: thấp hơn nữa thì nhiễu cảm biến và rung nền dễ báo giả. Khi dùng thực tế nên đặt **từ khoảng 50 mg trở lên**: ở kiểu `3truc`, trọng lực bị trừ cũng được làm tròn theo bước 15,6 mg (sai tới ±8 mg), cộng thêm trôi nhiệt, nên 30 mg có thể tự ngắt khi xe đứng yên.
+- Ở kiểu `abs`, 150 mg là mức vượt thêm so với trục đang chịu trọng lực; hai trục ngang phải vượt khoảng 1,15 g nên gần như không bắt được đẩy / kéo ngang.
+
+Mức gia tốc từng tình huống dưới đây chỉ là ước lượng, cần đo thật trên xe:
+
+| Tình huống | Gia tốc ước lượng |
+|---|---|
+| Đẩy xe, kéo xe êm | khoảng 50–150 mg |
+| Người lên xe, đóng cửa | khoảng 100–300 mg, rất ngắn |
+| Xóc mặt đường khi bị kéo | khoảng 200 mg trở lên |
+
+| `+mg` | Dùng khi |
+|---|---|
+| 60–100 | Cần nhạy, bắt được đẩy / kéo nhẹ; dễ thức nhầm hơn |
+| 150 (mặc định) | Cân bằng giữa độ nhạy và thức nhầm |
+| ≥ 300 | Xe đỗ cạnh đường đông, hay bị rung |
+
+Cảm biến lấy mẫu 25 lần / giây (40 ms một mẫu), nên cú gõ quá ngắn có thể lọt.
 
 Cách chỉnh:
 1. Khi xe đang thức, gửi `na,43,t` rồi thử các tình huống: đóng cửa, người lên xe, gõ vào thân xe, đẩy hoặc kéo xe.
 2. Xem log: mỗi ngắt có một dòng `[ACCEL/TEST] motion #n ... x= y= z=`, cuối cùng có `[ACCEL/TEST] done: n irq in 120s (thr=...mg)`. Gửi `sa,43` cũng xem được số ngắt của lần thử.
 3. Rung nhẹ (đóng cửa) mà ra nhiều ngắt thì tăng `+mg` hoặc tăng số ngắt; kéo xe mà ít ngắt thì giảm `+mg`.
 
-Trả lời `sa,43`: `sa,43 rung: bat, nguong +150mg (lan nap cuoi 843mg), thuc khi 3 ngat/60s, thu: lan truoc 4 ngat/120s`. Giá trị lưu trong cấu hình (khóa `mwoff`, `mdel`, `mev`, `mwin`).
+Trả lời `sa,43`: `sa,43 rung: bat, nguong +150mg (lan nap cuoi 156mg 3truc), thuc khi 3 ngat/60s, nghieng 8do, thu: lan truoc 4 ngat/120s` (`3truc` / `abs` / `-` = chưa nạp). Giá trị lưu trong cấu hình (khóa `mwoff`, `mdel`, `mev`, `mwin`).
 
 ### Kiểm tra lúc chạy và bật / tắt (lệnh 44)
 
@@ -460,9 +521,11 @@ Khi hỏng: khởi tạo lại cảm biến, chạy self-test, bật lại đán
 | `[LIS3DSH] OK addr=0x1E ch=0 CTRL4=0x4F` | Khởi tạo xong |
 | `[LIS3DSH] self-test PASS: dX=-174 dY=-181 dZ=464 mg` | Kết quả self-test |
 | `[ACCEL] x=-700 y=323 z=619 mg` | Khi thức, mỗi 10 giây (`ACCEL_LOG_SEC`, 0 = tắt), để kiểm tra lắp đặt |
-| `[LIS3DSH] motion armed: g=(-700,323,619) thr=54 (843 mg)` | Đã nạp chương trình lúc vào ngủ hoặc lúc thử |
+| `[LIS3DSH] SM2 check SETT2=0x19: CS=0 fired=1 (need 1), CS=g fired=0 (need 0)` | Tự kiểm kiểu `3truc` |
+| `[LIS3DSH] motion armed DELTA: g=(-700,323,619) CS=(-45,21,40) thr=10 (+-156 mg all axes)` | Đã nạp kiểu `3truc` lúc vào ngủ hoặc lúc thử |
+| `[LIS3DSH] motion armed ABS: g=(..) thr=54 (843 mg, gravity axis only)` | Tự kiểm không qua, đã lùi về kiểu `abs` |
 | `[ACCEL/TEST] start 120s: delta=150mg thr=843mg, ...` | Bắt đầu thử độ nhạy (lệnh `na,43,t`) |
-| `[ACCEL/TEST] motion #2 OUTS1=0x.. x=.. y=.. z=.. mg` | Một ngắt trong lúc thử |
+| `[ACCEL/TEST] motion #2 OUTS=0x.. x=.. y=.. z=.. mg` | Một ngắt trong lúc thử |
 | `[ACCEL/TEST] done: 4 irq in 120s (thr=843mg)` | Kết thúc thử |
 | `[TURN] turn: lat=150mg long=20mg v=42km/h yaw~7deg/s -> period 5s` | Bắt đầu cua (`turn` / `sharp`) và chu kỳ gửi mới |
 | `[TURN] end: ... -> period 10s` | Hết cua, trả chu kỳ thường |
