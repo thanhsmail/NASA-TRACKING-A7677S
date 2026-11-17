@@ -249,19 +249,19 @@
  * CS flash ở pin12 (pad 17) — không được dùng chung với LED/DOUT.
  */
 #ifndef GPIO_LED_NET
-#define GPIO_LED_NET 80 /* SC_MODULE_GPIO_00 / pin7 (LED_NET) */
+#define GPIO_LED_NET 74 /* SC_MODULE_GPIO_03 / pin7 (LED_NET) */
 #endif
 #ifndef GPIO_LED_PWR
 #define GPIO_LED_PWR 32 /* SC_MODULE_GPIO_01 / pin5 (LED_MEM) */
 #endif
 #ifndef GPIO_LED_GNSS
-#define GPIO_LED_GNSS 74/* SC_MODULE_GPIO_03 / pin4 (LED_GPS) */
+#define GPIO_LED_GNSS 80 /* SC_MODULE_GPIO_00 / pin4 (LED_GPS) */
 #endif
 #ifndef GPIO_DOUT
-#define GPIO_DOUT 28 /* SC_MODULE_GPIO_09 / pin48 (GPIO_OUT) */
+#define GPIO_DOUT 77 /* SC_MODULE_GPIO_08 / pin48 (GPIO_OUT) */
 #endif
 #ifndef GPIO_ACC_IN
-#define GPIO_ACC_IN 37 /* SC_MODULE_GPIO_10 / pin52 (ACC) */
+#define GPIO_ACC_IN 28 /* SC_MODULE_GPIO_09 / pin52 (ACC) */
 #endif
 
 /*
