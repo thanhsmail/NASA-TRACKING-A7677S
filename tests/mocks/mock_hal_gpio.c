@@ -3,6 +3,7 @@
  * @brief Mock HAL GPIO implementation for Host Unit Testing
  */
 #include "hal/hal_gpio.h"
+#include "app_config.h"
 
 static int s_mockAccPinState = 0; /* 0 = LOW (Active LOW -> ACC ON) */
 
@@ -25,7 +26,7 @@ int HAL_GPIO_Write(int pin, int val)
 
 int HAL_GPIO_Read(int pin)
 {
-    if (pin == 37) return s_mockAccPinState; /* GPIO_ACC_IN */
+    if (pin == GPIO_ACC_IN) return s_mockAccPinState;
     return 1;
 }
 
