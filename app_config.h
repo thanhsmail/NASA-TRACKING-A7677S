@@ -41,6 +41,10 @@
  * ghi lại. Trước đây chỉ ghi khi RTC chưa có giờ: modem tự đặt sai (log
  * 18/11: lệch +1 giờ sau mất nguồn) thì sai mãi */
 #define RTC_MAX_DRIFT_SEC 60
+/* Reset bộ đếm ngày (km ngày, msgId...) theo RTC ở mọi trạng thái, không chờ
+ * đăng nhập. Sau khởi động chỉ tin ngày của RTC khi đã có giờ GNSS / giờ Server,
+ * hoặc đã chạy quá ngần này giây (không có mạng lẫn GNSS vẫn phải sang ngày) */
+#define DAY_RTC_TRUST_UPTIME_SEC 600
 #define NASA_GNSS_TIME_MAX_AGE_SEC 120
 #define NASA_NTP_MSGQ_WAIT_MS 120000u
 #define NASA_NTP_RETRY_INTERVAL (200 * 30)

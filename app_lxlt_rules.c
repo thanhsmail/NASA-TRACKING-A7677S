@@ -13,13 +13,16 @@ void LxltRules_Init(LxltState_t *state)
     memset(state, 0, sizeof(*state));
 }
 // Reset đếm số km và thời gian
-void LxltRules_ResetDailyCount(LxltState_t *state)
+void LxltRules_ResetDailyCount(LxltState_t *state, double oldTotalKm)
 {
     if (!state) return;
     state->driveMinToday       = 0;
     state->driveAccumSecToday  = 0;
     state->lxltOver4hCount     = 0;
-    state->workOdomStartKm     = 0.0;
+    /* Km ngày về 0 cùng lúc: dời mốc đầu phiên theo km ngày cũ để quãng đường
+     * phiên (km ngày - mốc) giữ nguyên phần đã chạy trước 0 giờ. Trước đây đặt
+     * mốc = 0 nên phiên chạy qua 0 giờ bị tính lại từ 0 */
+    if (oldTotalKm > 0.0) state->workOdomStartKm -= oldTotalKm;
 }
 // Xử lý đếm số km và thời gian 
 int LxltRules_WorkLxltMinutes(const LxltState_t *state, uint32_t nowTick, uint32_t ticksPerSec)

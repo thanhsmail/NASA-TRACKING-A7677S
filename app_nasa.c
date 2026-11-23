@@ -415,25 +415,71 @@ static void MakeLoginCode(void)
     uint32_t t = GetTickNow();
     (void)snprintf(s_loginCode, sizeof(s_loginCode), "%06lu", (unsigned long)(t % 1000000u));
 }
-// Xử lý Reset Bộ đếm hàng ngày
-static void ResetDailyCountersIfNeeded(int today_mday)
+/**
+ * Reset bộ đếm trong ngày (km ngày, số lần dừng đỗ, thời gian lái trong ngày,
+ * số thứ tự bản tin) khi RTC sang ngày mới.
+ * cfg->lastMday lưu ngày dạng YYYYMMDD; cấu hình cũ chỉ có ngày (1..31) thì so
+ * theo ngày rồi chuyển sang dạng mới (trước đây chỉ so ngày nên tắt máy đúng
+ * 1 tháng thì không reset). RTC lùi ngày (sửa giờ) thì chỉ ghi nhận, không reset.
+ * Phiên lái đang chạy qua 0 giờ giữ nguyên quãng đường đã chạy (bản tin 5).
+ */
+static void ResetDailyCountersIfNeeded(const HalDateTime_t *rtc)
 {
-    if (today_mday < 1 || today_mday > 31) return;
     AppConfig_t *cfg = CFG_Get();
-    if (cfg->lastMday == 0) {
-        cfg->lastMday = today_mday;
+    int today, saved, changed;
+    double oldKm;
+
+    if (!rtc || rtc->tm_year < 2020 || rtc->tm_year > 2100 ||
+        rtc->tm_mon < 1 || rtc->tm_mon > 12 || rtc->tm_mday < 1 || rtc->tm_mday > 31) return;
+    today = (int)rtc->tm_year * 10000 + (int)rtc->tm_mon * 100 + (int)rtc->tm_mday;
+    saved = cfg->lastMday;
+    if (saved == today) return;
+    if (saved == 0 || (saved <= 31 && saved == (int)rtc->tm_mday)) {
+        cfg->lastMday = today; /* lần đầu / chuyển từ dạng cũ: cùng ngày, không reset */
         CFG_Save();
         return;
     }
-    if (today_mday != cfg->lastMday) {
-        GPS_ResetOdometer();
-        ParkRules_ResetDailyCount(&s_parkState);
-        LxltRules_ResetDailyCount(&s_lxltState);
-        s_messageIdNum = 1;
-        cfg->operateDays++;
-        cfg->lastMday = today_mday;
+    changed = (saved <= 31) ? 1 : (today > saved);
+    if (!changed) {
+        HAL_LOG("[DAY] RTC date went back %d -> %d: keep daily counters", saved, today);
+        cfg->lastMday = today;
         CFG_Save();
+        return;
     }
+    oldKm = GPS_GetTotalKm();
+    HAL_LOG("[DAY] new day %d -> %d: km %.3f -> 0, msgId -> 1, park / drive counters reset%s",
+            saved, today, oldKm, s_lxltState.workActive ? " (drive session kept)" : "");
+    GPS_ResetOdometer();
+    ParkRules_ResetDailyCount(&s_parkState);
+    LxltRules_ResetDailyCount(&s_lxltState, oldKm);
+    s_messageIdNum = 1;
+    cfg->operateDays++;
+    cfg->lastMday = today;
+    CFG_Save();
+}
+
+/** 1 khi tin được ngày của RTC: đã có giờ GNSS hoặc giờ Server từ lúc khởi động,
+ *  hoặc đã chạy đủ lâu (không có mạng / GNSS vẫn phải sang ngày) */
+static int s_rtcServerTimeOk = 0;
+static int RtcDateTrusted(void)
+{
+    char buf[24];
+
+    if (s_rtcServerTimeOk) return 1;
+    if (GPS_FormatLocalDateTime(buf, sizeof(buf))) return 1;
+    return (GetTickNow() / (uint32_t)HAL_TICKS_PER_SEC) >= (uint32_t)DAY_RTC_TRUST_UPTIME_SEC;
+}
+
+/** Mỗi vòng lúc thức, mọi trạng thái (cả lúc chưa có Server): sang ngày thì
+ *  reset ngay, trước khi lưu điểm mù / đăng nhập / gửi bản tin của ngày mới */
+static void DailyRolloverPoll(void)
+{
+    HalDateTime_t rtc;
+
+    if (!RtcDateTrusted()) return;
+    memset(&rtc, 0, sizeof(rtc));
+    if (HAL_GNSS_GetRtc(&rtc) != 0) return;
+    ResetDailyCountersIfNeeded(&rtc);
 }
 // Xử lý gửi Frame mạng
 static int NetworkSendFrame(const char *frame)
@@ -692,6 +738,7 @@ void NASA_OnServerProtocolLine(const char *line)
             HalDateTime_t srv;
             if (UTIL_ParseDateTime(fields[2], &srv) == 0) {
                 (void)UTIL_CorrectRtc(&srv, "server");
+                s_rtcServerTimeOk = 1;
             }
         }
         s_loginAcked = 1;
@@ -1283,7 +1330,7 @@ static NasaState_t Handle_StateTracking(void)
 
     HAL_GNSS_GetRtc(&rtc);
     if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100) {
-        ResetDailyCountersIfNeeded(rtc.tm_mday);
+        /* Reset bộ đếm ngày: DailyRolloverPoll (mọi trạng thái, không chờ đăng nhập) */
 
         /* Lich reset cmd 32 */
         /* Lịch reset cmd 32: A ngày một lần (tính từ lần khởi động), lúc B giờ.
@@ -1971,6 +2018,7 @@ void NASA_RunStep(void)
     }
 
     NASA_FeedWatchdog();
+    DailyRolloverPoll();
     SleepPoll();
     if (NASA_IsSleeping()) return; /* vừa vào ngủ: vòng sau chạy SleepDeepStep */
     NoAccMovePoll();

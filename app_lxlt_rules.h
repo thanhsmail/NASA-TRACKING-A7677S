@@ -51,7 +51,8 @@ typedef struct {
 } LxltState_t;
 
 void LxltRules_Init(LxltState_t *state);
-void LxltRules_ResetDailyCount(LxltState_t *state);
+/** Sang ngày mới; oldTotalKm = km ngày ngay trước khi reset về 0 */
+void LxltRules_ResetDailyCount(LxltState_t *state, double oldTotalKm);
 
 int  LxltRules_WorkLxltMinutes(const LxltState_t *state, uint32_t nowTick, uint32_t ticksPerSec);
 int  LxltRules_WorkLxltDistMeters(const LxltState_t *state, double currentTotalKm);
