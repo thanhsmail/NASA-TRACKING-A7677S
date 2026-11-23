@@ -107,6 +107,17 @@
  * GPS khi đỗ — nhiễu đô thị có thể báo tốc độ tới 26 km/h nhưng vị trí chỉ
  * quẩn quanh điểm đỗ) */
 #define MOVING_MIN_DISPLACEMENT_KM 0.015 // 15 m
+/* Chống nhiễu vận tốc khi ACC bật mà xe đứng yên (dừng chưa tới mức đỗ: đèn đỏ,
+ * nổ máy chờ, accMode 0). Trước đây chỉ cần vận tốc GPS > ngưỡng (lệnh 10)
+ * MOVING_CONFIRM_SEC giây là báo chạy. Nay thêm (app_gps.c FilterMovingStatus):
+ *  - phải rời điểm neo (trung bình vị trí lúc đứng) >= MOVING_ACC_ON_MIN_DISPLACEMENT_KM
+ *    trên MOVING_DISP_CONFIRM_SAMPLES mẫu liên tiếp. 0 = tắt, chỉ xét vận tốc như cũ;
+ *  - mẫu HDOP > MOVING_START_MAX_HDOP hoặc ít hơn 5 vệ tinh không được tính là
+ *    "vượt ngưỡng" khi xe đang dừng / đỗ (không ảnh hưởng xe đang chạy). 0 = tắt.
+ * Quãng từ điểm neo tới lúc xác nhận chạy vẫn được cộng vào km (UpdateOdometer). */
+#define MOVING_ACC_ON_MIN_DISPLACEMENT_KM 0.020 // 20 m
+#define MOVING_DISP_CONFIRM_SAMPLES 2
+#define MOVING_START_MAX_HDOP 4.0
 /* Chế độ vệ tinh (lệnh 3) — chip Unicorecomm bản trong nước, SDK chỉ có 3 chế độ */
 #define GNSS_MODE_MIN 1
 #define GNSS_MODE_MAX 3
@@ -218,7 +229,7 @@
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "RV4G"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.05.261118"
+#define NASA_FW_CODE "v1.11.261123"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1

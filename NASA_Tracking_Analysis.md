@@ -5,8 +5,8 @@ Tài liệu mô tả chi tiết cấu trúc firmware giám sát hành trình ch�
 | Thông tin | Giá trị | Ở đâu |
 |---|---|---|
 | Tên thiết bị | `RV4G` | `NASA_DEVICE_NAME`, [app_config.h](app_config.h) |
-| Phiên bản firmware | `v1.05.261118` (gửi trong bản tin đăng nhập, `sa,33`) | `NASA_FW_CODE`, [app_config.h](app_config.h) |
-| Dòng log khởi động | `NASA_TRACKING VS1.00.261015` | [sc_application.c](sc_application.c) — đang khác `NASA_FW_CODE` |
+| Phiên bản firmware | `v1.11.261123` (gửi trong bản tin đăng nhập, `sa,33`) | `NASA_FW_CODE`, [app_config.h](app_config.h) |
+| Dòng log khởi động | `NASA_TRACKING v1.11.261123` | [sc_application.c](sc_application.c), in `NASA_FW_CODE` |
 | Phần cứng | `v1.0` | `NASA_HW_CODE` |
 | Server mặc định | `103.57.209.16:2590` | `NASA_SERVER_HOST_DEFAULT`, `NASA_SERVER_PORT_DEFAULT` |
 | Biến thể build | `A7677S_MANV_1606_V702_OPENSDK` | `.\GNUmake.exe A7677S_MANV_1606_V702_OPENSDK` (chạy trong cmd/PowerShell) |
@@ -547,4 +547,3 @@ Chưa kiểm trên thiết bị: dòng tiêu thụ khi ngủ (phải rút USB kh
 | Khóa cấu hình tắt cứng | Bất kỳ số nào cũng gửi được lệnh đổi server, FOTA, xóa dữ liệu, lệnh 37 |
 | Bản tin 5 / 6 khi mất mạng bị bỏ | Server thiếu sự kiện lái xe / đỗ trong điểm mù |
 | Nơi lưu backup chỉ chọn lúc khởi động | Flash hỏng khi đang chạy thì dữ liệu mất (LED nguồn tắt) |
-| `NASA_FW_CODE` (`v1.05.261014`) khác dòng log khởi động (`VS1.00.261015`) | Dễ nhầm phiên bản khi đối chiếu |
