@@ -37,6 +37,10 @@
 #define NASA_NTP_SERVER "pool.ntp.org"
 #define NASA_NTP_TIMEZONE_PARAM 28
 #define NASA_GNSS_UTC_OFFSET_HOURS 7
+/* RTC lệch quá ngần này giây so với giờ GNSS / giờ Server (ACK đăng nhập) thì
+ * ghi lại. Trước đây chỉ ghi khi RTC chưa có giờ: modem tự đặt sai (log
+ * 18/11: lệch +1 giờ sau mất nguồn) thì sai mãi */
+#define RTC_MAX_DRIFT_SEC 60
 #define NASA_GNSS_TIME_MAX_AGE_SEC 120
 #define NASA_NTP_MSGQ_WAIT_MS 120000u
 #define NASA_NTP_RETRY_INTERVAL (200 * 30)
@@ -79,9 +83,16 @@
 #define ODOM_MAX_STATIONARY_KM 0.100 // Quãng đường tối đa khi dừng đỗ
 #define ODOM_GPS_LOSS_TIMEOUT_SEC 30 // Thời gian GPS mất để reset Odometer
 #define ODOM_JUMP_MIN_CALC_SPEED_KPH 30.0 // Ngưỡng vận tốc sàn tối thiểu để tính maxDist cho Jump Filter
-#define ODOM_SAVE_INTERVAL_SEC 60     // Khoảng cách tối thiểu giữa 2 lần lưu km ngày khi đang chạy
-#define ODOM_SAVE_MIN_DELTA_KM 0.05  // Chỉ lưu khi km ngày đổi ít nhất 50 m (khi xe dừng: lưu mọi thay đổi)
+/* Lưu km ngày (kèm vị trí) khi đang chạy. Trước đây 60 s / 50 m: khởi động lại
+ * giữa đường mất tới 60 s km và gửi lại vị trí cũ cách xa (nhảy lùi) */
+#define ODOM_SAVE_INTERVAL_SEC 10     // Khoảng cách tối thiểu giữa 2 lần lưu km ngày khi đang chạy
+#define ODOM_SAVE_MIN_DELTA_KM 0.02  // Chỉ lưu khi km ngày đổi ít nhất 20 m (khi xe dừng: lưu mọi thay đổi)
 #define ODOM_RESTORE_MAX_KM 5000.0   // Km ngày đọc lại lớn hơn mức này coi là hỏng
+/* Sau khởi động lại: cộng quãng từ vị trí lưu cùng km tới fix đầu tiên nếu lần
+ * lưu cuối cách <= ODOM_BOOT_BRIDGE_MAX_SEC (theo RTC) và tốc độ trung bình
+ * không quá ODOM_BOOT_BRIDGE_MAX_KPH */
+#define ODOM_BOOT_BRIDGE_MAX_SEC 600
+#define ODOM_BOOT_BRIDGE_MAX_KPH 130
 
 #define MOVING_CONFIRM_SEC 3   // Thời gian xác nhận trạng thái di chuyển
 #define STOPPED_CONFIRM_SEC 10 // Thời gian xác nhận trạng thái dừng đỗ (khớp Park)
@@ -198,7 +209,7 @@
 /* Phiên bản thiết bị RV26 / A7677S */
 #define NASA_DEVICE_NAME "RV4G"
 #define NASA_HW_CODE "v1.0"
-#define NASA_FW_CODE "v1.05.261014"
+#define NASA_FW_CODE "v1.05.261118"
 #define NASA_SERVER_HOST_DEFAULT "103.57.209.16"
 #define NASA_SERVER_PORT_DEFAULT 2590
 #define NASA_PDP_ID 1
@@ -221,6 +232,20 @@
 
 /* Điện áp acquy: ngưỡng bình yếu (Volt) */
 #define NASA_BATTERY_LOW_VOLT 10.5f
+
+/* Đo điện áp nguồn (NASA_GetVoltage): VIN qua cầu chia R2 220k / R3 10k (board
+ * thực tế; sơ đồ ghi 7,5k nhưng đã kiểm tra là 10k), kẹp BAT54S lên VDD_1V8,
+ * vào chân ADC2 của module. ADC đo tới ~1,2 V -> tối đa 1200 mV x 23 = 27,6 V:
+ * xe 24 V nổ máy (sạc 27,6..28,8 V) sẽ chạm trần (báo ">=27.6V").
+ * Log UART 18/11: ADC2 ổn định 556..560 mV ở nguồn 12,1 V (x23 = 12,8 V);
+ * ADC1 thả nổi (619 -> 1198 mV). Hiệu chỉnh: hệ số = V đồng hồ / (adc2 mV / 1000),
+ * xem mV thô bằng tin nhắn sa,42. */
+#define VOLT_ADC_CHANNEL 2             // ADC_VIN nối ADC2 (ADC1 thả nổi). sAPI_ReadAdc: 1 = ADC1, 2 = ADC2
+#define VOLT_DIVIDER_RATIO 23.0f       // (R2 + R3) / R3 = (220k + 10k) / 10k
+#define VOLT_ADC_FULL_SCALE_MV 1200u   // ADC bão hòa ở mức này
+#define VOLT_ADC_SAT_MARGIN_MV 5u      // >= full scale - margin coi là bão hòa
+#define VOLT_ADC_SAMPLES 8             // lấy trung bình ngần này mẫu mỗi lần đo
+#define VOLT_FALLBACK_VOLT 12.0f       // mọi mẫu đọc lỗi (0 mV): dùng giá trị này
 #define NASA_SPEED_LIMIT_KPH    120 
 
 /* Khóa cấu hình / SĐT trung tâm — 0 = tắt (chưa dùng) */
@@ -232,6 +257,24 @@
 #define NASA_BACKUP_FILE "C:/rv26_bak.dat"
 #define NASA_ODOM_FILE "C:/rv26_odo.dat" /* km trong ngày, đọc lại sau khi khởi động */
 #define NASA_POS_FILE "C:/rv26_pos.dat"  /* vị trí hợp lệ cuối, đọc lại sau khi khởi động */
+#define NASA_RST_FILE "C:/rv26_rst.dat"  /* lý do tự reset (NASA_SysReset), đọc và xóa lúc khởi động */
+
+/* Lý do tự reset, ghi vào NASA_RST_FILE trước khi reset; lần khởi động sau
+ * đưa vào bản tin đăng nhập dạng R-<chính>.<mã>. Dải 60..69 không trùng mã
+ * PMIC (R-x.<bật><tắt>, chữ số hàng chục <= 5). R-3.x không có mã nào ở dưới
+ * (ví dụ R-3.38) = SDK tự reset ngoài các đường này. */
+#define RST_CAUSE_CMD_RESET     60  // lệnh "reset" / "reset#" (SMS, TCP)
+#define RST_CAUSE_CMD9          61  // lệnh 9
+#define RST_CAUSE_SCHEDULE      62  // lịch reset lệnh 32
+#define RST_CAUSE_NET_DISCONN   63  // mất kết nối Server > NET_DISCONN_RESET_SEC
+#define RST_CAUSE_FOTA          64  // FOTA tải xong
+#define RST_CAUSE_SWWDT         65  // nasa_reporter không chạy > 180 s (đang thức)
+#define RST_CAUSE_SWWDT_SLEEP   66  // nasa_reporter không chạy > 180 s (đang ngủ)
+#define RST_CAUSE_GNSS_HANG     67  // gnss_task treo -> ngừng nuôi watchdog phần cứng
+#define RST_CAUSE_ABORT         68  // abort(): crash / assert trong SDK / thư viện C
+/* Lịch reset lệnh 32: phải chạy ít nhất ngần này giây từ lúc bật (chống reset
+ * lặp khi khởi động xong vẫn còn trong phút 0 của giờ hẹn) */
+#define SCHEDULE_RESET_MIN_UPTIME_SEC 3600
 #define NASA_BACKUP_INTERVAL_SEC 10
 #define NASA_BACKUP_MAX_RECORDS 2000
 #define NASA_BACKUP_REPLAY_BURST 5 

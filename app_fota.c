@@ -23,6 +23,7 @@
 #include "hal/hal_fota.h"
 #include "app_config.h"
 #include "app_fota.h"
+#include "app_nasa.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -195,7 +196,7 @@ static void sTask_Fota(void *argv)
         }
         Notify(msg);
         HAL_OS_TaskSleep(HAL_TICKS_PER_SEC * 5);
-        HAL_OS_SysReset();
+        NASA_SysReset(RST_CAUSE_FOTA);
     }
 }
 

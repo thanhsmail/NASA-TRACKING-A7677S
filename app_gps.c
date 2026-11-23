@@ -52,9 +52,17 @@ static int      s_lbsAccM        = 0;
 static uint32_t s_lbsTick        = 0;    /* 0 = không có vị trí LBS */
 
 /* Vị trí hợp lệ cuối lưu ra NASA_POS_FILE (PosPersistPoll) */
-#define POS_FILE_MAGIC 0x504F5331u         /* "POS1" */
+#define POS_FILE_MAGIC_V1 0x504F5331u      /* "POS1": bản cũ, không có giờ lưu */
+#define POS_FILE_MAGIC    0x504F5332u      /* "POS2" */
 typedef struct {
     uint32_t magic;
+    double   lat;
+    double   lon;
+    uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
+} PosFileV1_t;
+typedef struct {
+    uint32_t magic;
+    uint32_t savedSec;   /* giờ RTC lúc lưu (giây từ 2000), 0 = chưa có giờ */
     double   lat;
     double   lon;
     uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
@@ -62,6 +70,7 @@ typedef struct {
 static double   s_posSavedLat      = 0.0;
 static double   s_posSavedLon      = 0.0;
 static uint32_t s_posSaveTick      = 0;
+static uint32_t s_posLoadedSec     = 0;    /* giờ lưu của bản ghi đọc lúc khởi động */
 
 /* Giờ UTC từ GNSS */
 static HalDateTime_t s_lastGnssTime     = {0};
@@ -96,16 +105,34 @@ static int      s_odomRefDropped   = 0;    /* đã bỏ điểm tham chiếu tro
 
 /* Lưu km ngày vào NASA_ODOM_FILE để khởi động lại (mất nguồn, reset theo lịch
  * cmd 32) không làm km ngày về 0. Đọc / ghi khi giữ s_gpsDataMutex. */
-#define ODOM_FILE_MAGIC 0x4F444F31u        /* "ODO1" */
+#define ODOM_FILE_MAGIC_V1 0x4F444F31u     /* "ODO1": bản cũ, chỉ có km */
+#define ODOM_FILE_MAGIC    0x4F444F32u     /* "ODO2": km + vị trí + giờ lưu */
 typedef struct {
     uint32_t magic;
     int32_t  mday;       /* ngày (RTC) lúc lưu, 0 = chưa có giờ */
     double   totalKm;
     uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
+} OdomFileV1_t;
+/* Lưu kèm vị trí ứng với km này và giờ lưu: khởi động lại giữa đường thì nối
+ * quãng từ vị trí đã lưu tới fix đầu tiên (BootBridgeOdometer), không mất đoạn
+ * chạy chưa kịp lưu và đoạn chạy trong lúc khởi động lại. */
+typedef struct {
+    uint32_t magic;
+    int32_t  mday;       /* ngày (RTC) lúc lưu, 0 = chưa có giờ */
+    double   totalKm;
+    double   lat;        /* vị trí hợp lệ lúc lưu, 0,0 = chưa có */
+    double   lon;
+    uint32_t savedSec;   /* giờ RTC lúc lưu (giây từ 2000), 0 = chưa có giờ */
+    uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
 } OdomFile_t;
 static double   s_odomSavedKm      = 0.0;
 static uint32_t s_odomSaveTick     = 0;    /* 0 = chưa lưu lần nào từ lúc bật */
 static int      s_odomSaveWasMoving = 0;
+/* Điểm nối km sau khởi động lại (đọc từ NASA_ODOM_FILE), xử lý ở fix đầu tiên */
+static int      s_bootBridgePending = 0;
+static double   s_bootBridgeLat     = 0.0;
+static double   s_bootBridgeLon     = 0.0;
+static uint32_t s_bootBridgeSec     = 0;
 
 /* Debug: tick lúc yêu cầu AGPS, để đo thời gian có fix sau AGPS; 0 = không đo */
 static uint32_t s_agpsReqTick = 0;
@@ -123,7 +150,10 @@ typedef struct {
 
 /* ============================== Giờ GNSS ================================== */
 
-/** Đặt RTC từ giờ GNSS (giờ Việt Nam) khi RTC chưa có giờ hợp lệ */
+/**
+ * Đặt RTC từ giờ GNSS (giờ Việt Nam): RTC chưa có giờ thì đặt ngay; RTC đã có
+ * giờ thì chỉ sửa khi đang có fix (giờ vệ tinh tin được) và lệch > RTC_MAX_DRIFT_SEC.
+ */
 static void MaybeSyncRtcFromGnss(const HalDateTime_t *utc)
 {
     HalDateTime_t rtc;
@@ -131,14 +161,13 @@ static void MaybeSyncRtcFromGnss(const HalDateTime_t *utc)
 
     if (utc == NULL || utc->tm_year < 2020 || utc->tm_year > 2100) return;
 
+    memset(&rtc, 0, sizeof(rtc));
     HAL_GNSS_GetRtc(&rtc);
-    if (rtc.tm_year >= 2020 && rtc.tm_year <= 2100) return;
+    if (UTIL_DateTimeToSec(&rtc) != 0 && s_lastSatellites < GPS_MIN_SATS_FOR_FIX) return;
 
     local = *utc;
     UTIL_AddSecondsToDateTime(&local, (int32_t)NASA_GNSS_UTC_OFFSET_HOURS * 3600);
-    HAL_GNSS_SetRtc(&local);
-    HAL_LOG("[GNSS] RTC synced: %04d-%02d-%02d %02d:%02d:%02d",
-            local.tm_year, local.tm_mon, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
+    (void)UTIL_CorrectRtc(&local, "GNSS");
 }
 
 /** Lưu giờ UTC từ URC và đồng bộ RTC nếu cần */
@@ -197,8 +226,19 @@ static int OdomRtcMday(void)
     return rtc.tm_mday;
 }
 
-/** Ghi km ngày ra file. Bản ghi cố định nên ghi đè, không xóa file trước
- *  (mất nguồn giữa lúc xóa và ghi sẽ mất luôn km). Gọi khi giữ s_gpsDataMutex. */
+/** Giờ RTC tính bằng giây từ 2000-01-01, 0 nếu RTC chưa có giờ */
+static uint32_t RtcSeconds(void)
+{
+    HalDateTime_t rtc;
+
+    memset(&rtc, 0, sizeof(rtc));
+    if (HAL_GNSS_GetRtc(&rtc) != 0) return 0;
+    return UTIL_DateTimeToSec(&rtc);
+}
+
+/** Ghi km ngày (kèm vị trí hợp lệ cuối và giờ) ra file. Bản ghi cố định nên
+ *  ghi đè, không xóa file trước (mất nguồn giữa lúc xóa và ghi sẽ mất luôn km).
+ *  Gọi khi giữ s_gpsDataMutex. */
 static void OdomFileWrite(double km)
 {
     OdomFile_t rec;
@@ -208,6 +248,9 @@ static void OdomFileWrite(double km)
     rec.magic = ODOM_FILE_MAGIC;
     rec.mday = OdomRtcMday();
     rec.totalKm = km;
+    rec.lat = s_holdLat;
+    rec.lon = s_holdLon;
+    rec.savedSec = RtcSeconds();
     rec.checksum = Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(OdomFile_t, checksum));
 
     fp = HAL_FS_Open(NASA_ODOM_FILE, "wb");
@@ -224,24 +267,51 @@ static void OdomFileWrite(double km)
 
 /** Đọc lại km ngày lúc khởi động. Bỏ qua nếu file hỏng, hoặc RTC đã có giờ
  *  và đã sang ngày khác so với lúc lưu. */
+static int PosIsSane(double lat, double lon);
+
 static void OdomFileLoad(void)
 {
+    union {
+        OdomFile_t   v2;
+        OdomFileV1_t v1;
+    } buf;
     OdomFile_t rec;
     HalFile_t fp;
     int n;
+    int ok;
     int today;
 
+    s_bootBridgePending = 0;
     fp = HAL_FS_Open(NASA_ODOM_FILE, "rb");
     if (fp == HAL_FS_INVALID_HANDLE) return;
-    memset(&rec, 0, sizeof(rec));
-    n = HAL_FS_Read(fp, &rec, sizeof(rec));
+    memset(&buf, 0, sizeof(buf));
+    n = HAL_FS_Read(fp, &buf, sizeof(buf));
     HAL_FS_Close(fp);
 
-    if (n != (int)sizeof(rec) || rec.magic != ODOM_FILE_MAGIC ||
-        rec.checksum != Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(OdomFile_t, checksum)) ||
-        !(rec.totalKm >= 0.0 && rec.totalKm <= ODOM_RESTORE_MAX_KM)) {
+    memset(&rec, 0, sizeof(rec));
+    if (n == (int)sizeof(OdomFile_t) && buf.v2.magic == ODOM_FILE_MAGIC) {
+        rec = buf.v2;
+        ok = (rec.checksum == Buffer_GetChecksum((const uint8_t *)&buf.v2,
+                                                 (uint32_t)offsetof(OdomFile_t, checksum)));
+    } else if (n == (int)sizeof(OdomFileV1_t) && buf.v1.magic == ODOM_FILE_MAGIC_V1) {
+        /* Bản cũ: chỉ có km, không nối được quãng sau khởi động */
+        rec.mday = buf.v1.mday;
+        rec.totalKm = buf.v1.totalKm;
+        ok = (buf.v1.checksum == Buffer_GetChecksum((const uint8_t *)&buf.v1,
+                                                    (uint32_t)offsetof(OdomFileV1_t, checksum)));
+    } else {
+        ok = 0;
+    }
+    if (!ok || !(rec.totalKm >= 0.0 && rec.totalKm <= ODOM_RESTORE_MAX_KM)) {
         HAL_LOG("[Odom] File km ngay khong hop le, bat dau tu 0");
         return;
+    }
+    /* Vị trí lưu cùng km (lưu dày khi chạy) mới hơn NASA_POS_FILE thì dùng làm
+     * vị trí giữ lại: khởi động lại giữa đường không gửi vị trí cũ cách xa */
+    if (PosIsSane(rec.lat, rec.lon) && rec.savedSec != 0 && rec.savedSec >= s_posLoadedSec) {
+        s_holdLat = rec.lat;
+        s_holdLon = rec.lon;
+        HAL_LOG("[GNSS/Pos] Vi tri cuoi theo file km: %.6f,%.6f", rec.lat, rec.lon);
     }
     today = OdomRtcMday();
     if (today != 0 && rec.mday != 0 && today != rec.mday) {
@@ -250,7 +320,13 @@ static void OdomFileLoad(void)
     }
     s_totalKm = rec.totalKm;
     s_odomSavedKm = rec.totalKm;
-    HAL_LOG("[Odom] Doc lai km ngay sau khoi dong: %.3f km", rec.totalKm);
+    if (rec.savedSec != 0 && PosIsSane(rec.lat, rec.lon)) {
+        s_bootBridgePending = 1;
+        s_bootBridgeLat = rec.lat;
+        s_bootBridgeLon = rec.lon;
+        s_bootBridgeSec = rec.savedSec;
+    }
+    HAL_LOG("[Odom] Doc lai km ngay sau khoi dong: %.3f km (noi=%d)", rec.totalKm, s_bootBridgePending);
 }
 
 /**
@@ -298,6 +374,7 @@ static void PosFileWrite(double lat, double lon)
 
     memset(&rec, 0, sizeof(rec));
     rec.magic = POS_FILE_MAGIC;
+    rec.savedSec = RtcSeconds();
     rec.lat = lat;
     rec.lon = lon;
     rec.checksum = Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(PosFile_t, checksum));
@@ -319,22 +396,40 @@ static void PosFileWrite(double lat, double lon)
  *  thì gửi vị trí này thay vì 0,0). Gọi khi giữ s_gpsDataMutex. */
 static void PosFileLoad(void)
 {
+    union {
+        PosFile_t   v2;
+        PosFileV1_t v1;
+    } buf;
     PosFile_t rec;
     HalFile_t fp;
     int n;
+    int ok;
 
+    s_posLoadedSec = 0;
     fp = HAL_FS_Open(NASA_POS_FILE, "rb");
     if (fp == HAL_FS_INVALID_HANDLE) return;
-    memset(&rec, 0, sizeof(rec));
-    n = HAL_FS_Read(fp, &rec, sizeof(rec));
+    memset(&buf, 0, sizeof(buf));
+    n = HAL_FS_Read(fp, &buf, sizeof(buf));
     HAL_FS_Close(fp);
 
-    if (n != (int)sizeof(rec) || rec.magic != POS_FILE_MAGIC ||
-        rec.checksum != Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(PosFile_t, checksum)) ||
-        !PosIsSane(rec.lat, rec.lon)) {
+    memset(&rec, 0, sizeof(rec));
+    if (n == (int)sizeof(PosFile_t) && buf.v2.magic == POS_FILE_MAGIC) {
+        rec = buf.v2;
+        ok = (rec.checksum == Buffer_GetChecksum((const uint8_t *)&buf.v2,
+                                                 (uint32_t)offsetof(PosFile_t, checksum)));
+    } else if (n == (int)sizeof(PosFileV1_t) && buf.v1.magic == POS_FILE_MAGIC_V1) {
+        rec.lat = buf.v1.lat;
+        rec.lon = buf.v1.lon;
+        ok = (buf.v1.checksum == Buffer_GetChecksum((const uint8_t *)&buf.v1,
+                                                    (uint32_t)offsetof(PosFileV1_t, checksum)));
+    } else {
+        ok = 0;
+    }
+    if (!ok || !PosIsSane(rec.lat, rec.lon)) {
         HAL_LOG("[GNSS/Pos] File vi tri khong hop le, bo qua");
         return;
     }
+    s_posLoadedSec = rec.savedSec;
     s_holdLat = rec.lat;
     s_holdLon = rec.lon;
     s_posSavedLat = rec.lat;
@@ -376,8 +471,8 @@ void GPS_Init(void)
         HAL_OS_MutexCreate(&s_gpsDataMutex);
     }
     HAL_OS_MutexLock(s_gpsDataMutex);
-    OdomFileLoad();
     PosFileLoad();
+    OdomFileLoad(); /* sau PosFileLoad: vị trí lưu cùng km mới hơn thì dùng */
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
 
@@ -444,6 +539,7 @@ void GPS_ResetOdometer(void)
     s_totalKm = 0.0;
     s_prevLat = 0.0;
     s_prevLon = 0.0;
+    s_bootBridgePending = 0; /* quãng nối thuộc ngày cũ */
     OdomFileWrite(0.0);
     HAL_OS_MutexUnlock(s_gpsDataMutex);
 }
@@ -705,6 +801,45 @@ static void ApplyStationaryAnchor(int isMoving)
  *    khi ra), vẫn nối dù đang báo dừng.
  *  - Mất GPS quá ODOM_GPS_LOSS_TIMEOUT_SEC: bỏ điểm tham chiếu, không nối.
  */
+/**
+ * @brief Fix đầu tiên sau khởi động: cộng quãng từ vị trí lưu cùng km tới fix
+ *        này (đoạn chạy sau lần lưu cuối + đoạn chạy lúc khởi động lại), nếu
+ *        thời gian chênh theo RTC <= ODOM_BOOT_BRIDGE_MAX_SEC, dời quá
+ *        ODOM_MAX_STATIONARY_KM (bỏ nhiễu khi đỗ) và tốc độ trung bình không quá
+ *        ODOM_BOOT_BRIDGE_MAX_KPH. Gọi khi giữ s_gpsDataMutex.
+ */
+static void BootBridgeOdometer(double newLat, double newLon)
+{
+    uint32_t nowSec = RtcSeconds();
+    uint32_t elapsed;
+    double dist, maxDist;
+
+    s_bootBridgePending = 0;
+    if (nowSec == 0 || nowSec < s_bootBridgeSec) {
+        HAL_LOG("[Odom] Khoi dong: RTC chua co gio, khong noi km");
+        return;
+    }
+    elapsed = nowSec - s_bootBridgeSec;
+    dist = CalculateDistanceKm(s_bootBridgeLat, s_bootBridgeLon, newLat, newLon);
+    if (elapsed > (uint32_t)ODOM_BOOT_BRIDGE_MAX_SEC) {
+        HAL_LOG("[Odom] Khoi dong: lan luu cuoi cach %lus, khong noi km", (unsigned long)elapsed);
+        return;
+    }
+    if (elapsed < 1) elapsed = 1;
+    maxDist = (double)ODOM_BOOT_BRIDGE_MAX_KPH / 3.6 * (double)elapsed / 1000.0;
+    if (dist < ODOM_MAX_STATIONARY_KM) {
+        return; /* đứng yên / nhiễu vị trí */
+    }
+    if (dist > maxDist) {
+        HAL_LOG("[Odom] Khoi dong: bo noi %.0fm trong %lus (qua toc do cho phep)",
+                dist * 1000.0, (unsigned long)elapsed);
+        return;
+    }
+    s_totalKm += dist;
+    HAL_LOG("[Odom] Khoi dong: noi km tu vi tri da luu +%.0fm (%lus)",
+            dist * 1000.0, (unsigned long)elapsed);
+}
+
 static void UpdateOdometer(double newLat, double newLon)
 {
     uint32_t now = GetTickNow();
@@ -728,6 +863,10 @@ static void UpdateOdometer(double newLat, double newLon)
     wasGpsLoss = (s_gpsLossStartTick != 0);
     s_gpsLossStartTick = 0;
     s_odomRefDropped = 0;
+
+    if (s_bootBridgePending) {
+        BootBridgeOdometer(newLat, newLon);
+    }
 
     if (!s_isMovingNow && !wasGpsLoss) {
         s_prevLat = newLat;

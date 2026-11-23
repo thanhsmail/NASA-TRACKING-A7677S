@@ -12,6 +12,7 @@
 #include "hal/hal_gpio.h"
 #include "hal/hal_adc.h"
 #include "hal/hal_sms.h"
+#include "hal/hal_fs.h"
 #include "app_config.h"
 #include "app_utils.h"
 #include "app_gps.h"
@@ -26,6 +27,7 @@
 #include "app_lxlt_rules.h"
 #include "app_fota.h"
 #include "app_indication.h"
+#include <stddef.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,19 +116,71 @@ static int      s_turnLongMg = 0;
 
 static int NetworkSendFrame(const char *frame);
 
+static volatile int s_voltSaturated = 0; /* lần đo cuối chạm trần ADC */
+static volatile int s_voltReadFail  = 0; /* lần đo cuối mọi mẫu đều 0 mV */
+
+/**
+ * @brief Điện áp nguồn (V) = trung bình VOLT_ADC_SAMPLES mẫu kênh VOLT_ADC_CHANNEL x VOLT_DIVIDER_RATIO.
+ * Bỏ mẫu 0 mV (đọc lỗi); mọi mẫu lỗi thì trả VOLT_FALLBACK_VOLT. Chạm trần ADC
+ * thì giá trị chỉ là mức tối thiểu (NASA_IsVoltageSaturated() = 1).
+ */
 float NASA_GetVoltage(void)
 {
-    /* Đọc giá trị điện áp thực tế tại chân ADC1 (ADC.PWR) qua HAL (đơn vị: mV) */
-    uint32_t adc_mv = HAL_ADC_ReadMv(1);
+    uint32_t sum = 0;
+    uint32_t mv;
+    int n = 0;
+    int i;
+    int sat;
 
-    /* Mạch phân áp R306 (220K) & R307 (10K): Tỷ lệ phân áp (220+10)/10 = 23.
-     * Điện áp nguồn POWER = V_ADC1 * 23
-     */
-    if (adc_mv == 0) {
-        /* Fallback 12V nếu ADC chưa đo được hoặc lỗi kênh */
-        return 12.0f;
+    for (i = 0; i < VOLT_ADC_SAMPLES; i++) {
+        mv = HAL_ADC_ReadMv(VOLT_ADC_CHANNEL);
+        if (mv == 0) continue;
+        sum += mv;
+        n++;
     }
-    return ((float)adc_mv * 23.0f) / 1000.0f;
+    if (n == 0) {
+        if (!s_voltReadFail) {
+            HAL_LOG("[VOLT] ADC%d read 0 mV x%d -> dung %.1fV", VOLT_ADC_CHANNEL,
+                    VOLT_ADC_SAMPLES, (double)VOLT_FALLBACK_VOLT);
+        }
+        s_voltReadFail = 1;
+        s_voltSaturated = 0;
+        return VOLT_FALLBACK_VOLT;
+    }
+    s_voltReadFail = 0;
+    mv = sum / (uint32_t)n;
+
+    sat = (mv + VOLT_ADC_SAT_MARGIN_MV >= VOLT_ADC_FULL_SCALE_MV) ? 1 : 0;
+    if (sat != s_voltSaturated) {
+        HAL_LOG("[VOLT] ADC %s: %lumV (>= %.1fV)", sat ? "saturated" : "back in range",
+                (unsigned long)mv, (double)((float)mv * VOLT_DIVIDER_RATIO / 1000.0f));
+    }
+    s_voltSaturated = sat;
+    return ((float)mv * VOLT_DIVIDER_RATIO) / 1000.0f;
+}
+
+int NASA_IsVoltageSaturated(void)
+{
+    return s_voltSaturated;
+}
+
+/** Điện áp dạng chữ cho tin nhắn, kèm mV thô của cả ADC1 / ADC2 để biết chân
+ *  nào nối ADC_VIN: "12.1V(ch1 adc1=399 adc2=12mV)", ">=" khi bão hòa, "?V" khi đọc lỗi.
+ *  Hiệu chỉnh: hệ số chia = V đo bằng đồng hồ tại VIN / (mV / 1000) */
+void NASA_FormatVoltage(char *buf, int len)
+{
+    float v = NASA_GetVoltage();
+    uint32_t a1 = HAL_ADC_ReadMv(1);
+    uint32_t a2 = HAL_ADC_ReadMv(2);
+    if (!buf || len <= 0) return;
+    if (s_voltReadFail) {
+        (void)snprintf(buf, (size_t)len, "?V(ch%d adc1=%lu adc2=%lumV)", VOLT_ADC_CHANNEL,
+                       (unsigned long)a1, (unsigned long)a2);
+    } else {
+        (void)snprintf(buf, (size_t)len, "%s%.1fV(ch%d adc1=%lu adc2=%lumV)",
+                       s_voltSaturated ? ">=" : "", (double)v, VOLT_ADC_CHANNEL,
+                       (unsigned long)a1, (unsigned long)a2);
+    }
 }
 
 static int IsAccOn(void)
@@ -248,17 +302,104 @@ static void NASA_WorkUpdate(const char *dateTime, double lat, double lon, double
     }
 }
 
+/* Lý do tự reset lưu ra NASA_RST_FILE (NASA_SaveResetCause) */
+#define RST_FILE_MAGIC 0x52535431u /* "RST1" */
+typedef struct {
+    uint32_t magic;
+    uint32_t cause;      /* RST_CAUSE_* */
+    uint32_t uptimeSec;  /* thời gian chạy từ lúc bật tới lúc reset */
+    uint32_t nasaState;  /* NasaState_t lúc reset */
+    uint32_t sleeping;   /* 1 = đang ngủ sâu */
+    uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
+} RstFile_t;
+
+/**
+ * @brief Ghi lý do sắp reset ra file (ghi đè), để lần khởi động sau báo lên
+ *        Server. Gọi được từ mọi task; không khóa (đường reset, chỉ ghi 1 lần).
+ */
+void NASA_SaveResetCause(int cause)
+{
+    RstFile_t rec;
+    HalFile_t fp;
+
+    memset(&rec, 0, sizeof(rec));
+    rec.magic = RST_FILE_MAGIC;
+    rec.cause = (uint32_t)cause;
+    rec.uptimeSec = GetTickNow() / (uint32_t)HAL_TICKS_PER_SEC;
+    rec.nasaState = (uint32_t)s_nasaState;
+    rec.sleeping = (s_pwrState != PWR_AWAKE) ? 1u : 0u;
+    rec.checksum = Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(RstFile_t, checksum));
+    fp = HAL_FS_Open(NASA_RST_FILE, "wb");
+    if (fp == HAL_FS_INVALID_HANDLE) return;
+    (void)HAL_FS_Write(fp, &rec, sizeof(rec));
+    HAL_FS_Close(fp);
+}
+
+/** Ghi lý do rồi reset phần mềm. Mọi chỗ tự reset đi qua hàm này. */
+void NASA_SysReset(int cause)
+{
+    HAL_LOG("[RESET] cause=%d uptime=%lus state=%d -> SysReset", cause,
+            (unsigned long)(GetTickNow() / (uint32_t)HAL_TICKS_PER_SEC), (int)s_nasaState);
+    NASA_SaveResetCause(cause);
+    HAL_OS_TaskSleep(HAL_TICKS_PER_SEC / 2); /* cho log UART ra hết */
+    HAL_OS_SysReset();
+}
+
+/** Đọc và xóa lý do tự reset lần trước. @return RST_CAUSE_*, 0 = không có */
+static int TakeResetCause(void)
+{
+    RstFile_t rec;
+    HalFile_t fp;
+    int n;
+
+    fp = HAL_FS_Open(NASA_RST_FILE, "rb");
+    if (fp == HAL_FS_INVALID_HANDLE) return 0;
+    memset(&rec, 0, sizeof(rec));
+    n = HAL_FS_Read(fp, &rec, sizeof(rec));
+    HAL_FS_Close(fp);
+    (void)HAL_FS_Delete(NASA_RST_FILE);
+
+    if (n != (int)sizeof(rec) || rec.magic != RST_FILE_MAGIC ||
+        rec.checksum != Buffer_GetChecksum((const uint8_t *)&rec, (uint32_t)offsetof(RstFile_t, checksum)) ||
+        rec.cause < 60 || rec.cause > 99) {
+        return 0;
+    }
+    HAL_LOG("[BOOT] last self-reset cause=%lu after uptime %lus (state=%lu sleeping=%lu)",
+            (unsigned long)rec.cause, (unsigned long)rec.uptimeSec,
+            (unsigned long)rec.nasaState, (unsigned long)rec.sleeping);
+    return (int)rec.cause;
+}
+
 // Xử lý phát hiện lý do Reset
 static void DetectResetReason(void)
 {
     HalPowerUpReason_t r = HAL_OS_GetPowerUpReason();
+    int upRaw = HAL_OS_GetPowerUpRaw();
+    int downRaw = HAL_OS_GetPowerDownRaw();
+    int cause = TakeResetCause();
+    int major;
+
     if (r == HAL_POWER_UP_SOFTWARE_RESET) {
-        strncpy(s_resetReason, "R-3.0", sizeof(s_resetReason) - 1);
+        major = 3;
     } else if (r == HAL_POWER_UP_RESET_KEY || r == HAL_POWER_UP_POWER_KEY) {
-        strncpy(s_resetReason, "R-2.0", sizeof(s_resetReason) - 1);
+        major = 2;
     } else {
-        strncpy(s_resetReason, "R-0.0", sizeof(s_resetReason) - 1);
+        major = 0;
     }
+    if (upRaw < 0 || upRaw > 9) upRaw = 0;
+    if (downRaw < 0 || downRaw > 9) downRaw = 0;
+    /* Giữ phần chính như cũ (Server đã hiểu R-2 / R-3 / R-0). Phần sau dấu chấm
+     * = mã bật PMIC x 10 + mã tắt lần trước (HAL_OS_GetPowerUpRaw / DownRaw),
+     * để phân biệt từ log Server: R-2.15 = chân reset + watchdog PMIC,
+     * R-2.24 = cấp nguồn lại sau sụt áp VSYS, R-2.10 / R-2.20 = không rõ */
+    if (cause != 0) {
+        /* Firmware tự reset và đã ghi lý do: R-3.65 = watchdog phần mềm, ... (RST_CAUSE_*) */
+        (void)snprintf(s_resetReason, sizeof(s_resetReason), "R-%d.%d", major, cause);
+    } else {
+        (void)snprintf(s_resetReason, sizeof(s_resetReason), "R-%d.%d%d", major, upRaw, downRaw);
+    }
+    HAL_LOG("[BOOT] reset reason %s (power-up raw=%d, last power-down raw=%d, cause=%d)",
+            s_resetReason, upRaw, downRaw, cause);
 }
 
 // Xử lý Tạo mã đăng nhập
@@ -535,6 +676,15 @@ void NASA_OnServerProtocolLine(const char *line)
         if (n >= 4) {
             strncpy(s_serverLastPacket, fields[3], sizeof(s_serverLastPacket) - 1);
             s_serverLastPacket[sizeof(s_serverLastPacket) - 1] = '\0';
+        }
+        if (n >= 3) {
+            /* ACK: !NASA,1,<giờ Server>,<gói cuối>,... Giờ Server (giờ Việt Nam)
+             * đặt / sửa RTC: sau mất nguồn RTC có thể chưa có giờ hoặc bị modem
+             * đặt sai (log 18/11 lệch +1 giờ) mà chưa có fix GNSS để sửa */
+            HalDateTime_t srv;
+            if (UTIL_ParseDateTime(fields[2], &srv) == 0) {
+                (void)UTIL_CorrectRtc(&srv, "server");
+            }
         }
         s_loginAcked = 1;
         HAL_LOG("[NASA] Login ACK OK lastPacket=%s", s_serverLastPacket);
@@ -1080,13 +1230,18 @@ static NasaState_t Handle_StateTracking(void)
         ResetDailyCountersIfNeeded(rtc.tm_mday);
 
         /* Lich reset cmd 32 */
+        /* Lịch reset cmd 32: A ngày một lần (tính từ lần khởi động), lúc B giờ.
+         * Trước đây bỏ qua A (ngày nào cũng reset) và khởi động lại xong vẫn
+         * còn trong phút 0 thì reset lặp (lastResetDay về -1 sau reset). Nay
+         * cần đã chạy >= (A - 1) ngày + SCHEDULE_RESET_MIN_UPTIME_SEC. */
         if (CFG_Get()->resetEveryDays > 0 &&
             rtc.tm_hour == CFG_Get()->resetAtHour &&
             rtc.tm_min == 0) {
-            static int lastResetDay = -1;
-            if (lastResetDay != rtc.tm_mday) {
-                lastResetDay = rtc.tm_mday;
-                HAL_OS_SysReset();
+            uint32_t upSec = GetTickNow() / (uint32_t)HAL_TICKS_PER_SEC;
+            uint32_t needSec = (uint32_t)(CFG_Get()->resetEveryDays - 1) * 86400u +
+                               (uint32_t)SCHEDULE_RESET_MIN_UPTIME_SEC;
+            if (upSec >= needSec) {
+                NASA_SysReset(RST_CAUSE_SCHEDULE);
             }
         }
     }
@@ -1159,6 +1314,9 @@ void NASA_Init(void)
     LxltRules_Init(&s_lxltState);
 
     DetectResetReason();
+    HAL_LOG("[VOLT] boot adc1=%lumV adc2=%lumV (ch%d x%.2f)",
+            (unsigned long)HAL_ADC_ReadMv(1), (unsigned long)HAL_ADC_ReadMv(2),
+            VOLT_ADC_CHANNEL, (double)VOLT_DIVIDER_RATIO);
     MotionWakeSetup();
     /* Flash rời khởi tạo lỗi lúc bật nguồn → thử lại trước khi chọn nơi lưu backup */
     if (!EN25_IsReady()) EN25_Init();
@@ -1223,8 +1381,7 @@ static void CheckNetworkDisconnTimeout(void)
     if (now >= s_disconnStartTick &&
         (now - s_disconnStartTick) >= (uint32_t)(NET_DISCONN_RESET_SEC * HAL_TICKS_PER_SEC)) {
         HAL_LOG("[NASA] Mat ket noi >15 phut (%ds) -> Tu dong SysReset modem...", NET_DISCONN_RESET_SEC);
-        HAL_OS_TaskSleep(200);
-        HAL_OS_SysReset();
+        NASA_SysReset(RST_CAUSE_NET_DISCONN);
     }
 }
 

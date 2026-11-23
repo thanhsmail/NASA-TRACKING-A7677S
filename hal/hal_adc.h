@@ -13,7 +13,7 @@ extern "C" {
 
 /**
  * @brief  Đọc giá trị điện áp thực tế tại chân ADC (đơn vị: mV)
- * @param  channel Kênh ADC cần đọc (1 = ADC.PWR/ADC1)
+ * @param  channel Kênh ADC cần đọc (1 = ADC1, 2 = ADC2; điện áp nguồn ở ADC2)
  * @return Điện áp đọc được tại chân ADC tính bằng millivolt (mV)
  */
 uint32_t HAL_ADC_ReadMv(int channel);

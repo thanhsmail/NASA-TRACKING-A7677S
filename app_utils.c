@@ -46,6 +46,68 @@ static int DaysInMonth(int year, int mon)
     return days[mon - 1];
 }
 
+uint32_t UTIL_DateTimeToSec(const HalDateTime_t *t)
+{
+    int32_t y, m, d, yoe, doy, doe, days;
+
+    if (t == NULL || t->tm_year < 2020 || t->tm_year > 2100) return 0;
+    if (t->tm_mon < 1 || t->tm_mon > 12 || t->tm_mday < 1 || t->tm_mday > 31) return 0;
+    if (t->tm_hour > 23 || t->tm_min > 59 || t->tm_sec > 59) return 0;
+
+    /* days_from_civil (Howard Hinnant), đủ cho năm 2020..2100 (một era 400 năm) */
+    y = (int32_t)t->tm_year - ((t->tm_mon <= 2) ? 1 : 0);
+    m = (int32_t)t->tm_mon;
+    d = (int32_t)t->tm_mday;
+    yoe = y - 2000;                                    /* era bắt đầu 2000-03-01 */
+    doy = (153 * (m + ((m > 2) ? -3 : 9)) + 2) / 5 + d - 1;
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    days = doe + 60;                                   /* 2000-01-01 -> 2000-03-01 = 60 ngày */
+    return (uint32_t)days * 86400u + (uint32_t)t->tm_hour * 3600u +
+           (uint32_t)t->tm_min * 60u + (uint32_t)t->tm_sec;
+}
+
+int UTIL_ParseDateTime(const char *s, HalDateTime_t *out)
+{
+    int y, mo, d, h, mi, se;
+    char tail;
+
+    if (s == NULL || out == NULL) return -1;
+    if (sscanf(s, "%4d-%2d-%2d %2d:%2d:%2d%c", &y, &mo, &d, &h, &mi, &se, &tail) != 6) return -1;
+    memset(out, 0, sizeof(*out));
+    out->tm_year = (uint16_t)y;
+    out->tm_mon = (uint8_t)mo;
+    out->tm_mday = (uint8_t)d;
+    out->tm_hour = (uint8_t)h;
+    out->tm_min = (uint8_t)mi;
+    out->tm_sec = (uint8_t)se;
+    return (UTIL_DateTimeToSec(out) != 0) ? 0 : -1;
+}
+
+int UTIL_CorrectRtc(const HalDateTime_t *local, const char *src)
+{
+    HalDateTime_t rtc;
+    uint32_t want, have, diff;
+
+    want = UTIL_DateTimeToSec(local);
+    if (want == 0) return 0;
+    memset(&rtc, 0, sizeof(rtc));
+    have = (HAL_GNSS_GetRtc(&rtc) == 0) ? UTIL_DateTimeToSec(&rtc) : 0;
+    if (have != 0) {
+        diff = (have > want) ? (have - want) : (want - have);
+        if (diff <= (uint32_t)RTC_MAX_DRIFT_SEC) return 0;
+    }
+    if (HAL_GNSS_SetRtc(local) != 0) return 0;
+    if (have == 0) {
+        HAL_LOG("[RTC] set from %s: %04d-%02d-%02d %02d:%02d:%02d (RTC had no time)", src,
+                local->tm_year, local->tm_mon, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
+    } else {
+        HAL_LOG("[RTC] corrected from %s: %04d-%02d-%02d %02d:%02d:%02d -> %04d-%02d-%02d %02d:%02d:%02d", src,
+                rtc.tm_year, rtc.tm_mon, rtc.tm_mday, rtc.tm_hour, rtc.tm_min, rtc.tm_sec,
+                local->tm_year, local->tm_mon, local->tm_mday, local->tm_hour, local->tm_min, local->tm_sec);
+    }
+    return 1;
+}
+
 void UTIL_AddSecondsToDateTime(HalDateTime_t *t, int32_t sec)
 {
     /* Tính trên int: các trường HalDateTime_t là số không dấu nên không giảm

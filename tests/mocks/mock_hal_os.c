@@ -53,6 +53,9 @@ HalPowerUpReason_t HAL_OS_GetPowerUpReason(void)
     return HAL_POWER_UP_NORMAL;
 }
 
+int HAL_OS_GetPowerUpRaw(void) { return 0; }
+int HAL_OS_GetPowerDownRaw(void) { return 0; }
+
 int HAL_OS_TaskCreate(HalTaskRef_t *ref, void *stack, uint32_t stackSize,
                       int priority, const char *name,
                       void (*fn)(void *), void *arg)

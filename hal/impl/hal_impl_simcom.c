@@ -225,6 +225,16 @@ HalPowerUpReason_t HAL_OS_GetPowerUpReason(void)
     return HAL_POWER_UP_NORMAL;
 }
 
+int HAL_OS_GetPowerUpRaw(void)
+{
+    return (int)sAPI_GetPowerUpEvent();
+}
+
+int HAL_OS_GetPowerDownRaw(void)
+{
+    return (int)sAPI_GetPowerDownEvent();
+}
+
 int HAL_OS_MutexCreate(HalMutexRef_t *m)
 {
     if (!m) return -1;

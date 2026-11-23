@@ -4,7 +4,7 @@ Firmware giám sát hành trình chạy trên module 4G SIMCom **A7677S** (ASR16
 Thiết bị đọc GNSS, gửi vị trí lên Server theo giao thức `!NASA`, nhận lệnh cấu hình qua SMS hoặc Server, lưu bù dữ liệu khi mất mạng, tự cập nhật firmware từ xa (FOTA), ngủ tiết kiệm ắc quy khi xe đỗ và dùng cảm biến gia tốc LIS3DSH để phát hiện xe bị rung / dời lúc đang ngủ.
 
 - Tên thiết bị: `RV4G` (`NASA_DEVICE_NAME`, xuất hiện ở đầu câu trả lời lệnh `sa,29`)
-- Phiên bản firmware: `v1.05.261014` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
+- Phiên bản firmware: `v1.05.261118` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
 - Server mặc định: `103.57.209.16:2590`
 
 Tài liệu chi tiết hơn: [NASA_Tracking_Analysis.md](NASA_Tracking_Analysis.md) (phân tích logic) và [hal/README.md](hal/README.md) (lớp HAL).
@@ -558,7 +558,7 @@ Khi hỏng: khởi tạo lại cảm biến, chạy self-test, bật lại đán
 | CS flash | 17 (GPIO_35/SSP0_CS, chân 12) | Nối thẳng CS#: GPIO mức thấp = chọn flash (`FLASH_SPI_CS_ACTIVE_LEVEL`); driver tự thử mức ngược lại nếu không đọc được mã chip |
 | INT1 LIS3DSH | 12 (GPIO_14, chân 36) | Ngắt chuyển động, đánh thức khi ngủ |
 | I2C LIS3DSH | CI2C kênh 0 (chân 37 SDA, 38 SCL) | Mục 12 |
-| ADC1 | — | Điện áp ắc-quy qua cầu chia 1/23 |
+| ADC2 | — | Điện áp ắc-quy qua cầu chia 220k / 10k (x23, tối đa ~27,6 V) |
 
 Flash rời 8 MB (trên board là W25Q64JV, mã `EF 40 17`) nối bus SPI ở chân 11, 13, 14 của module, qua IC chuyển mức 1,8 V ↔ 3,3 V (TC7MPB9307FT).
 

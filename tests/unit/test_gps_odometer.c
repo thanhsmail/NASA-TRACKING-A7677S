@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "app_gps.h"
+#include "app_utils.h"
 #include "hal_fs.h"
 #include "hal_gnss.h"
 #include "hal_os.h"
@@ -174,14 +175,88 @@ static void test_RestartRestoresKm(void)
     }
 }
 
+/** Giả lập khởi động lại: RAM km về 0, file giữ bản ghi đã lưu, đọc lại */
+static void Reboot(const unsigned char *saved, int savedLen, int offSec)
+{
+    GPS_ResetOdometer();
+    memcpy(s_file, saved, sizeof(s_file));
+    s_fileLen = savedLen;
+    Mock_HAL_OS_AdvanceTicks((uint32_t)offSec * HAL_TICKS_PER_SEC);
+    GPS_Init();
+}
+
+static void test_RebootWhileDriving_BridgesKm(void)
+{
+    unsigned char saved[64];
+    int savedLen;
+    double kmBefore;
+
+    /* Log thực tế: thiết bị khởi động lại giữa đường, km lùi 180..250 m mỗi
+     * lần và không tính đoạn chạy trong lúc khởi động */
+    Begin("Khoi dong lai khi dang chay 40 s / 400 m -> noi km");
+    Drive(37);                     /* lần lưu cuối không trùng mẫu cuối */
+    kmBefore = GPS_GetTotalKm();
+    savedLen = s_fileLen;
+    memcpy(saved, s_file, sizeof(saved));
+    Move(400.0);                   /* chạy 400 m trong 40 s khởi động lại */
+    Reboot(saved, savedLen, 40);
+    SendFix(36.0);
+    AssertKm(kmBefore + 0.40, 0.005, "fix dau sau khoi dong");
+    Drive(10);
+    AssertKm(kmBefore + 0.50, 0.005, "chay tiep 10 s");
+
+    Begin("Khoi dong lai sau 15 phut -> khong noi");
+    Drive(37);
+    kmBefore = GPS_GetTotalKm();
+    savedLen = s_fileLen;
+    memcpy(saved, s_file, sizeof(saved));
+    Move(3000.0);
+    Reboot(saved, savedLen, 900);
+    SendFix(36.0);
+    /* chỉ còn km đã lưu (lưu mỗi 10 s nên thiếu < 10 s x 10 m) */
+    assert(GPS_GetTotalKm() <= kmBefore + 0.0005);
+    assert(GPS_GetTotalKm() >= kmBefore - 0.11);
+    printf("  khong noi sau 900 s: km=%.3f\n", GPS_GetTotalKm());
+
+    Begin("Khoi dong lai khi dang do, troi 30 m -> khong cong");
+    Drive(20);
+    Stand(15);
+    kmBefore = GPS_GetTotalKm();
+    savedLen = s_fileLen;
+    memcpy(saved, s_file, sizeof(saved));
+    Move(30.0);
+    Reboot(saved, savedLen, 60);
+    SendFix(0.0);
+    AssertKm(kmBefore, 0.0005, "fix dau sau khoi dong, troi 30 m");
+}
+
+static void test_DateTimeUtils(void)
+{
+    HalDateTime_t t;
+
+    printf("[TEST] UTIL_ParseDateTime / UTIL_DateTimeToSec\n");
+    assert(UTIL_ParseDateTime("2026-11-18 10:46:01", &t) == 0);
+    assert(t.tm_year == 2026 && t.tm_mon == 11 && t.tm_mday == 18 &&
+           t.tm_hour == 10 && t.tm_min == 46 && t.tm_sec == 1);
+    /* 2026-11-18 10:46:01 cách 2000-01-01 00:00:00 đúng 848313961 s (python datetime) */
+    assert(UTIL_DateTimeToSec(&t) == 848313961u);
+    assert(UTIL_ParseDateTime("0000-00-00 00:00:00", &t) != 0);
+    assert(UTIL_ParseDateTime("2026-13-01 00:00:00", &t) != 0);
+    assert(UTIL_ParseDateTime("2026-11-18", &t) != 0);
+    assert(UTIL_ParseDateTime("2026-11-18 10:46:01x", &t) != 0);
+    assert(UTIL_ParseDateTime(NULL, &t) != 0);
+}
+
 int main(void)
 {
+    test_DateTimeUtils();
     GPS_Init();
     test_ShortFullNoFix_IsBridged();
     test_LongFullNoFix_DropsReference();
     test_ShortShortNoFix_IsBridged();
     test_RegainWhileStopped();
     test_RestartRestoresKm();
+    test_RebootWhileDriving_BridgesKm();
     printf("[PASS] test_gps_odometer\n");
     return 0;
 }
@@ -194,8 +269,13 @@ int CFG_GetAccMode(void) { return 0; }
 
 int HAL_GNSS_GetRtc(HalDateTime_t *rtc)
 {
+    /* Giờ chạy theo tick giả, bắt đầu 08:00:00 */
+    uint32_t sec = 8u * 3600u + GetTickNow() / (uint32_t)HAL_TICKS_PER_SEC;
     memset(rtc, 0, sizeof(*rtc));
     rtc->tm_year = 2026; rtc->tm_mon = 10; rtc->tm_mday = (uint8_t)s_rtcMday;
+    rtc->tm_hour = (uint8_t)((sec / 3600u) % 24u);
+    rtc->tm_min = (uint8_t)((sec / 60u) % 60u);
+    rtc->tm_sec = (uint8_t)(sec % 60u);
     return 0;
 }
 int HAL_GNSS_SetRtc(const HalDateTime_t *rtc) { (void)rtc; return 0; }
