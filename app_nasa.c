@@ -96,6 +96,9 @@ static int      s_motionArmed = 0;            /* SleepEnter nạp cảm biến r
 static int32_t  s_tiltRef[3];
 static int      s_tiltRefOk = 0;
 static int      s_tiltLastDeg10 = -1;         /* góc lệch lần đọc gần nhất x10, -1 = chưa đọc */
+static int      s_sleepAccelFailCnt = 0;      /* lúc ngủ: lỗi I2C liên tiếp khi đọc cảm biến */
+static int  AccelUsable(void);
+static void AccelSleepFail(const char *what);
 /* Xe di chuyển khi tắt ACC (NoAccMovePoll) */
 static int      s_naActive = 0;
 static uint32_t s_naSpeedTick = 0;            /* vận tốc > ngưỡng liên tục từ lúc này, 0 = không */
@@ -796,6 +799,13 @@ static int MotionPoll(uint32_t now)
     if (!s_motionIrq && HAL_GPIO_Read(LIS3DSH_INT1_PIN) != 0) return 0;
     s_motionIrq = 0;
     outs = LIS3DSH_MotionClear();
+    if (outs < 0) {
+        /* Không đọc được OUTS: không tin INT1 (chân treo mức thấp sẽ đánh thức giả liên tục) */
+        AccelSleepFail("motion clear");
+        (void)HAL_OS_SystemSleepEnable(1);
+        return 0;
+    }
+    s_sleepAccelFailCnt = 0;
     if (s_motionWinTick == 0 || (now - s_motionWinTick) >= SecToTicks((uint32_t)CFG_GetMotionWindowSec())) {
         s_motionWinTick = NonZeroTick(now);
         s_motionCount = 0;
@@ -828,8 +838,7 @@ static void TiltArm(void)
 {
     s_tiltRefOk = 0;
     s_tiltLastDeg10 = -1;
-    if (MOTION_TILT_DEG <= 0 || !LIS3DSH_IsReady() || !CFG_GetAccelEnabled() ||
-        !CFG_GetMotionWakeEnabled()) return;
+    if (MOTION_TILT_DEG <= 0 || !AccelUsable() || !CFG_GetMotionWakeEnabled()) return;
     if (LIS3DSH_ReadGravity(s_tiltRef, MOTION_TILT_SAMPLES * 2) != 0 ||
         TiltDeg(s_tiltRef, s_tiltRef) < 0.0) {
         HAL_LOG("[SLEEP] tilt reference read fail -> tilt wake off");
@@ -847,7 +856,11 @@ static int TiltPoll(void)
     double deg, deg2;
 
     if (!s_tiltRefOk || !CFG_GetMotionWakeEnabled() || !CFG_GetAccelEnabled()) return 0;
-    if (LIS3DSH_ReadGravity(g, MOTION_TILT_SAMPLES) != 0) return 0;
+    if (LIS3DSH_ReadGravity(g, MOTION_TILT_SAMPLES) != 0) {
+        AccelSleepFail("tilt read");
+        return 0;
+    }
+    s_sleepAccelFailCnt = 0;
     deg = TiltDeg(s_tiltRef, g);
     if (deg < 0.0) return 0; /* đang rung: để cảm biến rung xử lý */
     s_tiltLastDeg10 = (int)(deg * 10.0 + 0.5);
@@ -920,7 +933,10 @@ static void SleepEnter(uint32_t idleSec)
     s_motionCount = 0;
     s_motionWinTick = 0;
     s_motionArmed = 0;
-    if (s_motionWakeOk && CFG_GetMotionWakeEnabled() && CFG_GetAccelEnabled()) {
+    s_sleepAccelFailCnt = 0;
+    if (CFG_GetAccelEnabled() && CFG_GetMotionWakeEnabled() && !AccelUsable()) {
+        HAL_LOG("[SLEEP] accel %s -> motion / tilt wake off, ACC wake only", NASA_AccelStateName());
+    } else if (s_motionWakeOk && CFG_GetMotionWakeEnabled() && AccelUsable()) {
         if (LIS3DSH_MotionArm(CFG_GetMotionDeltaMg(), &s_motionThrMg) == 0) {
             s_motionArmed = 1;
         } else {
@@ -1437,11 +1453,13 @@ enum {
     ACCEL_FAULT_CONFIG,   /* CTRL_REG4 mất cấu hình (chip tự reset) */
     ACCEL_FAULT_STUCK,    /* X/Y/Z thô đứng yên */
     ACCEL_FAULT_GRAVITY,  /* |g| ngoài khoảng hợp lý kéo dài */
+    ACCEL_FAULT_VERIFY,   /* vừa khởi tạo lại, chờ ACCEL_VERIFY_OK lần kiểm tra tốt mới dùng lại */
     ACCEL_FAULT_COUNT
 };
+#define ACCEL_VERIFY_OK 2 /* cần 2 lần để chứng minh dữ liệu không đứng yên */
 static const char *const s_accelFaultName[ACCEL_FAULT_COUNT] = {
     "OK", "khong co cam bien", "loi I2C", "sai WHO_AM_I", "mat cau hinh (reset)",
-    "du lieu dung yen", "|g| bat thuong"
+    "du lieu dung yen", "|g| bat thuong", "dang kiem tra lai"
 };
 static int      s_accelFault = ACCEL_FAULT_NONE;     /* trạng thái hiện tại */
 static int      s_accelLastFault = ACCEL_FAULT_NONE; /* lỗi gần nhất đã gặp (kể cả đã hồi) */
@@ -1456,6 +1474,32 @@ static int16_t  s_accelLastMg[3];
 static int      s_accelLastG = 0;                    /* |g| lần đo gần nhất (mg), 0 = chưa có */
 static uint32_t s_accelCheckTick = 0;                /* lần kiểm tra trước, 0 = chưa */
 static volatile int s_accelPowerReq = 0;            /* lệnh na,43,off|on: nasa_reporter bật / tắt cảm biến */
+static int      s_accelVerifyCnt = 0;                /* ACCEL_FAULT_VERIFY: số lần kiểm tra tốt liên tiếp */
+
+/**
+ * Cảm biến dùng được cho đánh thức rung / nghiêng và nhận cua: bật, khởi tạo
+ * xong, không lỗi và đã qua kiểm tra lại. Lỗi thì chỉ còn chân ACC / GPS.
+ */
+static int AccelUsable(void)
+{
+    return CFG_GetAccelEnabled() && LIS3DSH_IsReady() && s_accelFault == ACCEL_FAULT_NONE;
+}
+
+/** Đang ngủ: đọc cảm biến lỗi; ACCEL_FAIL_MAX lần liên tiếp thì bỏ rung / nghiêng, chỉ thức bằng ACC */
+static void AccelSleepFail(const char *what)
+{
+    if (++s_sleepAccelFailCnt < ACCEL_FAIL_MAX) return;
+    if (s_accelFault == ACCEL_FAULT_NONE) {
+        s_accelFault = ACCEL_FAULT_I2C;
+        s_accelLastFault = ACCEL_FAULT_I2C;
+        s_accelFaultCount++;
+    }
+    s_accelFailCnt = 0;
+    s_motionArmed = 0;
+    s_tiltRefOk = 0;
+    HAL_LOG("[SLEEP] accel %s fail %d times -> FAULT #%d, motion / tilt wake off, ACC wake only",
+            what, s_sleepAccelFailCnt, s_accelFaultCount);
+}
 
 static void AccelHealthReset(void)
 {
@@ -1492,10 +1536,14 @@ static int AccelReinit(void)
         return -1;
     }
     s_accelReinitCount++;
-    s_accelFault = ACCEL_FAULT_NONE;
+    /* Chip trả lời I2C chưa chắc dữ liệu đúng (đứng yên / |g| sai vẫn khởi tạo được):
+     * chưa dùng cho đến khi kiểm tra định kỳ xác nhận lại */
+    s_accelFault = (ACCEL_HEALTH_SEC > 0) ? ACCEL_FAULT_VERIFY : ACCEL_FAULT_NONE;
+    s_accelVerifyCnt = 0;
     s_turnLevel = 0;
     s_turnPending = 0;
-    HAL_LOG("[ACCEL/HEALTH] re-init OK (#%d)", s_accelReinitCount);
+    HAL_LOG("[ACCEL/HEALTH] re-init OK (#%d)%s", s_accelReinitCount,
+            (s_accelFault == ACCEL_FAULT_VERIFY) ? ", verify before use" : "");
     AccelSelfTestRun("re-init");
     MotionWakeSetup(); /* cảm biến không có lúc khởi động mà nay mới nhận */
     return 0;
@@ -1514,6 +1562,7 @@ static void AccelHealthPoll(void)
     uint32_t now = GetTickNow();
     Lis3dshCheck_t c;
     int rc, k, fault = ACCEL_FAULT_NONE;
+    int moved = 0; /* có mẫu trước và mẫu này khác: dữ liệu không đứng yên */
     double g2;
 
     if (s_accelPowerReq) {
@@ -1565,6 +1614,7 @@ static void AccelHealthPoll(void)
         if (s_accelHaveRaw && memcmp(s_accelLastRaw, c.raw, sizeof(c.raw)) == 0) {
             s_accelStuckCnt++;
         } else {
+            moved = s_accelHaveRaw;
             s_accelStuckCnt = 0;
         }
         memcpy(s_accelLastRaw, c.raw, sizeof(c.raw));
@@ -1579,7 +1629,21 @@ static void AccelHealthPoll(void)
         }
         if (s_accelStuckCnt >= ACCEL_STUCK_MAX) fault = ACCEL_FAULT_STUCK;
         else if (s_accelBadGCnt >= ACCEL_BAD_G_MAX) fault = ACCEL_FAULT_GRAVITY;
+
+        /* Đang lỗi / chờ kiểm tra lại: đủ ACCEL_VERIFY_OK lần tốt liên tiếp thì dùng lại */
+        if (s_accelFault != ACCEL_FAULT_NONE && fault == ACCEL_FAULT_NONE) {
+            if (moved && s_accelBadGCnt == 0) {
+                if (++s_accelVerifyCnt >= ACCEL_VERIFY_OK) {
+                    s_accelFault = ACCEL_FAULT_NONE;
+                    s_accelVerifyCnt = 0;
+                    HAL_LOG("[ACCEL/HEALTH] verified OK (|g|=%dmg) -> motion / tilt / turn back on", s_accelLastG);
+                }
+            } else {
+                s_accelVerifyCnt = 0;
+            }
+        }
     }
+    if (rc != LIS3DSH_CHECK_OK) s_accelVerifyCnt = 0;
     if (fault != ACCEL_FAULT_NONE) {
         AccelFault(fault);
         if (AccelReinit() == 0) s_accelCheckTick = NonZeroTick(GetTickNow());
@@ -1653,7 +1717,7 @@ static void TurnPoll(void)
     double speed, gn, dot, h2, lat2;
     float alpha;
 
-    if (!ACCEL_TURN_ENABLE || !LIS3DSH_IsReady() || NASA_IsSleeping()) {
+    if (!ACCEL_TURN_ENABLE || !AccelUsable() || NASA_IsSleeping()) {
         s_turnLevel = 0;
         s_turnPending = 0;
         return;
