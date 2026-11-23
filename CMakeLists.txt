@@ -228,6 +228,7 @@ if(NOT DEFINED MODULE_LIST)
                 app_gps.c
                 app_sms.c
                 app_cmd.c
+                app_com.c
                 app_fota.c
                 app_sim.c
                 app_cfg.c

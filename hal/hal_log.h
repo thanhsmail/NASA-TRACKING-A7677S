@@ -23,6 +23,14 @@ extern "C" {
  */
 void HAL_LOG_Print(const char *fmt, ...);
 
+/**
+ * @brief  Bat (1) / tat (0) chep log ra cong COM ao USB (lenh debug,1).
+ *         Chi giu trong RAM, khoi dong lai la tat. @return 0 = OK, -1 = loi
+ */
+int  HAL_LOG_SetUsbMirror(int on);
+/** @return 1 neu dang chep log ra USB */
+int  HAL_LOG_GetUsbMirror(void);
+
 /** Macro tien loi -- dung thay sAPI_Debug trong toan bo app_*.c */
 #define HAL_LOG(...)  HAL_LOG_Print(__VA_ARGS__)
 

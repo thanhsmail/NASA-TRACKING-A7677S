@@ -261,6 +261,11 @@
 #define NASA_LOCK_FEATURE_ENABLE 0
 #define NASA_LOCK_AFTER_DAYS 10
 
+/* Cấu hình qua cổng COM ảo USB (app_com.c): gõ na,... / sa,... trên AT port.
+ * Bật thì firmware nhận dữ liệu AT port; dòng "AT..." được chuyển cho module. 0 = tắt */
+#define COM_CFG_ENABLE 1
+#define COM_ECHO 1                     // in lại ký tự gõ vào (terminal không tự echo)
+
 /* File lưu cấu hình / backup trên FS nội bộ */
 #define NASA_CFG_FILE "C:/rv26.cfg"
 #define NASA_BACKUP_FILE "C:/rv26_bak.dat"

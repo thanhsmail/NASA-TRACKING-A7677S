@@ -49,6 +49,7 @@ Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tác
 | `hal/hal_fs.h` | File System | Đọc/Ghi/Xóa file trên bộ nhớ Flash nội (EFS) |
 | `hal/hal_sms.h` | Short Message | Cấu hình CNMI, Đọc/Xóa/Gửi SMS, Nhận URC SMS |
 | `hal/hal_adc.h` | ADC | Đọc điện áp thực tế tại chân ADC (mV), ví dụ ADC1/ADC.PWR |
+| `hal/hal_usbcom.h` | USB COM ảo | Nhận / gửi dữ liệu trên cổng AT USB (cấu hình bằng lệnh `na` / `sa`) |
 
 ---
 

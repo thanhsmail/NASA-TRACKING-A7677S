@@ -197,6 +197,28 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         return;
     }
 
+    /* debug,1 / debug,0: bật / tắt chép log ra cổng COM ảo USB (không lưu,
+     * khởi động lại là tắt); "debug" không tham số thì chỉ báo trạng thái */
+    if (strcmp(tag, "debug") == 0) {
+        if (NextToken(&save, a, sizeof(a))) {
+            if (strcmp(a, "1") == 0 || strcmp(a, "0") == 0) {
+                if (HAL_LOG_SetUsbMirror(a[0] == '1') != 0) {
+                    Reply(reply, ctx, src, "ERROR khong bat duoc log USB");
+                    return;
+                }
+                HAL_LOG("[CMD/%s] debug usb %s", src ? src : "?", a[0] == '1' ? "on" : "off");
+            } else {
+                Reply(reply, ctx, src, "ERROR debug,1 = bat, debug,0 = tat");
+                return;
+            }
+        }
+        snprintf(resp, sizeof(resp), "debug usb: %s%s",
+                 HAL_LOG_GetUsbMirror() ? "bat" : "tat",
+                 (HAL_LOG_GetUsbMirror() && !HAL_OS_UsbConnected()) ? " (chua cam USB)" : "");
+        Reply(reply, ctx, src, resp);
+        return;
+    }
+
     /* Chỉ chấp nhận tiền tố "na" (Cài đặt - SET) hoặc "sa" (Truy vấn - GET) */
     if (strcmp(tag, "na") != 0 && strcmp(tag, "sa") != 0) {
         HAL_LOG("[CMD/%s] ignore unknown tag: %s", src ? src : "?", tag);
@@ -204,7 +226,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     }
 
     /* Có lệnh (SMS / Server) thì thức khỏi chế độ ngủ để xử lý và trả lời */
-    NASA_WakeRequest((src && strcmp(src, "SERVER") == 0) ? "server command" : "SMS command");
+    NASA_WakeRequest((src && strcmp(src, "SERVER") == 0) ? "server command" :
+                     (src && strcmp(src, "COM") == 0)    ? "COM command" : "SMS command");
 
     isSet = (strcmp(tag, "na") == 0);
     codeStr = strtok_r(NULL, ",", &save);
@@ -551,7 +574,8 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     case 41:
         if (isSet) {
             if (CFG_IsLocked()) {
-                if (!CFG_IsAuthPhone(fromPhone) && !(src && strcmp(src, "SERVER") == 0)) {
+                if (!CFG_IsAuthPhone(fromPhone) && !(src && (strcmp(src, "SERVER") == 0 ||
+                                                             strcmp(src, "COM") == 0))) {
                     Deny(reply, ctx, src); return;
                 }
             }
