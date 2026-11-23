@@ -25,19 +25,21 @@ static double s_lon = 106.70;
 
 static void Tick1s(void) { Mock_HAL_OS_AdvanceTicks(HAL_TICKS_PER_SEC); }
 
-/** Một mẫu có fix tại (LAT0, s_lon), 17 vệ tinh */
-static void SendFix(double speedKph)
+/** Một mẫu có fix tại (LAT0, s_lon), 17 vệ tinh, HDOP cho trước */
+static void SendFixHdop(double speedKph, double hdop)
 {
     char line[200];
     double latAbs = LAT0, lonAbs = s_lon;
     double latNmea = floor(latAbs) * 100.0 + (latAbs - floor(latAbs)) * 60.0;
     double lonNmea = floor(lonAbs) * 100.0 + (lonAbs - floor(lonAbs)) * 60.0;
     snprintf(line, sizeof(line),
-             "+CGNSSINFO: 2,09,05,00,03,%.6f,N,%.6f,E,161026,070000.0,10.0,%.3f,90.0,1.2,0.9,0.8\r\n",
-             latNmea, lonNmea, speedKph / 1.852);
+             "+CGNSSINFO: 2,09,05,00,03,%.6f,N,%.6f,E,161026,070000.0,10.0,%.3f,90.0,1.2,%.1f,0.8\r\n",
+             latNmea, lonNmea, speedKph / 1.852, hdop);
     GPS_OnUrcString(line);
     Tick1s();
 }
+
+static void SendFix(double speedKph) { SendFixHdop(speedKph, 0.9); }
 
 /** Dòng không fix, đủ trường nhưng rỗng */
 static void SendNoFixFull(void)
@@ -93,8 +95,8 @@ static void test_ShortFullNoFix_IsBridged(void)
     Drive(20);                     /* 3s xác nhận chạy, sau đó cộng */
     for (i = 0; i < 10; i++) { Move(10.0); SendNoFixFull(); }
     Drive(10);
-    /* chạy 40 s x 10 m, trừ 3 mẫu đầu chưa xác nhận chạy */
-    AssertKm(0.37, 0.02, "sau 10s mat fix");
+    /* chạy 40 s x 10 m: đoạn trước lúc xác nhận chạy được nối từ điểm neo */
+    AssertKm(0.40, 0.02, "sau 10s mat fix");
 }
 
 static void test_LongFullNoFix_DropsReference(void)
@@ -105,7 +107,7 @@ static void test_LongFullNoFix_DropsReference(void)
     for (i = 0; i < 60; i++) { Move(10.0); SendNoFixFull(); }
     Drive(10);
     /* 600 m trong lúc mất GPS không được cộng */
-    AssertKm(0.26, 0.02, "sau 60s mat fix");
+    AssertKm(0.29, 0.02, "sau 60s mat fix");
 }
 
 static void test_ShortShortNoFix_IsBridged(void)
@@ -115,7 +117,44 @@ static void test_ShortShortNoFix_IsBridged(void)
     Drive(20);
     for (i = 0; i < 10; i++) { Move(10.0); SendNoFixShort(); }
     Drive(10);
-    AssertKm(0.37, 0.02, "sau 10s mat fix");
+    AssertKm(0.40, 0.02, "sau 10s mat fix");
+}
+
+/* ACC bật, xe đứng yên, GPS nhiễu báo vận tốc > ngưỡng: không được báo chạy */
+static void test_AccOnSpeedNoise_StaysStopped(void)
+{
+    int i;
+    double base;
+
+    Begin("ACC bat, dung yen, nhieu 20 km/h, vi tri lac +-8 m -> van dung");
+    Stand(30);                     /* điểm neo ổn định */
+    base = s_lon;
+    for (i = 0; i < 60; i++) {
+        s_lon = base;
+        Move((i % 2) ? 8.0 : -8.0);
+        SendFix(20.0);
+        assert(!GPS_IsMoving());
+    }
+    s_lon = base;
+    AssertKm(0.0, 0.0005, "60 s nhieu van toc");
+
+    Begin("ACC bat, dung yen, nhieu 30 km/h HDOP 6, vi tri nhay 40 m -> van dung");
+    Stand(30);
+    base = s_lon;
+    for (i = 0; i < 30; i++) {
+        s_lon = base;
+        Move((i % 2) ? 40.0 : -40.0);
+        SendFixHdop(30.0, 6.0);
+        assert(!GPS_IsMoving());
+    }
+    s_lon = base;
+    AssertKm(0.0, 0.0005, "30 s nhieu HDOP cao");
+
+    Begin("Xuat phat that sau khi dung -> bao chay, du km");
+    Stand(30);
+    Drive(10);
+    assert(GPS_IsMoving());
+    AssertKm(0.10, 0.005, "chay 10 s x 10 m");
 }
 
 static void test_RegainWhileStopped(void)
@@ -264,6 +303,7 @@ int main(void)
     test_ShortFullNoFix_IsBridged();
     test_LongFullNoFix_DropsReference();
     test_ShortShortNoFix_IsBridged();
+    test_AccOnSpeedNoise_StaysStopped();
     test_RegainWhileStopped();
     test_RestartRestoresKm();
     test_RebootWhileDriving_BridgesKm();

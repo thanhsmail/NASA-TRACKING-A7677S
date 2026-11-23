@@ -94,6 +94,10 @@ static double s_anchorSumLon     = 0.0;
 static int    s_anchorN          = 0;    /* số mẫu trong điểm neo */
 static int    s_anchorGood       = 0;    /* 1 = điểm neo dựa trên mẫu HDOP tốt */
 static int    s_anchorRejectRun  = 0;    /* số mẫu tốt liên tiếp bị loại vì xa trung bình */
+/* Mẫu vừa áp có vận tốc > ngưỡng (FilterMovingStatus). Mẫu này không gộp vào
+ * điểm neo: xe đang lăn bánh (chưa xác nhận chạy) hoặc nhiễu, để điểm neo không
+ * bị kéo theo xe làm chậm xác nhận chạy theo quãng dời */
+static int    s_sampleAboveThresh = 0;
 
 /* Odometer (UpdateOdometer) */
 static double   s_totalKm          = 0.0;
@@ -618,19 +622,38 @@ static int WireAccOff(void)
 }
 
 /**
+ * @brief Mẫu đủ tin để tính là "vượt ngưỡng vận tốc" khi xe đang dừng / đỗ:
+ *        đủ vệ tinh, có vị trí, HDOP không quá MOVING_START_MAX_HDOP (HDOP 0 =
+ *        URC không báo -> coi là tốt). MOVING_START_MAX_HDOP <= 0: không lọc.
+ */
+static int StartSampleOk(const GnssSample_t *s)
+{
+    if (MOVING_START_MAX_HDOP <= 0.0) return 1;
+    if (s->satellites < GPS_MIN_SATS_FOR_FIX || (s->lat == 0.0 && s->lon == 0.0)) return 0;
+    if (s->hdop > 0.0 && s->hdop > MOVING_START_MAX_HDOP) return 0;
+    return 1;
+}
+
+/**
  * @brief Lọc trạng thái chạy / dừng / trôi sau tắt ACC / đỗ, chống nhiễu tốc độ GPS.
  * @return 1 = đang chạy.
  */
-static int FilterMovingStatus(double speed, double lat, double lon)
+static int FilterMovingStatus(const GnssSample_t *s)
 {
     static uint32_t s_speedAboveThresholdTick = 0;
     static uint32_t s_speedBelowThresholdTick = 0;
     static uint32_t s_parkTimeoutStartTick = 0;
+    static int      s_dispRun = 0;          /* số mẫu liên tiếp cách điểm neo đủ xa (bước 2) */
+    static uint32_t s_dispRejectLogTick = 0; /* lần log "vận tốc cao nhưng chưa rời chỗ" gần nhất */
     uint32_t now = GetTickNow();
     double thresh = (double)CFG_GetSpeedThresh();
+    double speed = s->speedKph;
+    double lat = s->lat;
+    double lon = s->lon;
     int wireAccOff;
 
     if (thresh <= 0.0) thresh = 3.0;
+    s_sampleAboveThresh = (speed > thresh) ? 1 : 0;
     wireAccOff = WireAccOff();
 
     /* 1. Dây ACC tắt (accMode 1 hoặc 2) */
@@ -667,17 +690,46 @@ static int FilterMovingStatus(double speed, double lat, double lon)
         s_isParkedNow = 0;
     }
 
-    /* 2. Chưa đỗ: xác nhận chạy / dừng theo thời gian, dự phòng đỗ sau 600 s */
+    /* 2. Chưa đỗ: xác nhận chạy / dừng theo thời gian, dự phòng đỗ sau 600 s.
+     *    Đang dừng (ACC bật, đèn đỏ / nổ máy chờ) thì vận tốc nhiễu chưa đủ: mẫu
+     *    phải tốt (StartSampleOk) và xe phải rời điểm neo thật. */
     if (!s_isParkedNow && !s_isCoastingToPark) {
-        if (speed > thresh) {
+        if (speed > thresh && (s_isMovingNow || StartSampleOk(s))) {
+            int far = 1;
+            double distKm = -1.0;
+
             s_speedBelowThresholdTick = 0;
             s_parkTimeoutStartTick = 0;
+            if (!s_isMovingNow && MOVING_ACC_ON_MIN_DISPLACEMENT_KM > 0.0 &&
+                !(s_anchorLat == 0.0 && s_anchorLon == 0.0)) {
+                /* Có điểm neo: đo dời; chưa có neo (chưa từng fix lúc đứng) thì chỉ xét vận tốc */
+                distKm = (lat == 0.0 && lon == 0.0) ? 0.0 : CalculateDistanceKm(s_anchorLat, s_anchorLon, lat, lon);
+                far = (distKm >= MOVING_ACC_ON_MIN_DISPLACEMENT_KM);
+            }
+            s_dispRun = far ? (s_dispRun + 1) : 0;
             if (s_speedAboveThresholdTick == 0) {
                 s_speedAboveThresholdTick = now;
             } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * HAL_TICKS_PER_SEC)) {
-                s_isMovingNow = 1;
+                if (s_isMovingNow || distKm < 0.0 || s_dispRun >= MOVING_DISP_CONFIRM_SAMPLES) {
+                    if (!s_isMovingNow && distKm >= 0.0) {
+                        HAL_LOG("[GNSS/Move] start: %.1fkm/h, %.0fm from anchor", speed, distKm * 1000.0);
+                    }
+                    s_isMovingNow = 1;
+                } else if (s_dispRejectLogTick == 0 ||
+                           (now - s_dispRejectLogTick) >= (uint32_t)(60 * HAL_TICKS_PER_SEC)) {
+                    s_dispRejectLogTick = (now != 0) ? now : 1;
+                    HAL_LOG("[GNSS/Move] speed noise? %.1fkm/h for %lus but only %.0fm from anchor -> stay stopped",
+                            speed, (unsigned long)((now - s_speedAboveThresholdTick) / HAL_TICKS_PER_SEC),
+                            distKm * 1000.0);
+                }
             }
+        } else if (speed > thresh) {
+            /* Đang dừng, mẫu xấu (HDOP cao / ít vệ tinh): không tính là vượt
+             * ngưỡng, cũng không hủy đếm dừng / đỗ */
+            s_speedAboveThresholdTick = 0;
+            s_dispRun = 0;
         } else {
+            s_dispRun = 0;
             s_speedAboveThresholdTick = 0;
             if (s_speedBelowThresholdTick == 0) {
                 s_speedBelowThresholdTick = now;
@@ -701,7 +753,8 @@ static int FilterMovingStatus(double speed, double lat, double lon)
     /* 3. Đang đỗ -> chạy: vượt ngưỡng đủ lâu và đã rời điểm neo >= 15 m */
     if (s_isParkedNow) {
         s_isMovingNow = 0;
-        if (speed > thresh) {
+        s_dispRun = 0;
+        if (speed > thresh && StartSampleOk(s)) {
             if (s_speedAboveThresholdTick == 0) {
                 s_speedAboveThresholdTick = now;
             } else if ((now - s_speedAboveThresholdTick) >= (MOVING_CONFIRM_SEC * HAL_TICKS_PER_SEC)) {
@@ -753,7 +806,7 @@ static void ApplyStationaryAnchor(int isMoving)
     }
 
     /* HDOP 0 = không biết -> coi là mẫu tốt */
-    good = (s_lastHdop <= 0.0 || s_lastHdop <= ANCHOR_MAX_HDOP);
+    good = (s_lastHdop <= 0.0 || s_lastHdop <= ANCHOR_MAX_HDOP) && !s_sampleAboveThresh;
 
     if (s_anchorN == 0 || (!s_anchorGood && good)) {
         /* Bắt đầu neo; neo đang dựa trên mẫu xấu thì thay bằng mẫu tốt đầu tiên */
@@ -877,8 +930,16 @@ static void UpdateOdometer(double newLat, double newLon)
     }
 
     if (!s_isMovingNow && !wasGpsLoss) {
-        s_prevLat = newLat;
-        s_prevLon = newLon;
+        /* Đứng yên: tham chiếu là điểm neo (nếu có) thay vì mẫu thô, để khi
+         * FilterMovingStatus xác nhận chạy (đã rời neo >= 15-20 m) thì đoạn từ
+         * chỗ đứng tới đó vẫn được cộng, không mất km mỗi lần xuất phát */
+        if (!(s_anchorLat == 0.0 && s_anchorLon == 0.0)) {
+            s_prevLat = s_anchorLat;
+            s_prevLon = s_anchorLon;
+        } else {
+            s_prevLat = newLat;
+            s_prevLon = newLon;
+        }
         s_prevOdomTick = now;
         return;
     }
@@ -982,7 +1043,7 @@ static void GpsDebugOnSample(void)
 static void ApplySample(const GnssSample_t *s)
 {
     /* Lọc chạy / dừng trước, ngoài khóa (đọc cấu hình) */
-    int isMoving = FilterMovingStatus(s->speedKph, s->lat, s->lon);
+    int isMoving = FilterMovingStatus(s);
 
     HAL_OS_MutexLock(s_gpsDataMutex);
     s_lastSatellites = s->satellites;

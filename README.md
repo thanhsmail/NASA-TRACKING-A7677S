@@ -4,7 +4,7 @@ Firmware giám sát hành trình chạy trên module 4G SIMCom **A7677S** (ASR16
 Thiết bị đọc GNSS, gửi vị trí lên Server theo giao thức `!NASA`, nhận lệnh cấu hình qua SMS hoặc Server, lưu bù dữ liệu khi mất mạng, tự cập nhật firmware từ xa (FOTA), ngủ tiết kiệm ắc quy khi xe đỗ và dùng cảm biến gia tốc LIS3DSH để phát hiện xe bị rung / dời lúc đang ngủ.
 
 - Tên thiết bị: `RV4G` (`NASA_DEVICE_NAME`, xuất hiện ở đầu câu trả lời lệnh `sa,29`)
-- Phiên bản firmware: `v1.05.261118` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
+- Phiên bản firmware: `v1.11.261123` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
 - Server mặc định: `103.57.209.16:2590`
 
 Tài liệu chi tiết hơn: [NASA_Tracking_Analysis.md](NASA_Tracking_Analysis.md) (phân tích logic) và [hal/README.md](hal/README.md) (lớp HAL).
@@ -97,6 +97,28 @@ Mỗi vòng `STATE_TRACKING` làm lần lượt:
 6. Đến hạn hoặc có yêu cầu gửi ngay thì gửi bản tin; gửi lỗi thì ghi vào backup.
 
 Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong lúc chờ ACK đăng nhập, trong `STATE_ERROR_RETRY`), thiết bị vẫn chạy quy tắc dừng đỗ / lái xe và ghi vị trí vào backup theo đúng chu kỳ ở bước 5. Bản tin 5 và 6 phát sinh lúc này không được lưu (bỏ), nhưng trạng thái phiên lái và dừng đỗ vẫn được cập nhật nên bản tin kế tiếp sau khi có mạng vẫn đúng.
+
+### Lọc chạy / dừng, chống nhiễu vận tốc khi ACC bật
+
+Trạng thái chạy / dừng / đỗ lọc trong `FilterMovingStatus()` ([app_gps.c](app_gps.c)) và dùng cho chu kỳ gửi, ACC theo vận tốc (accMode 0 / 2), bản tin 5 (thời gian lái), bản tin 6 (dừng đỗ) và km. Khi xe đứng yên, vị trí gửi đi là **điểm neo** = trung bình các mẫu GPS tốt lúc đứng (bỏ mẫu HDOP > 2,5, mẫu nhảy xa > 25 m và mẫu có vận tốc > ngưỡng).
+
+Xe nổ máy đứng yên (đèn đỏ, chờ khách, accMode 0 chưa đủ 10 phút để thành đỗ), GPS ở đô thị có thể báo vận tốc 5–26 km/h trong khi vị trí chỉ lắc quanh chỗ đứng. Trước đây vượt ngưỡng lệnh 10 liên tục 3 giây là đủ báo xe chạy. Nay xe đang dừng / đỗ chỉ chuyển sang **chạy** khi đủ cả:
+
+| Điều kiện | Hằng số ([app_config.h](app_config.h)) | Mặc định |
+|---|---|---|
+| Vận tốc > ngưỡng lệnh 10 liên tục | `MOVING_CONFIRM_SEC` | 3 giây |
+| Mẫu đủ tin: ≥ 5 vệ tinh, HDOP ≤ ngưỡng. Mẫu xấu không tính là vượt ngưỡng (đếm lại từ đầu) nhưng cũng không hủy đếm dừng / đỗ | `MOVING_START_MAX_HDOP` | 4,0 (0 = tắt) |
+| Đang dừng, ACC bật: cách điểm neo ≥ ngưỡng trên N mẫu liên tiếp | `MOVING_ACC_ON_MIN_DISPLACEMENT_KM`, `MOVING_DISP_CONFIRM_SAMPLES` | 20 m, 2 mẫu (0 m = tắt, chỉ xét vận tốc như cũ) |
+| Đang đỗ (ACC bật lại hoặc accMode 0): cách điểm neo | `MOVING_MIN_DISPLACEMENT_KM` | 15 m |
+| ACC tắt, đang đỗ: cách điểm neo (kéo / chở xe) | `PARKED_ACC_OFF_MIN_DISPLACEMENT_KM` | 150 m |
+
+- Chưa có điểm neo (chưa từng có fix lúc đứng, ví dụ khởi động giữa đường) thì chỉ xét vận tốc.
+- Xe **đang chạy** không bị các điều kiện trên ảnh hưởng: chậm lại / HDOP cao không làm mất trạng thái chạy, vẫn cần dưới ngưỡng `STOPPED_CONFIRM_SEC` (10 giây) mới thành dừng.
+- Km: lúc đứng yên, điểm tham chiếu odometer là điểm neo, nên khi xác nhận chạy thì đoạn từ chỗ đứng tới đó (≈ 20–40 m) vẫn được cộng, không mất km mỗi lần xuất phát.
+- Hệ quả: xe thật xuất phát được nhận là chạy chậm hơn trước vài giây (phải đi được ~20 m). Ngưỡng nhỏ hơn thì nhạy hơn nhưng dễ bị nhiễu vị trí đô thị (thường lệch 10–30 m) qua mặt; lớn hơn thì chắc hơn nhưng chậm hơn.
+- Chip GNSS vẫn bật chế độ giữ tĩnh (`GNSS_STATIC_HOLD_CMS` = 100 cm/s ≈ 3,6 km/h), lọc phần nhiễu nhỏ ngay trong chip; nhiễu lớn hơn do lớp lọc trên xử lý.
+- Không dùng cảm biến gia tốc để xác nhận đứng yên: khi ACC bật, máy nổ rung nên khó phân biệt đứng / chạy chậm, hướng lắp không biết trước, và cảm biến có thể tắt / hỏng (lệnh 43).
+- Xem log (`debug,1`): `[GNSS/Move] speed noise? ... only Xm from anchor -> stay stopped` (tối đa 1 lần / phút) khi vận tốc vượt ngưỡng mà xe chưa rời chỗ; `[GNSS/Move] start: ... Xm from anchor` khi xác nhận chạy; `[GNSS/Stat]` in `moving`, `hdop`, `anchorN` mỗi 30 giây.
 
 ## 6. Bản tin giao thức
 
