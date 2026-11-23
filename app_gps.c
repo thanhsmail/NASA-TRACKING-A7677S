@@ -118,9 +118,9 @@ typedef struct {
  * chạy chưa kịp lưu và đoạn chạy trong lúc khởi động lại. */
 typedef struct {
     uint32_t magic;
-    int32_t  mday;       /* ngày (RTC) lúc lưu, 0 = chưa có giờ */
+    int32_t  mday;       /* ngày (RTC) lúc lưu dạng YYYYMMDD (bản thử đầu: chỉ ngày 1..31), 0 = chưa có giờ */
     double   totalKm;
-    double   lat;        /* vị trí hợp lệ lúc lưu, 0,0 = chưa có */
+    double   lat;       /* vị trí hợp lệ lúc lưu, 0,0 = chưa có */
     double   lon;
     uint32_t savedSec;   /* giờ RTC lúc lưu (giây từ 2000), 0 = chưa có giờ */
     uint32_t checksum;   /* Buffer_GetChecksum các trường phía trên */
@@ -214,7 +214,7 @@ int GPS_FormatLocalDateTime(char *dateTime, uint32_t dateTimeSize)
 
 /* ============================== API công khai ============================= */
 
-/** Ngày theo RTC (giống ResetDailyCountersIfNeeded), 0 nếu RTC chưa có giờ */
+/** Ngày theo RTC dạng YYYYMMDD (giống ResetDailyCountersIfNeeded), 0 nếu RTC chưa có giờ */
 static int OdomRtcMday(void)
 {
     HalDateTime_t rtc;
@@ -222,8 +222,16 @@ static int OdomRtcMday(void)
     memset(&rtc, 0, sizeof(rtc));
     if (HAL_GNSS_GetRtc(&rtc) != 0) return 0;
     if (rtc.tm_year < 2020 || rtc.tm_year > 2100) return 0;
+    if (rtc.tm_mon < 1 || rtc.tm_mon > 12) return 0;
     if (rtc.tm_mday < 1 || rtc.tm_mday > 31) return 0;
-    return rtc.tm_mday;
+    return (int)rtc.tm_year * 10000 + (int)rtc.tm_mon * 100 + (int)rtc.tm_mday;
+}
+
+/** Ngày lưu khác hôm nay; ngày lưu dạng cũ (chỉ 1..31) thì so theo ngày */
+static int OdomDayDiffers(int saved, int today)
+{
+    if (saved <= 31) return saved != (today % 100);
+    return saved != today;
 }
 
 /** Giờ RTC tính bằng giây từ 2000-01-01, 0 nếu RTC chưa có giờ */
@@ -314,7 +322,7 @@ static void OdomFileLoad(void)
         HAL_LOG("[GNSS/Pos] Vi tri cuoi theo file km: %.6f,%.6f", rec.lat, rec.lon);
     }
     today = OdomRtcMday();
-    if (today != 0 && rec.mday != 0 && today != rec.mday) {
+    if (today != 0 && rec.mday != 0 && OdomDayDiffers((int)rec.mday, today)) {
         HAL_LOG("[Odom] Km da luu thuoc ngay %d, hom nay %d -> bat dau tu 0", (int)rec.mday, today);
         return;
     }

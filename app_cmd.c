@@ -560,23 +560,30 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
         }
         break;
 
-    /* --- Mã 42: Ngủ sâu tiết kiệm ắc quy: na,42,<0|1>[,<chờ phút>]
-     *     (ngủ sâu chỉ thức khi ACC bật / rung; tham số thứ 3 cũ bị bỏ qua) --- */
+    /* --- Mã 42: Ngủ sâu tiết kiệm ắc quy: na,42,<0|1>[,<chờ phút>[,<thức định kỳ phút>]]
+     *     thức hẳn khi ACC bật / rung; thức định kỳ gửi 1 bản tin vị trí rồi ngủ lại,
+     *     0 = tắt thức định kỳ (mặc định 360 phút = 6 giờ, 5..1440 phút) --- */
     case 42:
         if (isSet) {
-            int delayMin = -1;
+            int delayMin = -1, wakeMin = -1;
+            char c[16];
             if (!NextToken(&save, a, sizeof(a))) { Reply(reply, ctx, src, "ERROR"); return; }
             if (NextToken(&save, b, sizeof(b)) && b[0]) delayMin = atoi(b);
-            CFG_SetSleep(atoi(a), (delayMin >= 0) ? delayMin * 60 : -1, -1);
+            if (NextToken(&save, c, sizeof(c)) && c[0]) wakeMin = atoi(c);
+            CFG_SetSleep(atoi(a), (delayMin >= 0) ? delayMin * 60 : -1, (wakeMin >= 0) ? wakeMin * 60 : -1);
             CFG_Save();
         }
         {
             char vbuf[64];
+            char wbuf[24];
             NASA_FormatVoltage(vbuf, sizeof(vbuf));
-            snprintf(resp, sizeof(resp), "sa,42 ngu sau: %s, cho %d phut, thuc khi ACC bat / rung, dang %s, acquy %s",
+            if (CFG_GetSleepWakeSec() > 0) snprintf(wbuf, sizeof(wbuf), "%d phut", CFG_GetSleepWakeSec() / 60);
+            else snprintf(wbuf, sizeof(wbuf), "tat");
+            snprintf(resp, sizeof(resp), "sa,42 ngu sau: %s, cho %d phut, thuc dinh ky %s, thuc khi ACC bat / rung, dang %s, acquy %s",
                      CFG_GetSleepEnabled() ? "bat" : "tat",
-                     CFG_GetSleepDelaySec() / 60,
-                     NASA_IsSleeping() ? "ngu" : (NASA_IsMovingNoAcc() ? "thuc (xe di chuyen khi tat ACC)" : "thuc"),
+                     CFG_GetSleepDelaySec() / 60, wbuf,
+                     NASA_IsSleeping() ? "ngu" : (NASA_IsPeriodicWake() ? "thuc dinh ky" :
+                     (NASA_IsMovingNoAcc() ? "thuc (xe di chuyen khi tat ACC)" : "thuc")),
                      vbuf);
         }
         break;

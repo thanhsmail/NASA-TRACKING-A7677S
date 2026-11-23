@@ -137,6 +137,7 @@ static void test_RegainWhileStopped(void)
 static unsigned char s_file[64];
 static int s_fileLen = -1;   /* -1 = chưa có file */
 static int s_rtcMday = 16;
+static int s_rtcMon = 10;
 
 static void test_RestartRestoresKm(void)
 {
@@ -166,6 +167,15 @@ static void test_RestartRestoresKm(void)
         GPS_Init();
         AssertKm(0.0, 0.0, "sau GPS_Init sang ngay khac");
         s_rtcMday = 16;
+
+        /* Cùng ngày trong tháng nhưng tháng sau (trước đây chỉ so ngày nên không reset) */
+        GPS_ResetOdometer();
+        memcpy(s_file, saved, sizeof(saved));
+        s_fileLen = savedLen;
+        s_rtcMon = 11;
+        GPS_Init();
+        AssertKm(0.0, 0.0, "sau GPS_Init cung ngay, thang sau");
+        s_rtcMon = 10;
 
         memcpy(s_file, saved, sizeof(saved));
         s_file[10] ^= 0xFF;        /* hỏng dữ liệu */
@@ -272,7 +282,7 @@ int HAL_GNSS_GetRtc(HalDateTime_t *rtc)
     /* Giờ chạy theo tick giả, bắt đầu 08:00:00 */
     uint32_t sec = 8u * 3600u + GetTickNow() / (uint32_t)HAL_TICKS_PER_SEC;
     memset(rtc, 0, sizeof(*rtc));
-    rtc->tm_year = 2026; rtc->tm_mon = 10; rtc->tm_mday = (uint8_t)s_rtcMday;
+    rtc->tm_year = 2026; rtc->tm_mon = (uint8_t)s_rtcMon; rtc->tm_mday = (uint8_t)s_rtcMday;
     rtc->tm_hour = (uint8_t)((sec / 3600u) % 24u);
     rtc->tm_min = (uint8_t)((sec / 60u) % 60u);
     rtc->tm_sec = (uint8_t)(sec % 60u);

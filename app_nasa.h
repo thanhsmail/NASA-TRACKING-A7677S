@@ -45,6 +45,8 @@ int  NASA_IsStarted(void);
 int  NASA_IsSleeping(void);
 /** 1 = xe đang bị dời khi dây ACC tắt (đẩy / kéo / chở): báo dày, không ngủ */
 int  NASA_IsMovingNoAcc(void);
+/** 1 = đang thức định kỳ lúc ngủ (gửi 1 bản tin rồi ngủ lại) */
+int  NASA_IsPeriodicWake(void);
 /**
  * Yêu cầu thức khỏi chế độ ngủ (SMS / lệnh / ngắt ACC). Gọi được từ task khác
  * và từ ngắt GPIO; reason phải là chuỗi hằng. Đang thức thì hoãn ngủ thêm

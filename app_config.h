@@ -41,6 +41,10 @@
  * ghi lại. Trước đây chỉ ghi khi RTC chưa có giờ: modem tự đặt sai (log
  * 18/11: lệch +1 giờ sau mất nguồn) thì sai mãi */
 #define RTC_MAX_DRIFT_SEC 60
+/* Reset bộ đếm ngày (km ngày, msgId...) theo RTC ở mọi trạng thái, không chờ
+ * đăng nhập. Sau khởi động chỉ tin ngày của RTC khi đã có giờ GNSS / giờ Server,
+ * hoặc đã chạy quá ngần này giây (không có mạng lẫn GNSS vẫn phải sang ngày) */
+#define DAY_RTC_TRUST_UPTIME_SEC 600
 #define NASA_GNSS_TIME_MAX_AGE_SEC 120
 #define NASA_NTP_MSGQ_WAIT_MS 120000u
 #define NASA_NTP_RETRY_INTERVAL (200 * 30)
@@ -66,7 +70,7 @@
 #define HEADING_THRESHOLD_TURN_DEG 15.0  // Góc cua
 #define HEADING_PERIOD_SHARP_SEC 2       // Giảm chu kỳ khi cua gấp
 #define HEADING_PERIOD_TURN_FACTOR 0.5   // Giảm chu kỳ khi cua
-#define HEADING_MIN_SPEED_KPH 8.0 // Vận tốc tối thiểu để phát hiện góc lái
+#define HEADING_MIN_SPEED_KPH 3.0 // Vận tốc tối thiểu để phát hiện góc lái (trước 8: bỏ sót cua chậm ở ngã rẽ)
 /* Xác nhận vào cua bằng gia tốc ngang của LIS3DSH (app_nasa.c TurnPoll): rút
  * ngắn chu kỳ gửi ngay khi xe bắt đầu cua, không chờ hướng GPS lệch đủ 15° / 30°.
  * Gia tốc ngang = v x tốc độ quay: 40 km/h quay 6°/s ~ 120 mg, 12°/s ~ 250 mg. */
@@ -156,18 +160,23 @@
  * (sAPI_SystemSleepSet). Lúc ngủ chỉ còn nasa_reporter thức mỗi SLEEP_POLL_SEC giây
  * để đọc chân ACC, ngắt cảm biến gia tốc và nuôi watchdog; các task khác chờ
  * SLEEP_IDLE_TASK_SEC giây / lần hoặc tới khi được đánh thức. Chỉ ACC bật hoặc
- * rung (LIS3DSH) đánh thức; SMS / lệnh Server không tới được vì sóng tắt. Chỉ ngủ
- * khi tin được dây ACC (accMode 1, hoặc 2 và dây đã từng báo ON).
- * Bật / tắt và thời gian chờ chỉnh được bằng lệnh 42. */
+ * rung (LIS3DSH) đánh thức hẳn; SMS / lệnh Server không tới được vì sóng tắt, trừ
+ * lúc thức định kỳ. Chỉ ngủ khi tin được dây ACC (accMode 1, hoặc 2 và dây đã từng
+ * báo ON). Bật / tắt, thời gian chờ và chu kỳ thức định kỳ chỉnh bằng lệnh 42. */
 #define SLEEP_ENABLE_DEFAULT 1
 #define SLEEP_DELAY_SEC_DEFAULT 1800       // ACC tắt + đứng yên 30 phút thì ngủ
 #define SLEEP_DELAY_SEC_MIN 60
 #define SLEEP_DELAY_SEC_MAX 86400
-/* Chu kỳ thức định kỳ: không còn dùng (ngủ sâu không thức định kỳ), chỉ giữ để
- * trường sleepWakeSec / khóa slpw trong cấu hình đã lưu vẫn đọc được */
-#define SLEEP_WAKE_PERIOD_SEC_DEFAULT 3600
+/* Thức định kỳ lúc ngủ (SleepPoll): mỗi chu kỳ bật sóng + GNSS, kết nối, đăng
+ * nhập, gửi 1 bản tin vị trí (phát bù điểm mù nếu có) rồi ngủ lại ngay; không
+ * kết nối được trong SLEEP_PERIODIC_AWAKE_MAX_SEC thì lưu vị trí vào điểm mù và
+ * ngủ lại. Đang thức định kỳ mà ACC bật / xe chạy / có lệnh thì thành thức hẳn.
+ * Chu kỳ tính từ lúc vào ngủ. 0 = tắt (không gửi bản tin định kỳ).
+ * Lưu ở khóa slpp (khóa slpw cũ = 3600 lúc chưa dùng, bỏ qua để nhận mặc định mới). */
+#define SLEEP_WAKE_PERIOD_SEC_DEFAULT (6 * 3600)
 #define SLEEP_WAKE_PERIOD_SEC_MIN 300
 #define SLEEP_WAKE_PERIOD_SEC_MAX 86400
+#define SLEEP_PERIODIC_AWAKE_MAX_SEC 180   // Thức định kỳ tối đa ngần này giây (chờ mạng + đăng nhập + gửi)
 #define SLEEP_EVENT_HOLD_SEC 120           // Thức vì rung / ngắt ACC giả: thức ít nhất ngần này giây rồi mới ngủ lại
 #define SLEEP_POLL_SEC 8                   // Đang ngủ: nasa_reporter thức mỗi 8 s đọc ACC / cảm biến, nuôi watchdog phần cứng (16 s)
 #define SLEEP_IDLE_TASK_SEC 60             // Đang ngủ: gpio_status, gnss_task, SmsRecvTask, agps, ntp chờ ngần này giây / lần (thức sớm khi được đánh thức)
