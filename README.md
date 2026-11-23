@@ -39,6 +39,7 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 | [app_lxlt_rules.c](app_lxlt_rules.c) | Quy tắc thời gian lái xe liên tục / trong ngày (bản tin 5), C thuần |
 | [app_cmd.c](app_cmd.c) | Phân tích và thực thi lệnh `na,<mã>,...` / `sa,<mã>` |
 | [app_sms.c](app_sms.c) | Cấu hình modem SMS, tách nội dung SMS rồi chuyển cho `app_cmd` |
+| [app_com.c](app_com.c) | Nhận lệnh gõ trên cổng COM ảo USB rồi chuyển cho `app_cmd` (mục 7) |
 | [app_cfg.c](app_cfg.c) | Cấu hình thiết bị, lưu vào file `C:/rv26.cfg` |
 | [app_backup.c](app_backup.c) | Bộ đệm điểm mù: hàng đợi vị trí chưa gửi được, lưu trên flash rời (xem mục 9) |
 | [app_fota.c](app_fota.c) | Cập nhật firmware từ URL (lệnh 33) |
@@ -64,6 +65,8 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 |---|---|---|---|---|
 | `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp `NASA_RunStep()`: kết nối, đăng nhập, gửi vị trí, nhận lệnh Server |
 | `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ SMS mới, đọc, thực thi lệnh, xóa SMS |
+| `usb_log` | 100 | 3 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Chỉ tạo ở lần `debug,1` đầu tiên; ghi log ra cổng COM USB |
+| `com_cmd` | 18 | 8 KB | [app_com.c](app_com.c) | Chờ dữ liệu trên cổng COM ảo USB, ghép thành dòng, thực thi lệnh. Không có dữ liệu thì chờ mãi, không làm module thức |
 | `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | Chu kỳ 500 ms: lọc ACC, LED, DOUT, nuôi watchdog phần cứng. Khi ngủ chỉ chờ (tối đa 60 giây / lần) |
 | `gnss_task` | 10 | — | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Nhận dữ liệu GNSS từ SDK, đẩy vào `GPS_OnUrcString()` |
 | `fota_task` | 20 | 10 KB | [app_fota.c](app_fota.c) | Chỉ tạo khi có lệnh 33 lần đầu; tải và nạp firmware |
@@ -110,7 +113,7 @@ Trả lời lệnh từ Server là bản tin `!NASA,13,<msgId>,<ngày giờ>,<n�
 
 ## 7. Lệnh điều khiển
 
-Lệnh đến từ SMS hoặc Server đều vào `CMD_Execute()` trong [app_cmd.c](app_cmd.c). Gửi lệnh nào cũng làm thiết bị thức khỏi chế độ ngủ để xử lý và trả lời.
+Lệnh đến từ SMS, Server hoặc cổng COM ảo USB đều vào `CMD_Execute()` trong [app_cmd.c](app_cmd.c). Gửi lệnh nào cũng làm thiết bị thức khỏi chế độ ngủ để xử lý và trả lời.
 
 ### Cú pháp
 
@@ -131,10 +134,44 @@ sa,<mã>                                   đọc (GET)
 |---|---|
 | SMS | Gửi nguyên văn về số đã nhắn, ví dụ `sa,10 nguong van toc: 3 km/h` |
 | Server | `!NASA,13,<msgId>,<ngày giờ>,<nội dung>,*<checksum>` + CR LF; tiền tố `sa,<mã> ` được bỏ khỏi nội dung |
+| COM USB | In nguyên văn như SMS, kèm CR LF |
 
 ### Quyền (lệnh 40)
 
-Mặc định `NASA_LOCK_FEATURE_ENABLE 0` trong [app_config.h](app_config.h): mọi nguồn đều được đổi mọi cấu hình. Khi đặt bằng 1 và cấu hình đang khóa (`na,40,close`), các lệnh 1, 17, 18, 33 (và lệnh cũ `update`) chỉ nhận từ Server hoặc từ số chủ xe 1 / 2. Nguồn khác nhận `Ban khong co quyen thuc hien chuc nang nay`. Riêng lệnh 41 thì luôn kiểm tra, kể cả khi tính năng khóa bị tắt: cấu hình đang khóa thì chỉ nhận từ Server hoặc số chủ xe 1 / 2.
+Mặc định `NASA_LOCK_FEATURE_ENABLE 0` trong [app_config.h](app_config.h): mọi nguồn đều được đổi mọi cấu hình. Khi đặt bằng 1 và cấu hình đang khóa (`na,40,close`), các lệnh 1, 17, 18, 33 (và lệnh cũ `update`) chỉ nhận từ Server hoặc từ số chủ xe 1 / 2. Nguồn khác nhận `Ban khong co quyen thuc hien chuc nang nay`. Riêng lệnh 41 thì luôn kiểm tra, kể cả khi tính năng khóa bị tắt: cấu hình đang khóa thì chỉ nhận từ Server, cổng COM USB hoặc số chủ xe 1 / 2.
+
+Cổng COM USB được coi như Server: không bị khóa cấu hình chặn, vì phải cắm dây trực tiếp vào thiết bị.
+
+### Cấu hình qua cổng COM ảo USB
+
+1. Cắm cáp USB vào máy tính. Trong Device Manager, mục Ports (COM & LPT), tìm cổng AT của module (tên dạng `SIMCom HS-USB AT Port`, `ASR Modem AT` tùy driver).
+2. Mở cổng đó bằng PuTTY, Tera Term hoặc Hercules. Tốc độ baud không có tác dụng với cổng USB, để mặc định 115200 8N1.
+3. Gõ lệnh như SMS rồi Enter, ví dụ `sa,29` hoặc `na,1,103.27.60.10,9999`. Câu trả lời in ngay dưới dòng lệnh.
+
+```text
+sa,10
+sa,10 nguong van toc: 3 km/h
+```
+
+- Firmware in lại ký tự gõ vào (`COM_ECHO 1`) và hiểu phím Backspace. Gửi lệnh từ script thì đặt `COM_ECHO 0` để không nhận lại lệnh. Gửi từ ô "Send" của Hercules thì nhớ thêm CR hoặc LF ở cuối.
+- Dòng không bắt đầu bằng `na,` / `sa,` (ngoài `reset`, `update,<url>` và `debug`) trả lời `ERROR lenh phai bat dau bang na, hoac sa,`. Dòng dài hơn 255 ký tự trả lời `ERROR lenh qua dai`.
+- Khi bật tính năng này, firmware nhận toàn bộ dữ liệu của cổng AT USB. Dòng bắt đầu bằng `AT` được chuyển tiếp cho bộ xử lý AT của module (`sAPI_AtSend`). Nếu lệnh AT không có kết quả trả về, đặt `COM_CFG_ENABLE 0` trong [app_config.h](app_config.h) để trả cổng lại cho module.
+- Lúc task khởi động, cổng in `NASA COM ready: ...`. Log có dòng `[USBCOM] register callback rc=0` khi đăng ký được, và `[COM] first rx <n> byte (cb=... len=... read=...)` ở lần đầu nhận dữ liệu.
+- Log của firmware vẫn ra cổng log như cũ, không lẫn vào cổng AT.
+- Cắm USB thì module không ngủ (mục 11), nên lúc nào cũng gõ lệnh được.
+
+### Xem log qua cổng COM USB (`debug,1`)
+
+| Lệnh | Tác dụng | Trả lời |
+|---|---|---|
+| `debug,1` | Chép mọi dòng log (`HAL_LOG`) ra cổng COM USB, mỗi dòng kết thúc bằng CR LF | `debug usb: bat` (thêm ` (chua cam USB)` nếu chưa cắm) |
+| `debug,0` | Tắt | `debug usb: tat` |
+| `debug` | Chỉ báo trạng thái | như trên |
+
+- Gõ được trên cổng COM USB, qua SMS hoặc từ Server. Không lưu: khởi động lại là tắt, nên log lúc khởi động (trước khi task `com_cmd` chạy) vẫn chỉ xem được trên cổng log.
+- Log vẫn ra cổng log như cũ, cổng USB chỉ nhận thêm một bản.
+- Dòng log được đưa vào vòng đệm 4 KB, task `usb_log` (ưu tiên 100, tạo ở lần `debug,1` đầu tiên) ghi ra USB. PC chưa mở cổng hoặc đọc chậm thì chỉ task này chờ, không làm chậm các task khác. Vòng đệm đầy thì bỏ dòng mới và in `[USBLOG] mat <n> dong` khi ghi lại được.
+- Lệnh gõ và log dùng chung một cổng nên có thể xen kẽ nhau trên màn hình. Lệnh vẫn được nhận đúng.
 
 ### Bảng lệnh
 

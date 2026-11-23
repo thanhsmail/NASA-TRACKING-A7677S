@@ -32,6 +32,7 @@
 #include "app_nasa.h"
 #include "app_indication.h"
 #include "app_sim.h"
+#include "app_com.h"
 
 /* --- SMS URC task --- */
 static HalTaskRef_t gSmsRecvTask = NULL;
@@ -124,6 +125,7 @@ void userSpace_Main(void *arg)
     HAL_GNSS_UrcListenerStart(); // Khoi tao GPS URC
 
     INDICATION_TaskStart(); // Khoi tao LED
+    COM_TaskStart();        // Cau hinh qua cong COM ao USB (na,... / sa,...)
 
     if (s_nasaReportTaskRef == NULL) {
         if (HAL_OS_TaskCreate(&s_nasaReportTaskRef, s_nasaReportTaskStack,
