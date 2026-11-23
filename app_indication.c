@@ -86,8 +86,7 @@ static void sTask_GpioStatusIndication(void *argv)
             if (GPIO_LED_PWR != FLASH_SPI_CS_PIN) HAL_GPIO_Write(GPIO_LED_PWR, 0);
             if (NASA_IsWatchdogTimeout()) {
                 HAL_LOG("[WATCHDOG] Task nasa_reporter timeout >180s while asleep! SysReset...");
-                HAL_OS_TaskSleep(200);
-                HAL_OS_SysReset();
+                NASA_SysReset(RST_CAUSE_SWWDT_SLEEP);
             }
             if (s_gpioWakeQ) {
                 (void)HAL_OS_MsgQRecv(s_gpioWakeQ, msg, SLEEP_IDLE_TASK_SEC * HAL_TICKS_PER_SEC);
@@ -169,8 +168,7 @@ static void sTask_GpioStatusIndication(void *argv)
 
         if (NASA_IsWatchdogTimeout()) {
             HAL_LOG("[WATCHDOG] Task nasa_reporter timeout >180s! SysReset...");
-            HAL_OS_TaskSleep(200);
-            HAL_OS_SysReset();
+            NASA_SysReset(RST_CAUSE_SWWDT);
         }
 
 #if HW_WDT_ENABLE
@@ -186,6 +184,7 @@ static void sTask_GpioStatusIndication(void *argv)
             /* gnss_task treo (không tự khởi động lại GNSS được): ngừng nuôi để reset */
             HAL_LOG("[WDT] gnss_task hang %lus -> stop feeding, hardware reset",
                     (unsigned long)HAL_GNSS_GetTaskAliveAgeSec());
+            NASA_SaveResetCause(RST_CAUSE_GNSS_HANG);
             gnssHangLogged = 1;
         }
 #endif

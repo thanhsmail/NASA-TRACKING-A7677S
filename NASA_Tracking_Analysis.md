@@ -5,7 +5,7 @@ Tài liệu mô tả chi tiết cấu trúc firmware giám sát hành trình ch�
 | Thông tin | Giá trị | Ở đâu |
 |---|---|---|
 | Tên thiết bị | `RV4G` | `NASA_DEVICE_NAME`, [app_config.h](app_config.h) |
-| Phiên bản firmware | `v1.05.261014` (gửi trong bản tin đăng nhập, `sa,33`) | `NASA_FW_CODE`, [app_config.h](app_config.h) |
+| Phiên bản firmware | `v1.05.261118` (gửi trong bản tin đăng nhập, `sa,33`) | `NASA_FW_CODE`, [app_config.h](app_config.h) |
 | Dòng log khởi động | `NASA_TRACKING VS1.00.261015` | [sc_application.c](sc_application.c) — đang khác `NASA_FW_CODE` |
 | Phần cứng | `v1.0` | `NASA_HW_CODE` |
 | Server mặc định | `103.57.209.16:2590` | `NASA_SERVER_HOST_DEFAULT`, `NASA_SERVER_PORT_DEFAULT` |
@@ -217,7 +217,57 @@ Bit trạng thái (`BuildDeviceStatus`, [app_config.h](app_config.h) `ST_*`):
 | 2 | ACC bật (theo lệnh 8) | 8 | Ắc-quy ≥ 10,5 V |
 | 5 | Lái xe đã đăng nhập | 3, 4, 9–12 | Chưa dùng (cửa, điều hòa, nhiên liệu, nhiệt độ, SOS) |
 
-Điện áp: `NASA_GetVoltage()` đọc ADC1, nhân 23 (cầu chia 220 kΩ / 10 kΩ); đọc lỗi thì dùng 12,0 V.
+Điện áp: `NASA_GetVoltage()` đọc ADC2 (trung bình 8 mẫu), nhân 23 (cầu chia 220 kΩ / 10 kΩ, tối đa ~27,6 V; sơ đồ ghi 7,5 kΩ nhưng board lắp 10 kΩ); mọi mẫu đọc lỗi thì dùng 12,0 V.
+
+### Lý do reset (trường cuối bản tin `!NASA,1`)
+
+Dạng `R-<chính>.<phụ>` (`DetectResetReason()`, [app_nasa.c](app_nasa.c)). Bản firmware cũ chỉ gửi `R-0.0` / `R-2.0` / `R-3.0`.
+
+Phần chính, theo PMIC (`sAPI_GetPowerUpEvent`):
+
+| Mã | Ý nghĩa |
+|---|---|
+| `R-2` | Bật bằng chân reset hoặc cấp nguồn (phần cứng: mất / sụt nguồn, watchdog phần cứng) |
+| `R-3` | Reset phần mềm (`sAPI_SysReset`) |
+| `R-0` | Lý do khác (báo thức RTC, PMIC lỗi) |
+
+Phần phụ, trường hợp 1: firmware tự reset và đã ghi lý do vào `C:/rv26_rst.dat` (`NASA_SysReset`, mã `RST_CAUSE_*` trong [app_config.h](app_config.h)):
+
+| Mã | Ý nghĩa |
+|---|---|
+| `R-3.60` | Lệnh `reset` / `reset#` (SMS, TCP) |
+| `R-3.61` | Lệnh 9 |
+| `R-3.62` | Lịch reset lệnh 32 |
+| `R-3.63` | Mất kết nối Server quá `NET_DISCONN_RESET_SEC` (15 phút) |
+| `R-3.64` | FOTA tải xong, khởi động lại để nạp |
+| `R-3.65` | Watchdog phần mềm: `nasa_reporter` không chạy quá 180 s (đang thức) |
+| `R-3.66` | Watchdog phần mềm: như trên, đang ngủ sâu |
+| `R-2.67` | `gnss_task` treo quá `GNSS_TASK_HANG_SEC` (120 s), ngừng nuôi watchdog phần cứng |
+| `R-3.68` | `abort()`: crash / assert trong SDK hoặc thư viện C |
+
+Phần phụ, trường hợp 2: không có file lý do. Hai chữ số = mã bật PMIC rồi mã tắt lần trước (`sAPI_GetPowerDownEvent`):
+
+| Chữ số đầu (bật) | Ý nghĩa | Chữ số sau (tắt lần trước) | Ý nghĩa |
+|---|---|---|---|
+| 1 | Chân reset (thường là watchdog phần cứng) | 0 | Không đọc được |
+| 2 | Cấp nguồn / phím nguồn | 1 | Giữ phím nguồn |
+| 3 | Reset phần mềm | 2 | Điện áp RTC (VRTC) thấp |
+| 4 | Báo thức RTC | 3 | Quá nhiệt |
+| 5 | PMIC lỗi | 4 | Sụt áp VSYS |
+| 0 | Không đọc được | 5 | Watchdog PMIC hết giờ |
+| | | 6 | Giữ phím reset |
+| | | 7 | Quá áp VSYS |
+| | | 8 | Không rõ (PMIC không ghi) |
+
+Hay gặp:
+
+| Mã | Ý nghĩa |
+|---|---|
+| `R-2.24` | Cấp nguồn lại sau sụt áp VSYS: lỗi nguồn / dây / bộ hạ áp |
+| `R-2.27` | Cấp nguồn lại sau quá áp VSYS |
+| `R-2.15` | Chân reset + watchdog PMIC hết giờ: firmware treo |
+| `R-2.18`, `R-2.28` | Chân reset / cấp nguồn, PMIC không ghi lý do tắt: chưa rõ, cần log UART |
+| `R-3.38` | Reset phần mềm không qua `NASA_SysReset`: SDK tự reset (lỗi hệ thống) |
 
 ---
 

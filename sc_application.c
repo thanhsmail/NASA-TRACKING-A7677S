@@ -149,8 +149,7 @@ void abort(void)
 {
     /* Thiet bi khong nguoi truc: tu reset thay vi treo vinh vien */
     HAL_LOG("abort!!! -> SysReset");
-    HAL_OS_TaskSleep(200);
-    HAL_OS_SysReset();
+    NASA_SysReset(RST_CAUSE_ABORT);
     while (1);
 }
 

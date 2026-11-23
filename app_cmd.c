@@ -184,7 +184,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
     if (strcmp(tag, "reset#") == 0 || (strcmp(tag, "reset") == 0)) {
         Reply(reply, ctx, src, "OK");
         HAL_OS_TaskSleep(200);
-        HAL_OS_SysReset();
+        NASA_SysReset(RST_CAUSE_CMD_RESET);
         return;
     }
 
@@ -308,7 +308,7 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             snprintf(resp, sizeof(resp), "reset ok");
             Reply(reply, ctx, src, resp);
             HAL_OS_TaskSleep(HAL_TICKS_PER_SEC * 5);
-            HAL_OS_SysReset();
+            NASA_SysReset(RST_CAUSE_CMD9);
             return;
         }
         break;
@@ -570,11 +570,15 @@ void CMD_Execute(const char *body, const char *src, const char *fromPhone,
             CFG_SetSleep(atoi(a), (delayMin >= 0) ? delayMin * 60 : -1, -1);
             CFG_Save();
         }
-        snprintf(resp, sizeof(resp), "sa,42 ngu sau: %s, cho %d phut, thuc khi ACC bat / rung, dang %s, acquy %.1fV",
-                 CFG_GetSleepEnabled() ? "bat" : "tat",
-                 CFG_GetSleepDelaySec() / 60,
-                 NASA_IsSleeping() ? "ngu" : (NASA_IsMovingNoAcc() ? "thuc (xe di chuyen khi tat ACC)" : "thuc"),
-                 (double)NASA_GetVoltage());
+        {
+            char vbuf[64];
+            NASA_FormatVoltage(vbuf, sizeof(vbuf));
+            snprintf(resp, sizeof(resp), "sa,42 ngu sau: %s, cho %d phut, thuc khi ACC bat / rung, dang %s, acquy %s",
+                     CFG_GetSleepEnabled() ? "bat" : "tat",
+                     CFG_GetSleepDelaySec() / 60,
+                     NASA_IsSleeping() ? "ngu" : (NASA_IsMovingNoAcc() ? "thuc (xe di chuyen khi tat ACC)" : "thuc"),
+                     vbuf);
+        }
         break;
 
     /* --- Mã 43: Cảm biến gia tốc LIS3DSH:

@@ -6,6 +6,14 @@ void NASA_RunStep(void);
 void NASA_SetAcc(int accVal);
 int  NASA_IsSessionActive(void);
 float NASA_GetVoltage(void);
+/** Ghi lý do (RST_CAUSE_*) rồi reset phần mềm; lần khởi động sau báo R-x.<lý do> */
+void NASA_SysReset(int cause);
+/** Chỉ ghi lý do (khi reset đến từ watchdog phần cứng, không gọi SysReset) */
+void NASA_SaveResetCause(int cause);
+/** 1 = lần đo cuối chạm trần ADC: điện áp thật >= giá trị báo */
+int NASA_IsVoltageSaturated(void);
+/** Điện áp dạng chữ cho tin nhắn ("27.6V" / ">=27.6V" / "?V") */
+void NASA_FormatVoltage(char *buf, int len);
 
 /** cmd 39: 2=location (frame2), 7=sensor/backup */
 void NASA_RequestImmediate(int msgType);

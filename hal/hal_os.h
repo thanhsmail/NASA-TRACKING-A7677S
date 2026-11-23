@@ -61,6 +61,16 @@ int  HAL_OS_SystemSleepIsEnabled(void);
 int  HAL_OS_UsbConnected(void);
 uint32_t HAL_OS_GetTick(void);
 HalPowerUpReason_t HAL_OS_GetPowerUpReason(void);
+/**
+ * Mã thô của PMIC (sc_power.h), dùng chẩn đoán khởi động lại.
+ * Bật: 1 = RESET_KEY (chân reset / watchdog), 2 = POWER_KEY (cấp nguồn),
+ *      3 = SOFTWARE_RESET, 4 = RTC_ALARM, 5 = ERR.
+ * Tắt lần trước: 1 = giữ phím nguồn, 2 = VRTC thấp, 3 = quá nhiệt,
+ *      4 = sụt áp VSYS, 5 = watchdog PMIC hết giờ, 6 = giữ phím reset,
+ *      7 = quá áp VSYS, 8 = ERR (không rõ). 0 = không đọc được.
+ */
+int HAL_OS_GetPowerUpRaw(void);
+int HAL_OS_GetPowerDownRaw(void);
 
 /* ---- Mutex ---- */
 int  HAL_OS_MutexCreate(HalMutexRef_t *m);
