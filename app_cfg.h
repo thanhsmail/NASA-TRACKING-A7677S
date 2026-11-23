@@ -29,7 +29,7 @@ typedef struct {
     int      gnssMode;          /* cmd 3: 1=GPS+BDS+QZSS, 2=BDS, 3=GPS+QZSS */
     int      sleepEnabled;      /* cmd 42: ngủ tiết kiệm ắc quy khi ACC tắt */
     int      sleepDelaySec;     /* cmd 42: ACC tắt + đứng yên bao lâu thì ngủ */
-    int      sleepWakeSec;      /* cmd 42: đang ngủ thì bao lâu thức gửi vị trí */
+    int      sleepWakeSec;      /* cmd 42: đang ngủ thì bao lâu thức gửi vị trí, 0 = tắt */
     int      motionWakeOff;     /* cmd 43: 1 = không thức khi rung (LIS3DSH) */
     int      motionDeltaMg;     /* cmd 43: ngưỡng = trục lớn nhất lúc đứng yên + ngần này mg */
     int      motionEvents;      /* cmd 43: số ngắt rung ... */

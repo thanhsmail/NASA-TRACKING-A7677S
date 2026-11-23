@@ -90,7 +90,7 @@ Mỗi vòng `STATE_TRACKING` làm lần lượt:
 2. Phát bù hàng đợi backup thành bản tin 7 (mỗi lượt tối đa 5 mục).
 3. Kiểm tra đổi ngày (xóa bộ đếm ngày) và lịch tự reset (lệnh 32).
 4. Lấy snapshot GPS, chạy quy tắc dừng đỗ và quy tắc lái xe.
-5. Tính chu kỳ gửi: ACC tắt dùng chu kỳ dừng; ACC bật dùng chu kỳ chạy, rút ngắn khi xe đổi hướng (≥15° còn một nửa, ≥30° còn 2 giây, áp dụng từ 8 km/h). Khi có LIS3DSH, gia tốc ngang xác nhận xe đang vào cua sẽ rút ngắn chu kỳ ngay từ đầu khúc cua (mục 12).
+5. Tính chu kỳ gửi: ACC tắt dùng chu kỳ dừng; ACC bật dùng chu kỳ chạy, rút ngắn khi xe đổi hướng (≥15° còn một nửa, ≥30° còn 2 giây, áp dụng từ 3 km/h). Khi có LIS3DSH, gia tốc ngang xác nhận xe đang vào cua sẽ rút ngắn chu kỳ ngay từ đầu khúc cua (mục 12).
 6. Đến hạn hoặc có yêu cầu gửi ngay thì gửi bản tin; gửi lỗi thì ghi vào backup.
 
 Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong lúc chờ ACK đăng nhập, trong `STATE_ERROR_RETRY`), thiết bị vẫn chạy quy tắc dừng đỗ / lái xe và ghi vị trí vào backup theo đúng chu kỳ ở bước 5. Bản tin 5 và 6 phát sinh lúc này không được lưu (bỏ), nhưng trạng thái phiên lái và dừng đỗ vẫn được cập nhật nên bản tin kế tiếp sau khi có mạng vẫn đúng.
@@ -162,7 +162,7 @@ Mặc định `NASA_LOCK_FEATURE_ENABLE 0` trong [app_config.h](app_config.h): m
 | 37 | Gửi SMS từ SIM của thiết bị (kiểm tra số / nạp tiền) | `na,37,<số nhận>,<nội dung>` | | Trả lời lại nội dung đã gửi |
 | 40 | Khóa / mở khóa cấu hình | `na,40,<close\|open>` | mở | `sa,40 thiet bi da mo khoa cau hinh` |
 | 41 | Khôi phục cài đặt gốc (xóa cấu hình trên flash và EFS) | `na,41` | | `khoi phuc cai dat mac dinh ban dau` |
-| 42 | Ngủ sâu tiết kiệm ắc quy (mục 11) | `na,42,<0\|1>[,<chờ phút>]` | bật, 30 phút; 1–1440 phút | `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
+| 42 | Ngủ sâu tiết kiệm ắc quy (mục 11) | `na,42,<0\|1>[,<chờ phút>[,<thức định kỳ phút>]]` | bật, chờ 30 phút (1–1440), thức định kỳ 360 phút (5–1440, 0 = tắt) | `sa,42 ngu sau: bat, cho 30 phut, thuc dinh ky 360 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
 | 43 | Cảm biến gia tốc: thức khi rung / nghiêng, độ nhạy, bật / tắt cảm biến; `sa,43` trả cấu hình và sức khỏe cảm biến (mục 12) | `na,43,<0\|1>[,<+mg>[,<số ngắt>[,<cửa sổ giây>]]]`, `na,43,<off\|on>` | cảm biến bật; rung bật, 150 mg, 3 ngắt / 60 s | `sa,43 rung: bat, nguong +150mg ...; cam bien: OK, ...` |
 
 Lệnh 44 cũ (`na,44`, `sa,44`) đã gộp vào lệnh 43 và không còn nhận (trả lời `ERROR ma lenh khong ho tro`).
@@ -326,7 +326,7 @@ Lúc vào ngủ, thiết bị gửi `!NASA,2` vị trí cuối (không có Serve
 | Module | Cho phép sleep hệ thống (`sAPI_SystemSleepSet`). **Module không ngủ khi đang cắm USB** |
 | LED | Tắt cả 3 |
 | LIS3DSH | Nạp chương trình phát hiện rung ra INT1 và lưu véc-tơ trọng lực làm mốc nghiêng (mục 12) |
-| Bản tin | Không gửi gì cho đến khi thức. Không có lần thức định kỳ |
+| Bản tin | Không gửi gì cho đến khi thức, trừ lần thức định kỳ (mặc định mỗi 6 giờ tính từ lúc vào ngủ, lệnh 42): bật sóng + GNSS, đăng nhập, gửi 1 `!NASA,2` (và phát bù điểm mù nếu có) rồi ngủ lại ngay. Không kết nối được trong 180 s (`SLEEP_PERIODIC_AWAKE_MAX_SEC`) thì lưu vị trí vào điểm mù rồi ngủ lại. Đang thức định kỳ mà ACC bật, xe chạy, có FOTA hoặc có lệnh SMS / Server thì thức hẳn. `na,42,1,30,0` tắt thức định kỳ |
 | `nasa_reporter` | Mỗi 8 giây (`SLEEP_POLL_SEC`): nuôi watchdog phần mềm và phần cứng, đọc chân ACC, ngắt INT1 và góc nghiêng (4 mẫu, khoảng 160 ms). Không chạy gì khác |
 | `gpio_status` | Chờ tối đa 60 giây / lần (`SLEEP_IDLE_TASK_SEC`), chỉ canh `nasa_reporter` treo |
 | `gnss_task`, `SmsRecvTask`, `agps_task`, `ntp_sync` | Chờ 60 giây / lần; `SmsRecvTask` không hỏi SIM |
@@ -359,11 +359,12 @@ SMS: `CANH BAO <biển số>: xe di chuyen khi tat may, 12km/h, cach cho do 80m 
 ### Lệnh 42
 
 ```text
-na,42,<0|1>[,<chờ phút>]     ví dụ: na,42,1,30
+na,42,<0|1>[,<chờ phút>[,<thức định kỳ phút>]]     ví dụ: na,42,1,30,360
+na,42,1,30,0                                         tắt thức định kỳ
 sa,42
 ```
 
-Trả lời: `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.7V`. Tham số thứ 3 (chu kỳ thức) của bản trước vẫn được nhận nhưng bị bỏ qua.
+Trả lời: `sa,42 ngu sau: bat, cho 30 phut, thuc dinh ky 360 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.7V` (`thuc dinh ky tat` khi đã tắt, `dang thuc dinh ky` khi đang trong lần thức định kỳ). Chu kỳ thức định kỳ 5–1440 phút, mặc định 360 phút (6 giờ), lưu ở khóa `slpp`; khóa `slpw` của bản cũ bị bỏ qua nên thiết bị cập nhật firmware nhận mặc định 6 giờ.
 
 ### Log và đo dòng
 
@@ -437,7 +438,7 @@ Cần kiểm trên board: log `[LIS3DSH] SM2 check ...` và `motion armed DELTA`
 
 ### Xác nhận vào cua (tăng tần suất gửi vị trí)
 
-Khi xe đang thức và chạy từ 8 km/h, `TurnPoll()` trong [app_nasa.c](app_nasa.c) chạy mỗi vòng `nasa_reporter` (khoảng 1 giây):
+Khi xe đang thức và chạy từ 3 km/h, `TurnPoll()` trong [app_nasa.c](app_nasa.c) chạy mỗi vòng `nasa_reporter` (khoảng 1 giây):
 
 1. Đọc trung bình các mẫu trong FIFO của cảm biến (khoảng 25 mẫu / 1 giây), để lọc rung xóc mặt đường.
 2. Ước lượng véc-tơ trọng lực bằng lọc thông thấp: nhanh khi xe đứng, rất chậm khi xe chạy (hằng số 60 giây), đóng băng khi đang cua. Nhờ vậy không cần biết cảm biến lắp theo hướng nào.

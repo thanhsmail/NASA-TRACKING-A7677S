@@ -185,7 +185,7 @@ Chu kỳ gửi khi ACC bật (`GetAdaptivePeriodSec`):
 
 | Điều kiện | Chu kỳ |
 |---|---|
-| Tốc độ dưới 8 km/h, hoặc chưa có hướng trước | Chu kỳ chạy (mặc định 10 s) |
+| Tốc độ dưới 3 km/h, hoặc chưa có hướng trước | Chu kỳ chạy (mặc định 10 s) |
 | Đổi hướng ≥ 30° so với bản tin trước | 2 s |
 | Đổi hướng ≥ 15° | 50% chu kỳ chạy, tối thiểu 5 s |
 | Còn lại | Chu kỳ chạy |
@@ -406,7 +406,7 @@ Lệnh đến từ SMS ([app_sms.c](app_sms.c)) hoặc Server ([app_network.c](a
 | 37 | Gửi SMS hộ | `na,37,<số>,<nội dung>` |
 | 40 | Khóa / mở khóa cấu hình | `na,40,close|open` — hiện luôn mở (`NASA_LOCK_FEATURE_ENABLE = 0`) |
 | 41 | Khôi phục cài đặt gốc | `na,41` |
-| 42 | Ngủ sâu tiết kiệm ắc quy: bật / tắt, phút chờ trước khi ngủ (tham số thứ 3 cũ bị bỏ qua) | `na,42,1,30` / `na,42,0` / `sa,42` → `sa,42 ngu sau: bat, cho 30 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
+| 42 | Ngủ sâu tiết kiệm ắc quy: bật / tắt, phút chờ trước khi ngủ, phút thức định kỳ (0 = tắt) | `na,42,1,30,360` / `na,42,1,30,0` / `na,42,0` / `sa,42` → `sa,42 ngu sau: bat, cho 30 phut, thuc dinh ky 360 phut, thuc khi ACC bat / rung, dang thuc, acquy 12.6V` |
 | 43 | Cảm biến gia tốc LIS3DSH (gộp lệnh 44 cũ): bật / tắt thức khi rung, +mg, số ngắt, cửa sổ giây; `off` / `on` = tắt hẳn / bật cảm biến; `sa,43` = cấu hình + sức khỏe cảm biến | `na,43,1,150,3,60` / `na,43,off` / `sa,43` → `sa,43 rung: bat, nguong +150mg (nap 156mg 3truc), 3 ngat/60s, nghieng 8do; cam bien: OK, addr 0x1E, ... self-test PASS ...` |
 
 Mọi lệnh `na` / `sa` hợp lệ (SMS hoặc Server) đều gọi `NASA_WakeRequest()`: đang thức thì hoãn ngủ thêm 120 s. Lúc ngủ sâu sóng đã tắt nên lệnh không tới được thiết bị.
@@ -418,7 +418,7 @@ Mọi lệnh `na` / `sa` hợp lệ (SMS hoặc Server) đều gọi `NASA_WakeR
 Cấu hình (`AppConfig_t`) lưu ở hai nơi mỗi lần `CFG_Save()`:
 
 1. Flash rời sector 0 và 1: cả struct + CRC (`CFG_FLASH_MAGIC` = `NASA`).
-2. File `C:/rv26.cfg` dạng `key=value`: `host port plate pmove pstop acc spdth silent dout ph1 ph2 ph3 park rsd rsh lock en days dname dlic dlog lmday gnss slp slpd slpw`.
+2. File `C:/rv26.cfg` dạng `key=value`: `host port plate pmove pstop acc spdth silent dout ph1 ph2 ph3 park rsd rsh lock en days dname dlic dlog lmday gnss slp slpd slpp`.
 
 Khi nạp, flash được ưu tiên; nếu cả hai sector sai CRC (ví dụ struct vừa thêm trường như `gnssMode`, hay 3 trường ngủ `sleepEnabled` / `sleepDelaySec` / `sleepWakeSec`) thì đọc file, file cũng không có thì dùng mặc định. File cũ chưa có `slp*` thì lấy mặc định trong [app_config.h](app_config.h); giá trị ngoài khoảng cho phép cũng về mặc định.
 
@@ -447,13 +447,16 @@ stateDiagram-v2
     AWAKE --> SLEEP : ACC tắt + đứng yên ≥ thời gian chờ (30 phút, ắc quy yếu 60 s), đã phát bù xong, hết thời gian giữ thức → gửi !NASA,2 cuối, ngắt Server, CFUN=4, GNSS tắt
     SLEEP --> SLEEP : mỗi 8 s đọc chân ACC + ngắt LIS3DSH, nuôi watchdog
     SLEEP --> AWAKE : chân ACC mức bật / đủ số ngắt rung / tắt ngủ bằng lệnh 42 → CFUN=1, GNSS bật, đăng nhập lại, gửi !NASA,2
+    SLEEP --> PERIODIC : hết chu kỳ thức định kỳ (mặc định 6 giờ) → CFUN=1, GNSS bật, đăng nhập
+    PERIODIC --> SLEEP : đã gửi !NASA,2 và phát bù xong, hoặc quá 180 s (lưu điểm mù)
+    PERIODIC --> AWAKE : ACC bật / xe chạy / FOTA / lệnh SMS, Server
 ```
 
 | Điều kiện | Giá trị | Ở đâu |
 |---|---|---|
 | Bật / tắt | Mặc định bật | `SLEEP_ENABLE_DEFAULT`, lệnh 42 |
 | Thời gian chờ trước khi ngủ | 30 phút (1 phút đến 24 giờ) | `SLEEP_DELAY_SEC_DEFAULT`, lệnh 42 |
-| Thức định kỳ | Không có. Trường `sleepWakeSec` / khóa `slpw` chỉ còn giữ để đọc cấu hình cũ | — |
+| Thức định kỳ | Mỗi 6 giờ tính từ lúc vào ngủ (5 phút đến 24 giờ, 0 = tắt), gửi 1 `!NASA,2` rồi ngủ lại; tối đa 180 s mỗi lần | `SLEEP_WAKE_PERIOD_SEC_DEFAULT`, `SLEEP_PERIODIC_AWAKE_MAX_SEC`, lệnh 42 (khóa `slpp`) |
 | Giữ thức sau khi thức vì rung / ngắt ACC giả | 120 s | `SLEEP_EVENT_HOLD_SEC` |
 | Ắc quy yếu | Dưới 11,0 V 3 lần đo liên tiếp (mỗi 10 s, chỉ đo khi đang thức và ACC tắt) → ngủ sau 60 s; hết yếu khi lên 11,3 V | `SLEEP_LOW_BATT_*` |
 

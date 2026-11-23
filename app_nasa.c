@@ -80,6 +80,10 @@ static int      s_accWireSeenOn = 0;          /* dây ACC đã từng báo ON t�
 static uint32_t s_idleStartTick = 0;          /* ACC tắt + đứng yên từ lúc này, 0 = chưa */
 static uint32_t s_holdStartTick = 0;          /* thức vì sự kiện từ lúc này, 0 = không giữ */
 static uint32_t s_sleepStartTick = 0;
+/* Thức định kỳ lúc ngủ (CFG_GetSleepWakeSec): gửi 1 bản tin rồi ngủ lại */
+static int      s_periodicWake = 0;           /* đang thức định kỳ */
+static int      s_periodicSent = 0;           /* đã gửi được bản tin vị trí trong lần thức này */
+static uint32_t s_periodicTick = 0;           /* lúc bắt đầu thức định kỳ */
 static int      s_battLow = 0;
 static int      s_battLowCnt = 0;
 static uint32_t s_battCheckTick = 0;
@@ -587,6 +591,7 @@ static int SendTrackOrBackup(int msgCode, const char *dateTime, uint8_t csq)
     }
     s_prevSentHeadingDeg = gps.headingDeg;
     s_messageIdNum++;
+    if (s_periodicWake) s_periodicSent = 1;
     return 0;
 }
 
@@ -899,15 +904,21 @@ static void SleepStoreReport(void)
 /**
  * Vào ngủ sâu: gửi bản tin cuối, ngắt Server, tắt sóng / GNSS, nạp cảm biến rung,
  * cho module sleep. Từ đây NASA_RunStep chỉ chạy SleepDeepStep.
+ * lastReport = 0: thức định kỳ đã gửi bản tin rồi, không gửi thêm.
  */
-static void SleepEnter(uint32_t idleSec)
+static void SleepEnter(uint32_t idleSec, int lastReport)
 {
-    HAL_LOG("[SLEEP] enter: ACC off & still %lus, V=%.1f%s, server=%d -> last report, server off, radio off, GNSS off, tasks idle",
+    HAL_LOG("[SLEEP] enter%s: ACC off & still %lus, V=%.1f%s, server=%d -> %sserver off, radio off, GNSS off, tasks idle",
+            s_periodicWake ? " (after periodic wake)" : "",
             (unsigned long)idleSec, (double)NASA_GetVoltage(), s_battLow ? " (low)" : "",
-            NASA_IsSessionActive());
+            NASA_IsSessionActive(), lastReport ? "last report, " : "");
+    s_periodicWake = 0;
+    s_periodicSent = 0;
 
     /* Bản tin vị trí cuối trước khi ngủ */
-    if (NASA_IsSessionActive()) {
+    if (!lastReport) {
+        /* thức định kỳ: bản tin đã gửi sau đăng nhập */
+    } else if (NASA_IsSessionActive()) {
         char dtBuf[40] = {0};
         uint8_t csq = 0;
         BuildDateTimeAutoFallback(dtBuf, sizeof(dtBuf));
@@ -1000,6 +1011,25 @@ static void SleepPoll(void)
 
         SleepCheckBattery();
         block = SleepBlockReason();
+        if (s_periodicWake) {
+            int done;
+
+            if (block || wakeReq) {
+                /* ACC bật / xe chạy / FOTA / lệnh từ Server, SMS: thức hẳn như thường */
+                HAL_LOG("[SLEEP] periodic wake -> full wake: %s", block ? block : wakeReason);
+                s_periodicWake = 0;
+                s_periodicSent = 0;
+            } else {
+                /* Đã gửi bản tin và phát bù hết điểm mù, hoặc quá thời gian: ngủ lại */
+                done = s_periodicSent && Backup_Count() == 0;
+                if (!done && (now - s_periodicTick) < SecToTicks(SLEEP_PERIODIC_AWAKE_MAX_SEC)) return;
+                if (!done) HAL_LOG("[SLEEP] periodic wake: no report after %ds (server=%d) -> sleep again",
+                                   SLEEP_PERIODIC_AWAKE_MAX_SEC, NASA_IsSessionActive());
+                SleepEnter((s_idleStartTick != 0) ? (now - s_idleStartTick) / HAL_TICKS_PER_SEC : 0,
+                           !s_periodicSent);
+                return;
+            }
+        }
         if (wakeReq) s_holdStartTick = NonZeroTick(now); /* SMS / lệnh khi đang thức: hoãn ngủ */
         if (block) {
             s_idleStartTick = 0;
@@ -1021,7 +1051,7 @@ static void SleepPoll(void)
         if (idleSec < (uint32_t)delaySec) return;
         /* Đang có phiên mà còn điểm mù: phát bù hết rồi mới ngủ */
         if (NASA_IsSessionActive() && Backup_Count() > 0) return;
-        SleepEnter(idleSec);
+        SleepEnter(idleSec, 1);
         return;
     }
 
@@ -1059,6 +1089,16 @@ static void SleepPoll(void)
     if (TiltPoll()) {
         s_idleStartTick = NonZeroTick(GetTickNow());
         SleepExit("tilt");
+        return;
+    }
+    /* Thức định kỳ: bật sóng, kết nối, gửi 1 bản tin (SleepExit đặt gửi ngay) rồi ngủ lại */
+    if (CFG_GetSleepWakeSec() > 0 &&
+        (now - s_sleepStartTick) >= SecToTicks((uint32_t)CFG_GetSleepWakeSec())) {
+        SleepExit("periodic");
+        s_periodicWake = 1;
+        s_periodicSent = 0;
+        s_periodicTick = NonZeroTick(GetTickNow());
+        s_holdStartTick = 0; /* ngủ lại ngay khi gửi xong, không giữ SLEEP_EVENT_HOLD_SEC */
         return;
     }
     if (SLEEP_STATUS_LOG_SEC > 0 &&
@@ -1911,6 +1951,11 @@ static void NoAccMovePoll(void)
 int NASA_IsMovingNoAcc(void)
 {
     return s_naActive;
+}
+
+int NASA_IsPeriodicWake(void)
+{
+    return (s_pwrState == PWR_AWAKE && s_periodicWake) ? 1 : 0;
 }
 
 // Xử lý logic chính của NASA

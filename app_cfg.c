@@ -129,7 +129,8 @@ static void ApplyKeyValue(const char *key, const char *val)
         s_cfg.sleepEnabled = atoi(val);
     } else if (strcmp(key, "slpd") == 0) {
         s_cfg.sleepDelaySec = atoi(val);
-    } else if (strcmp(key, "slpw") == 0) {
+    } else if (strcmp(key, "slpp") == 0) {
+        /* Khóa "slpw" cũ (3600, lúc chưa dùng) bỏ qua: nhận mặc định mới */
         s_cfg.sleepWakeSec = atoi(val);
     } else if (strcmp(key, "mwoff") == 0) {
         s_cfg.motionWakeOff = atoi(val);
@@ -375,7 +376,7 @@ int CFG_Save(void)
                    "host=%s\nport=%d\nplate=%s\npmove=%d\npstop=%d\nacc=%d\nspdth=%d\n"
                    "silent=%d\ndout=%d\nph1=%s\nph2=%s\nph3=%s\npark=%d\nrsd=%d\nrsh=%d\n"
                    "lock=%d\nen=%d\ndays=%d\ndname=%s\ndlic=%s\ndlog=%d\nlmday=%d\ngnss=%d\n"
-                   "slp=%d\nslpd=%d\nslpw=%d\nmwoff=%d\nmdel=%d\nmev=%d\nmwin=%d\naoff=%d\n",
+                   "slp=%d\nslpd=%d\nslpp=%d\nmwoff=%d\nmdel=%d\nmev=%d\nmwin=%d\naoff=%d\n",
                    s_cfg.serverHost, s_cfg.serverPort, s_cfg.plate,
                    s_cfg.periodMovingSec, s_cfg.periodStoppedSec, s_cfg.accMode, s_cfg.speedThreshKph,
                    s_cfg.silentMode, s_cfg.doutOn, s_cfg.phone1, s_cfg.phone2, s_cfg.phone3,
@@ -451,6 +452,7 @@ int CFG_GetSleepDelaySec(void)
 }
 int CFG_GetSleepWakeSec(void)
 {
+    if (s_cfg.sleepWakeSec == 0) return 0; /* tắt thức định kỳ */
     if (s_cfg.sleepWakeSec < SLEEP_WAKE_PERIOD_SEC_MIN || s_cfg.sleepWakeSec > SLEEP_WAKE_PERIOD_SEC_MAX)
         return SLEEP_WAKE_PERIOD_SEC_DEFAULT;
     return s_cfg.sleepWakeSec;
@@ -617,7 +619,9 @@ void CFG_SetSleep(int enabled, int delaySec, int wakeSec)
         if (delaySec > SLEEP_DELAY_SEC_MAX) delaySec = SLEEP_DELAY_SEC_MAX;
         s_cfg.sleepDelaySec = delaySec;
     }
-    if (wakeSec >= 0) {
+    if (wakeSec == 0) {
+        s_cfg.sleepWakeSec = 0; /* tắt thức định kỳ */
+    } else if (wakeSec > 0) {
         if (wakeSec < SLEEP_WAKE_PERIOD_SEC_MIN) wakeSec = SLEEP_WAKE_PERIOD_SEC_MIN;
         if (wakeSec > SLEEP_WAKE_PERIOD_SEC_MAX) wakeSec = SLEEP_WAKE_PERIOD_SEC_MAX;
         s_cfg.sleepWakeSec = wakeSec;
