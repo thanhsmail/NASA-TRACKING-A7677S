@@ -3,7 +3,7 @@
  * @brief   HAL - Logging / Debug API Contract
  *
  * App layer chi goi HAL_LOG(...). Implementation thuc te nam trong
- * hal/impl/hal_impl_simcom.c (sAPI_Debug) hoac bat ky backend nao khac.
+ * port/<chip>/port_log.c (sAPI_Debug) hoac bat ky backend nao khac.
  *
  * Quy tac: KHONG include simcom_api.h o day -- chi stdarg.h.
  */

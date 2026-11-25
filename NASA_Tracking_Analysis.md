@@ -4,9 +4,9 @@ Tài liệu mô tả chi tiết cấu trúc firmware giám sát hành trình ch�
 
 | Thông tin | Giá trị | Ở đâu |
 |---|---|---|
-| Tên thiết bị | `RV4G` | `NASA_DEVICE_NAME`, [app_config.h](app_config.h) |
-| Phiên bản firmware | `v1.11.261123` (gửi trong bản tin đăng nhập, `sa,33`) | `NASA_FW_CODE`, [app_config.h](app_config.h) |
-| Dòng log khởi động | `NASA_TRACKING v1.11.261123` | [sc_application.c](sc_application.c), in `NASA_FW_CODE` |
+| Tên thiết bị | `RV4G` | `NASA_DEVICE_NAME`, [app_config.h](app/app_config.h) |
+| Phiên bản firmware | `v1.11.261123` (gửi trong bản tin đăng nhập, `sa,33`) | `NASA_FW_CODE`, [app_config.h](app/app_config.h) |
+| Dòng log khởi động | `NASA_TRACKING v1.11.261123` | [app_main.c](app/app_main.c), in `NASA_FW_CODE` |
 | Phần cứng | `v1.0` | `NASA_HW_CODE` |
 | Server mặc định | `103.57.209.16:2590` | `NASA_SERVER_HOST_DEFAULT`, `NASA_SERVER_PORT_DEFAULT` |
 | Biến thể build | `A7677S_MANV_1606_V702_OPENSDK` | `.\GNUmake.exe A7677S_MANV_1606_V702_OPENSDK` (chạy trong cmd/PowerShell) |
@@ -15,18 +15,19 @@ Tài liệu mô tả chi tiết cấu trúc firmware giám sát hành trình ch�
 
 ## 1. Phân lớp
 
-Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần cứng, mạng, hệ điều hành đi qua các hàm `HAL_*`; chỉ [hal/impl/hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) được include `simcom_api.h`. Nhờ vậy hai bộ quy tắc nghiệp vụ (dừng đỗ, lái xe) chạy được unit test trên PC với HAL giả lập.
+Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần cứng, mạng, hệ điều hành đi qua các hàm `HAL_*`; chỉ các file `port_*.c` trong [port/simcom_a7677s/](port/simcom_a7677s/) được include header SDK (qua `port_sdk.h`); danh sách hàm SDK đang dùng ở [SDK_API_LIST.md](port/simcom_a7677s/SDK_API_LIST.md). Nhờ vậy khi nâng hoặc đổi SDK chỉ phải sửa phần trong `port/`.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────┐
-│ ỨNG DỤNG    sc_application.c, app_*.c, drv_en25qh64a.c            │
+│ ỨNG DỤNG    app/: app_main.c, app_*.c, drv_*.c                    │
 │             (logic nghiệp vụ, giao thức !NASA, lệnh, bộ đệm)       │
 ├────────────────────────────────────────────────────────────────────┤
 │ HAL         hal/hal_os.h  hal_net.h  hal_gnss.h  hal_gpio.h        │
 │             hal_adc.h  hal_spi.h  hal_fs.h  hal_sms.h  hal_fota.h  │
 │             hal_log.h                                              │
 ├────────────────────────────────────────────────────────────────────┤
-│ CÀI ĐẶT     hal/impl/hal_impl_simcom.c  → gọi sAPI_* của SDK       │
+│ CÀI ĐẶT     port/simcom_a7677s/: port_entry.c (điểm vào SDK),      │
+│             port_*.c → gọi sAPI_* của SDK, board_pins.h            │
 ├────────────────────────────────────────────────────────────────────┤
 │ KERNEL      SIMCom OpenSDK (kernel/, sc_lib/) — chip GNSS          │
 │             Unicorecomm bản trong nước (SC_DRIVER_GNSS_UNIC)       │
@@ -39,39 +40,51 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 
 ```text
 NASA-TRACKING-A7677S/
-├── sc_application.c        Điểm vào userSpace_Main(): khởi tạo, tạo task nasa_reporter và SmsRecvTask
-├── app_config.h            Toàn bộ hằng số: chu kỳ, ngưỡng, chân GPIO, GNSS, AGPS, FOTA, phiên bản
-│
-├── app_nasa.c / .h         Máy trạng thái kết nối & báo cáo, đóng gói bản tin !NASA, watchdog phần mềm
-├── app_network.c / .h      PDP, socket TCP tới Server, gom dòng nhận về và phân loại (!NASA / lệnh)
-├── app_gps.c / .h          Phân tích URC GNSS, lọc chạy/dừng, điểm neo khi đứng yên, odometer, AGPS, log debug
-├── app_park_rules.c / .h   Quy tắc dừng đỗ → bản tin !NASA,6 (C thuần, có unit test)
-├── app_lxlt_rules.c / .h   Quy tắc phiên lái / lái xe liên tục → bản tin !NASA,5 (C thuần, có unit test)
-├── app_cmd.c / .h          Phân tích & thực thi lệnh na,<mã>,... / sa,<mã> từ SMS hoặc Server
-├── app_sms.c / .h          Cấu hình modem SMS, tách số gửi + nội dung, chuyển cho app_cmd, trả lời SMS
-├── app_cfg.c / .h          Cấu hình thiết bị: flash (sector 0/1) + file C:/rv26.cfg
-├── app_backup.c / .h       Bộ đệm điểm mù: vòng bản ghi trên flash rời, dự phòng file C:/rv26_bak.dat
-├── app_fota.c / .h         Cập nhật firmware từ URL (lệnh 33), task fota_task
-├── app_sim.c / .h          Phát hiện rút / cắm / đổi SIM bằng cách hỏi định kỳ
-├── app_indication.c / .h   Task gpio_status: lọc ACC, LED, DOUT, giám sát watchdog
-├── app_utils.c / .h        Tick, định dạng ngày giờ, task ntp_sync
-├── drv_en25qh64a.c / .h    Driver flash SPI 8 MB (W25Q64JV / EN25QH64A), tự dò kênh SPI
+├── app/                    Code ứng dụng (chỉ gọi hal/*.h); app_sources.cmake liệt kê nguồn
+│   ├── app_main.c / .h         APP_Main(): khởi tạo, tạo task nasa_reporter và SmsRecvTask; abort()
+│   ├── app_config.h            Toàn bộ hằng số: chu kỳ, ngưỡng, chân GPIO, GNSS, AGPS, FOTA, phiên bản
+│   │
+│   ├── app_nasa.c / .h         Máy trạng thái kết nối & báo cáo, đóng gói bản tin !NASA, watchdog phần mềm
+│   ├── app_network.c / .h      PDP, socket TCP tới Server, gom dòng nhận về và phân loại (!NASA / lệnh)
+│   ├── app_gps.c / .h          Phân tích URC GNSS, lọc chạy/dừng, điểm neo khi đứng yên, odometer, AGPS, log debug
+│   ├── app_park_rules.c / .h   Quy tắc dừng đỗ → bản tin !NASA,6 (C thuần)
+│   ├── app_lxlt_rules.c / .h   Quy tắc phiên lái / lái xe liên tục → bản tin !NASA,5 (C thuần)
+│   ├── app_cmd.c / .h          Phân tích & thực thi lệnh na,<mã>,... / sa,<mã> từ SMS hoặc Server
+│   ├── app_sms.c / .h          Cấu hình modem SMS, tách số gửi + nội dung, chuyển cho app_cmd, trả lời SMS
+│   ├── app_cfg.c / .h          Cấu hình thiết bị: flash (sector 0/1) + file C:/rv26.cfg
+│   ├── app_backup.c / .h       Bộ đệm điểm mù: vòng bản ghi trên flash rời, dự phòng file C:/rv26_bak.dat
+│   ├── app_fota.c / .h         Cập nhật firmware từ URL (lệnh 33), task fota_task
+│   ├── app_sim.c / .h          Phát hiện rút / cắm / đổi SIM bằng cách hỏi định kỳ
+│   ├── app_indication.c / .h   Task gpio_status: lọc ACC, LED, DOUT, giám sát watchdog
+│   ├── app_utils.c / .h        Tick, định dạng ngày giờ, task ntp_sync
+│   ├── app_com.c / .h          Cấu hình qua cổng COM ảo USB
+│   ├── drv_en25qh64a.c / .h    Driver flash SPI 8 MB (W25Q64JV / EN25QH64A), tự dò kênh SPI
+│   ├── drv_lis3dsh.c / .h      Driver cảm biến gia tốc LIS3DSH (I2C)
+│   └── app_sources.cmake       Danh sách nguồn + include, được CMakeLists.txt gốc INCLUDE
 │
 ├── hal/                    Giao diện HAL (*.h) + README
-│   └── impl/hal_impl_simcom.c   Cài đặt duy nhất gọi sAPI_*; có task gnss_task và agps_task
 │
-├── tests/                  Unit test chạy trên PC (CMake)
-│   ├── mocks/              HAL giả lập: os, net, gnss, gpio, adc
-│   └── unit/               test_park_rules.c, test_lxlt_rules.c
+├── port/simcom_a7677s/     Phần phụ thuộc SDK SIMCom
+│   ├── port_entry.c        Điểm vào SDK: userSpaceEntry, userSpace_Main() → ApiMapInit() → APP_Main()
+│   ├── port_sdk.h          Gom header SDK (chỉ port_*.c include)
+│   ├── port_log.c          HAL_LOG, HAL_USBCOM (task usb_log)
+│   ├── port_os.c           HAL_OS: task, mutex, hàng đợi, tick, ngủ, watchdog
+│   ├── port_periph.c       HAL_GPIO, HAL_SPI, HAL_I2C, HAL_ADC
+│   ├── port_net.c          HAL_NET: PDP, socket TCP, sóng, SIM, IMEI
+│   ├── port_gnss.c         HAL_GNSS: task gnss_task và agps_task, RTC, LBS
+│   ├── port_sms.c          HAL_SMS
+│   ├── port_fs_fota.c      HAL_FS, HAL_FOTA
+│   ├── board_pins.h        Pad GPIO, kênh SPI / I2C / ADC của board RV26
+│   └── SDK_API_LIST.md     Hàm / kiểu SDK đang dùng, để đối chiếu khi nâng SDK
 │
-└── out/A7677S_MANV_1606_V702_OPENSDK/   Kết quả build: customer_app.bin (FOTA), burn.zip (nạp cáp)
+└── out/A7677S_MANV_1606_V702_OPENSDK/   Kết quả build: customer_app.bin (FOTA), burn.zip (nạp cáp); không commit
 ```
 
 ---
 
 ## 3. Khởi động
 
-`userSpace_Main()` ([sc_application.c](sc_application.c)) chạy một lần theo thứ tự:
+`userSpace_Main()` ([port_entry.c](port/simcom_a7677s/port_entry.c)) gọi `ApiMapInit()` rồi `APP_Main()` ([app_main.c](app/app_main.c)); chạy một lần theo thứ tự:
 
 | Bước | Hàm | Việc làm |
 |---|---|---|
@@ -93,13 +106,13 @@ NASA-TRACKING-A7677S/
 
 | Task | Ưu tiên | Stack | Tạo ở | Chu kỳ / kích hoạt | Công việc |
 |---|---|---|---|---|---|
-| `gnss_task` | 10 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Mỗi URC (1 giây), chờ tối đa 5 giây (GNSS tắt khi ngủ: 60 giây) | Nhận `+CGNSSINFO`, gọi `GPS_OnUrcString()`; 60 giây không có URC thì bật lại GNSS; tắt / bật GNSS theo `HAL_GNSS_SetPower()` |
-| `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp liên tục, nghỉ 1 giây mỗi vòng TRACKING (ngủ sâu: 8 giây, chỉ đọc ACC / cảm biến) | `NASA_RunStep()`: chế độ ngủ, kết nối, đăng nhập, gửi bản tin, phát bù, quy tắc |
-| `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ URC SMS (timeout 1 giây, ngủ: 60 giây) | Đọc SMS → thực thi lệnh → xóa SMS; gọi `SIM_Poll()` (không gọi khi ngủ) |
-| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | 0,5 giây (100 tick, 200 tick/giây); ngủ: chờ hàng đợi tối đa 60 giây | Lọc ACC, LED, DOUT, kiểm tra watchdog phần mềm, nuôi watchdog phần cứng; ngắt ACC đánh thức |
-| `fota_task` | 20 | 10 KB | [app_fota.c](app_fota.c) | Chỉ tạo khi có lệnh 33 | Tải và nạp firmware |
-| `agps_task` | 25 | 4 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Chỉ tạo khi có yêu cầu AGPS đầu tiên | Gọi `sAPI_GnssAgpsSeviceOpen()` |
-| `ntp_sync` | 130 | — | [app_utils.c](app_utils.c) | Chỉ tạo khi RTC chưa hợp lệ | Hiện **chưa đồng bộ thật** (chỉ in log) |
+| `gnss_task` | 10 | 4 KB | [port_gnss.c](port/simcom_a7677s/port_gnss.c) | Mỗi URC (1 giây), chờ tối đa 5 giây (GNSS tắt khi ngủ: 60 giây) | Nhận `+CGNSSINFO`, gọi callback `GPS_OnUrcString()` (đăng ký trong `GPS_Init()` bằng `HAL_GNSS_SetLineCallback()`); 60 giây không có URC thì bật lại GNSS; tắt / bật GNSS theo `HAL_GNSS_SetPower()` |
+| `nasa_reporter` | 15 | 10 KB | [app_main.c](app/app_main.c) | Lặp liên tục, nghỉ 1 giây mỗi vòng TRACKING (ngủ sâu: 8 giây, chỉ đọc ACC / cảm biến) | `NASA_RunStep()`: chế độ ngủ, kết nối, đăng nhập, gửi bản tin, phát bù, quy tắc |
+| `SmsRecvTask` | 18 | 8 KB | [app_main.c](app/app_main.c) | Chờ URC SMS (timeout 1 giây, ngủ: 60 giây) | Đọc SMS → thực thi lệnh → xóa SMS; gọi `SIM_Poll()` (không gọi khi ngủ) |
+| `gpio_status` | 20 | 4 KB | [app_indication.c](app/app_indication.c) | 0,5 giây (100 tick, 200 tick/giây); ngủ: chờ hàng đợi tối đa 60 giây | Lọc ACC, LED, DOUT, kiểm tra watchdog phần mềm, nuôi watchdog phần cứng; ngắt ACC đánh thức |
+| `fota_task` | 20 | 10 KB | [app_fota.c](app/app_fota.c) | Chỉ tạo khi có lệnh 33 | Tải và nạp firmware |
+| `agps_task` | 25 | 4 KB | [port_gnss.c](port/simcom_a7677s/port_gnss.c) | Chỉ tạo khi có yêu cầu AGPS đầu tiên | Gọi `sAPI_GnssAgpsSeviceOpen()` |
+| `ntp_sync` | 130 | — | [app_utils.c](app/app_utils.c) | Chỉ tạo khi RTC chưa hợp lệ | Hiện **chưa đồng bộ thật** (chỉ in log) |
 
 Quy ước dùng chung:
 
@@ -127,7 +140,7 @@ graph TD
 
 ## 5. Máy trạng thái `NASA_RunStep()`
 
-[app_nasa.c](app_nasa.c). Mỗi lần gọi: nuôi watchdog, `SleepPoll()` (vào / ra chế độ ngủ, mục 15), áp dụng đổi SIM nếu có, kiểm tra mất kết nối 15 phút, ghi cấu hình bẩn (mỗi 10 giây), rồi chạy trạng thái hiện tại.
+[app_nasa.c](app/app_nasa.c). Mỗi lần gọi: nuôi watchdog, `SleepPoll()` (vào / ra chế độ ngủ, mục 15), áp dụng đổi SIM nếu có, kiểm tra mất kết nối 15 phút, ghi cấu hình bẩn (mỗi 10 giây), rồi chạy trạng thái hiện tại.
 
 ```mermaid
 stateDiagram-v2
@@ -206,9 +219,9 @@ Mỗi bản tin kết thúc bằng `*<checksum>` rồi `\r` (bản tin đăng nh
 | `!NASA,6` | Dừng đỗ (6-1 / 6-2 / 6-3) | `msgId, ngày giờ, tên lái xe, GPLX, giờ bắt đầu đỗ, loại, giờ kết thúc, lat, lon, số giây đỗ, số lần đỗ trong ngày` |
 | `!NASA,7` | Phát bù từ backup | Như `!NASA,2`, ngày giờ là lúc ghi bản ghi |
 
-Trả lời lệnh từ Server không phải bản tin `!NASA`: `ServerCmdReply()` ([app_network.c](app_network.c)) gửi nguyên câu trả lời của `app_cmd` kèm `\r\n` (ví dụ `sa,2 dieu khien ra: bat`).
+Trả lời lệnh từ Server không phải bản tin `!NASA`: `ServerCmdReply()` ([app_network.c](app/app_network.c)) gửi nguyên câu trả lời của `app_cmd` kèm `\r\n` (ví dụ `sa,2 dieu khien ra: bat`).
 
-Bit trạng thái (`BuildDeviceStatus`, [app_config.h](app_config.h) `ST_*`):
+Bit trạng thái (`BuildDeviceStatus`, [app_config.h](app/app_config.h) `ST_*`):
 
 | Bit | Ý nghĩa | Bit | Ý nghĩa |
 |---|---|---|---|
@@ -221,7 +234,7 @@ Bit trạng thái (`BuildDeviceStatus`, [app_config.h](app_config.h) `ST_*`):
 
 ### Lý do reset (trường cuối bản tin `!NASA,1`)
 
-Dạng `R-<chính>.<phụ>` (`DetectResetReason()`, [app_nasa.c](app_nasa.c)). Bản firmware cũ chỉ gửi `R-0.0` / `R-2.0` / `R-3.0`.
+Dạng `R-<chính>.<phụ>` (`DetectResetReason()`, [app_nasa.c](app/app_nasa.c)). Bản firmware cũ chỉ gửi `R-0.0` / `R-2.0` / `R-3.0`.
 
 Phần chính, theo PMIC (`sAPI_GetPowerUpEvent`):
 
@@ -231,7 +244,7 @@ Phần chính, theo PMIC (`sAPI_GetPowerUpEvent`):
 | `R-3` | Reset phần mềm (`sAPI_SysReset`) |
 | `R-0` | Lý do khác (báo thức RTC, PMIC lỗi) |
 
-Phần phụ, trường hợp 1: firmware tự reset và đã ghi lý do vào `C:/rv26_rst.dat` (`NASA_SysReset`, mã `RST_CAUSE_*` trong [app_config.h](app_config.h)):
+Phần phụ, trường hợp 1: firmware tự reset và đã ghi lý do vào `C:/rv26_rst.dat` (`NASA_SysReset`, mã `RST_CAUSE_*` trong [app_config.h](app/app_config.h)):
 
 | Mã | Ý nghĩa |
 |---|---|
@@ -271,7 +284,7 @@ Hay gặp:
 
 ---
 
-## 8. Luồng GPS ([app_gps.c](app_gps.c))
+## 8. Luồng GPS ([app_gps.c](app/app_gps.c))
 
 Mỗi giây `gnss_task` đưa một dòng `+CGNSSINFO` vào `GPS_OnUrcString()`. Thứ tự xử lý:
 
@@ -317,9 +330,9 @@ Cấu hình chip GNSS (theo *A76xx Series Open SDK GNSS Application Note V1.02*)
 
 ## 9. Quy tắc nghiệp vụ (C thuần)
 
-Hai module chỉ nhận dữ liệu qua tham số (snapshot GPS, tick, giờ), không gọi HAL, nên có unit test ở [tests/unit/](tests/unit/).
+Hai module chỉ nhận dữ liệu qua tham số (snapshot GPS, tick, giờ), không gọi HAL.
 
-**Dừng đỗ** ([app_park_rules.c](app_park_rules.c), bản tin 6):
+**Dừng đỗ** ([app_park_rules.c](app/app_park_rules.c), bản tin 6):
 
 | Sự kiện | Khi nào |
 |---|---|
@@ -327,7 +340,7 @@ Hai module chỉ nhận dữ liệu qua tham số (snapshot GPS, tick, giờ), k
 | 6-2 | Đang đỗ, mỗi `parkConfirmSec` giây (lệnh 26, mặc định 60, tối đa 900). Đang ngủ sâu: không gửi; số giây đỗ vẫn tính tiếp khi thức |
 | 6-3 | Xe chạy lại; không sớm hơn 5 s sau 6-1 (`PARK_FRAME_GUARD_SEC`) |
 
-**Phiên lái xe** ([app_lxlt_rules.c](app_lxlt_rules.c), bản tin 5):
+**Phiên lái xe** ([app_lxlt_rules.c](app/app_lxlt_rules.c), bản tin 5):
 
 | Sự kiện | Khi nào |
 |---|---|
@@ -340,13 +353,13 @@ Bản tin 5 và 6 phát sinh khi chưa có phiên Server bị bỏ (không lưu 
 
 ---
 
-## 10. Bộ đệm điểm mù ([app_backup.c](app_backup.c))
+## 10. Bộ đệm điểm mù ([app_backup.c](app/app_backup.c))
 
 Bố cục flash rời (sector 4 KB):
 
 | Sector | Nội dung |
 |---|---|
-| 0, 1 | Cấu hình (bản chính, bản sao) — [app_cfg.c](app_cfg.c) |
+| 0, 1 | Cấu hình (bản chính, bản sao) — [app_cfg.c](app/app_cfg.c) |
 | 2, 3 | Nhật ký header hàng đợi, 256 ô, dùng luân phiên |
 | 4 trở đi | Vòng bản ghi 128 byte (32 ô / sector), 65.408 ô |
 
@@ -363,7 +376,7 @@ Bố cục flash rời (sector 4 KB):
 
 ---
 
-## 11. Ngõ vào / ngõ ra ([app_indication.c](app_indication.c))
+## 11. Ngõ vào / ngõ ra ([app_indication.c](app/app_indication.c))
 
 | Tín hiệu | Pad | Xử lý |
 |---|---|---|
@@ -379,9 +392,9 @@ Chế độ im lặng (lệnh 11) tắt cả 3 LED. Mỗi chu kỳ task cũng ki
 
 ---
 
-## 12. Lệnh điều khiển ([app_cmd.c](app_cmd.c))
+## 12. Lệnh điều khiển ([app_cmd.c](app/app_cmd.c))
 
-Lệnh đến từ SMS ([app_sms.c](app_sms.c)) hoặc Server ([app_network.c](app_network.c)) đều vào `CMD_Execute()`. `na,<mã>,...` để đặt, `sa,<mã>` để đọc; trả lời về đúng nguồn (SMS về số gửi, Server bằng một dòng văn bản trên cùng socket). Lệnh cũ `reset` / `reset#` và `update,...` vẫn được nhận.
+Lệnh đến từ SMS ([app_sms.c](app/app_sms.c)) hoặc Server ([app_network.c](app/app_network.c)) đều vào `CMD_Execute()`. `na,<mã>,...` để đặt, `sa,<mã>` để đọc; trả lời về đúng nguồn (SMS về số gửi, Server bằng một dòng văn bản trên cùng socket). Lệnh cũ `reset` / `reset#` và `update,...` vẫn được nhận.
 
 | Mã | Chức năng | Ví dụ |
 |---|---|---|
@@ -414,18 +427,18 @@ Mọi lệnh `na` / `sa` hợp lệ (SMS hoặc Server) đều gọi `NASA_WakeR
 
 ---
 
-## 13. Cấu hình ([app_cfg.c](app_cfg.c))
+## 13. Cấu hình ([app_cfg.c](app/app_cfg.c))
 
 Cấu hình (`AppConfig_t`) lưu ở hai nơi mỗi lần `CFG_Save()`:
 
 1. Flash rời sector 0 và 1: cả struct + CRC (`CFG_FLASH_MAGIC` = `NASA`).
 2. File `C:/rv26.cfg` dạng `key=value`: `host port plate pmove pstop acc spdth silent dout ph1 ph2 ph3 park rsd rsh lock en days dname dlic dlog lmday gnss slp slpd slpp`.
 
-Khi nạp, flash được ưu tiên; nếu cả hai sector sai CRC (ví dụ struct vừa thêm trường như `gnssMode`, hay 3 trường ngủ `sleepEnabled` / `sleepDelaySec` / `sleepWakeSec`) thì đọc file, file cũng không có thì dùng mặc định. File cũ chưa có `slp*` thì lấy mặc định trong [app_config.h](app_config.h); giá trị ngoài khoảng cho phép cũng về mặc định.
+Khi nạp, flash được ưu tiên; nếu cả hai sector sai CRC (ví dụ struct vừa thêm trường như `gnssMode`, hay 3 trường ngủ `sleepEnabled` / `sleepDelaySec` / `sleepWakeSec`) thì đọc file, file cũng không có thì dùng mặc định. File cũ chưa có `slp*` thì lấy mặc định trong [app_config.h](app/app_config.h); giá trị ngoài khoảng cho phép cũng về mặc định.
 
 ---
 
-## 14. Cập nhật firmware ([app_fota.c](app_fota.c))
+## 14. Cập nhật firmware ([app_fota.c](app/app_fota.c))
 
 | Tên file cuối URL | Loại | Cách nạp |
 |---|---|---|
@@ -440,7 +453,7 @@ Thử lại tối đa 3 lần, cách 10 s. Kết quả báo về nguồn gửi l
 
 Mục đích: xe tắt máy để lâu không làm cạn bình. Khi ngủ, thiết bị dừng mọi tác vụ: ngắt Server, tắt sóng, tắt GNSS, tắt LED. Chỉ còn đọc chân ACC và cảm biến gia tốc để biết lúc nào phải thức.
 
-Logic nằm ở `SleepPoll()` và `SleepDeepStep()` trong [app_nasa.c](app_nasa.c). Phần cứng đi qua HAL: `HAL_OS_SystemSleepEnable()` (`sAPI_SystemSleepSet`), `HAL_GPIO_WakeupEnable()` (`sAPI_GpioConfig` + `sAPI_GpioWakeupEnable`), `HAL_NET_SetFlightMode()` (CFUN=4 / CFUN=1), `HAL_GNSS_SetPower()` (gnss_task tắt / bật chip).
+Logic nằm ở `SleepPoll()` và `SleepDeepStep()` trong [app_nasa.c](app/app_nasa.c). Phần cứng đi qua HAL: `HAL_OS_SystemSleepEnable()` (`sAPI_SystemSleepSet`), `HAL_GPIO_WakeupEnable()` (`sAPI_GpioConfig` + `sAPI_GpioWakeupEnable`), `HAL_NET_SetFlightMode()` (CFUN=4 / CFUN=1), `HAL_GNSS_SetPower()` (gnss_task tắt / bật chip).
 
 ```mermaid
 stateDiagram-v2
@@ -528,12 +541,12 @@ Chưa kiểm trên thiết bị: dòng tiêu thụ khi ngủ (phải rút USB kh
 |---|---|---|
 | `nasa_reporter` không nuôi watchdog 180 s | Reset | `gpio_status` |
 | Mất phiên Server liên tục 15 phút (không tính lúc đang ngủ) | Reset | `CheckNetworkDisconnTimeout` |
-| `gpio_status` / cả ứng dụng treo, hoặc `gnss_task` không chạy vòng nào 120 s (`GNSS_TASK_HANG_SEC`) | Watchdog phần cứng 16 s (`HW_WDT_PERIOD_REG`) reset; chỉ bật sau `NASA_Init` | [app_indication.c](app_indication.c), `HAL_OS_HwWatchdog*` |
+| `gpio_status` / cả ứng dụng treo, hoặc `gnss_task` không chạy vòng nào 120 s (`GNSS_TASK_HANG_SEC`) | Watchdog phần cứng 16 s (`HW_WDT_PERIOD_REG`) reset; chỉ bật sau `NASA_Init` | [app_indication.c](app/app_indication.c), `HAL_OS_HwWatchdog*` |
 | Không có URC GNSS nào 60 s (`GNSS_NO_URC_RESTART_SEC`) | Tắt / bật lại GNSS, cấu hình lại từ đầu | `gnss_task` |
 | Không nhận byte nào từ Server `SERVER_SILENT_RECONNECT_SEC` giây (hiện = 0: tắt, vì Server chỉ trả ACK đăng nhập nên cứ 10 phút lại ngắt kết nối vô cớ) | Ngắt socket → STATE_ERROR_RETRY → kết nối và đăng nhập lại | `Network_RecvPoll` |
 | Đến giờ lịch reset (lệnh 32) | Reset | `Handle_StateTracking` |
-| `abort()` | Reset | [sc_application.c](sc_application.c) |
-| SIM không sẵn sàng 2 lần hỏi (mỗi 5 s), quá 30 s | Tắt / bật sóng (CFUN 0/1) mỗi 60 s | [app_sim.c](app_sim.c) |
+| `abort()` | Reset | [app_main.c](app/app_main.c) |
+| SIM không sẵn sàng 2 lần hỏi (mỗi 5 s), quá 30 s | Tắt / bật sóng (CFUN 0/1) mỗi 60 s | [app_sim.c](app/app_sim.c) |
 | SIM sẵn sàng lại hoặc đổi ICCID | Cấu hình lại SMS, đăng nhập lại với ICCID mới | `NASA_OnSimChanged` |
 
 ---

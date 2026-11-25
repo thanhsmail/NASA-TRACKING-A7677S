@@ -21,26 +21,16 @@ typedef struct {
     uint8_t  tm_sec;
 } HalDateTime_t;
 
-/** Du lieu GNSS chuan hoa -- khong phu thuoc SDK */
-typedef struct {
-    double   lat;           /**< Vi do (do thap phan, + = Bac) */
-    double   lon;           /**< Kinh do (do thap phan, + = Dong) */
-    double   speedKnots;    /**< Van toc (knots) */
-    double   headingDeg;    /**< Huong dich chuyen (do, 0-360) */
-    int      satellites;    /**< So ve tinh lock duoc */
-    int      valid;         /**< 1 = du lieu hop le, 0 = chua co fix */
-    uint16_t year;
-    uint8_t  month;
-    uint8_t  day;
-    uint8_t  hour;
-    uint8_t  min;
-    uint8_t  sec;
-} HalGnssInfo_t;
+/**
+ * Callback nhan tung dong URC GNSS tho (vd "+CGNSSINFO: ..."), goi tu gnss_task.
+ * Chuoi chi hop le trong luc goi; ung dung tu phan tich.
+ */
+typedef void (*HalGnssLineCb_t)(const char *line);
 
-typedef void (*HalGnssUrcCb_t)(const HalGnssInfo_t *info, void *ctx);
+/** Dang ky callback nhan dong URC GNSS. Goi truoc HAL_GNSS_UrcListenerStart. NULL = bo dang ky. */
+void HAL_GNSS_SetLineCallback(HalGnssLineCb_t cb);
 
-int HAL_GNSS_GetInfo(HalGnssInfo_t *out);
-void HAL_GNSS_RegisterUrc(HalGnssUrcCb_t cb, void *ctx);
+/** Tao gnss_task: bat GNSS, dang ky URC, dua tung dong vao callback da dang ky. */
 void HAL_GNSS_UrcListenerStart(void);
 
 /**

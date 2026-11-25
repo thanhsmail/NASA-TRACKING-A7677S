@@ -66,18 +66,27 @@ ifneq (,$(findstring _1606_,_${SC_MODULE_BASE}_))
 ABOOT_CFG := releasepack-ASR1606-source
 ASR_MODEL := CRANEL
 NET_MODEL := C1
+PREBOOT_NAME := 2021.10.16
 else ifneq (,$(findstring _1602_,_${SC_MODULE_BASE}_))
 ABOOT_CFG := releasepack-ASR1602-source
 ASR_MODEL := CRANELR
 NET_MODEL := C1
+PREBOOT_NAME := 2022.11.06
 else ifneq (,$(findstring _1603_,_${SC_MODULE_BASE}_))
 ABOOT_CFG := releasepack-ASR1603-source
 ASR_MODEL := CRANEM
 NET_MODEL := C1G
+PREBOOT_NAME := 2020.07.30
 else ifneq (,$(findstring _1601_,_${SC_MODULE_BASE}_))
 ABOOT_CFG := releasepack-ASR1601-source
 ASR_MODEL := CRANE
 NET_MODEL := C1G
+PREBOOT_NAME := 2021.10.16
+else ifneq (,$(findstring _1607_,_${SC_MODULE_BASE}_))
+ABOOT_CFG := releasepack-ASR1607-source
+ASR_MODEL := CRANELG
+NET_MODEL := C1
+PREBOOT_NAME := 2022.11.06
 endif
 
 
@@ -90,90 +99,39 @@ ABOOT_CONFIG_SRC_PATH := ${ROOT_DIR}/AbootTool/configurations/${ABOOT_CFG}
 ABOOT_IMAGES_SRC_NAME := images
 ABOOT_IMAGES_SRC_PATH := ${ROOT_DIR}/AbootTool/configurations/${ABOOT_CFG}
 
+PREBOOT_BIN       := preboot.bin
+PREBOOT_CUST_NAME := n
+
+ifneq (,$(findstring _A7682S_LNXV_1602_V801_OPENSDK_WALNUT_,_$(SC_MODULE_FULL)_))
+PREBOOT_CUST_NAME := 2022.11.06_CUS_WALNUT
+endif
+
 ##########################################
 #     NVM PATH
 ########################################
-
-ifneq (,$(SC_HD_CFG))
-ifeq (,$(findstring _A7672E_FASE_1603_V201_,_$(SC_MODULE_FULL)_)$(findstring _A7672SA_FASE_1603_V201_,_$(SC_MODULE_FULL)_))
-ifneq ($(SC_HD_CFG)_$(SC_HD_CFG),$(patsubst _F%,,$(SC_HD_CFG))_$(patsubst _M%,,$(SC_HD_CFG)))
-ifneq (__,$(findstring A7670,${SC_MODULE})_$(findstring A7672,${SC_MODULE})_$(findstring A7677,${SC_MODULE}))
-#CHIP_PLATFORM START
-	ifneq (,$(findstring _1603_,_${SC_MODULE_BASE}_))
-		NVM_PLATFORM := GPS_CRANEGM
-	endif
-
-	ifneq (,$(findstring _1606_,_${SC_MODULE_BASE}_))
-		NVM_PLATFORM := GPS_CRANEL
-	endif
-
-	ifneq (,$(findstring _1602_,_${SC_MODULE_BASE}_))
-		NVM_PLATFORM := GPS_CRANELR
-	endif
-
-#CHIP_PLATFORM END
-#NVM_PRESET START
-	ifneq (,$(SC_USR_OPT))
-		ifneq ($(wildcard $(PREBUILD_DIR)/NVM/$(SC_USR_OPT)),)
-			NVM_PRESET := $(SC_USR_OPT)
-		endif
-	endif
-	NVM_PRESET ?= NULL
-	ifeq (NULL,${NVM_PRESET})
-		ifneq ($(SC_HD_CFG)$(SC_HD_CFG),$(patsubst %S,,$(SC_HD_CFG))$(patsubst %C,,$(SC_HD_CFG)))
-			ifneq (,$(findstring C_,$(SC_MODULE_FULL)))
-				NVM_PRESET := GENERAL_IN
-			else
-				NVM_PRESET := GENERAL_OUT
-			endif
-		endif
-
-		ifeq (_16MB,$(FLASH_TARGET_SIZE))
-			ifneq (,$(findstring C_,$(SC_MODULE_FULL))$(findstring C1_,$(SC_MODULE_FULL)))
-				NVM_PRESET := GENERAL_IN
-			else
-				NVM_PRESET := GENERAL_OUT
-			endif
-		endif
-	endif
-#NVM_PRESET END
-
-endif#(,$(SC_HD_CFG))
-endif#($(SC_HD_CFG)_$(SC_HD_CFG)
-endif#(_,$(findstring A7670
+NVM_PLATFORM := NULL
+ifneq (,$(findstring UCVSIM,${SC_USR_OPT}))
+	NVM_PLATFORM := UCVSIM
 endif
 
 ifneq (,$(findstring ONOMONDO,${SC_USR_OPT}))
 	NVM_PLATFORM := ONOMONDO
-	NVM_PRESET := GENERAL_IN
-endif
-
-ifneq (,$(findstring _A7677S_MANS_1606_V702_OPENSDK_ADSUN_,_$(SC_MODULE_FULL)_))
-	NVM_PLATFORM := ADSUN
-	NVM_PRESET := GENERAL_OUT
 endif
 
 ifeq (,$(findstring _A7672E_FASE_1603_V201_,_$(SC_MODULE_FULL)_))
 	ifneq (,$(findstring _RU_,_${SC_USR_OPT}_))
 		NVM_PLATFORM := RU
-		NVM_PRESET := GENERAL_OUT
 	endif
 endif
 
 ifneq (,$(findstring _A7680C_LANS_1606_V506_CQCY_,_$(SC_MODULE_FULL)_))
 	NVM_PLATFORM := CQCY
-	NVM_PRESET := GENERAL_IN
-endif
-
-NVM_PRESET ?= NULL
-ifeq (NULL,${NVM_PRESET})
-	NVM_PLATFORM := NULL
 endif
 
 NVM_OUT_NAME := nvm.bin
-NVM_SRC_PATH := ${PREBUILD_DIR}/NVM/${NVM_PLATFORM}/${NVM_PRESET}
+NVM_SRC_PATH := ${PREBUILD_DIR}/NVM/${NVM_PLATFORM}
 
-ifeq (NULL,${NVM_PRESET})
+ifeq (NULL,${NVM_PLATFORM})
 NVM_SRC_NAME := 0KiB.bin
 else
 NVM_SRC_NAME := $(shell python getInfo.py GET_NVM_SIZE ${ABOOT_CONFIG_SRC_PATH}/${ABOOT_SRC_NAME}/config/product/${ASR_PRODUCT_TYPE}.json ${ASR_PRODUCT}).bin
@@ -185,11 +143,28 @@ endif
 ifneq (,$(SC_HD_CFG))
 ifneq (,$(findstring OPENSDK,${SC_MODULE_BASE}))
 FOTA_PARAM_OUT_NAME := FOTA_PARAM.bin
-ifeq (TRUE,${FACTORY})
-FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}/FACTORY
-else
-FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}
-endif
+	ifeq (TRUE,${FACTORY})
+	FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}/FACTORY
+	else
+	FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}
+	endif
+
+	##A1603
+	ifneq (,$(findstring _1603_,_${SC_MODULE_BASE}_))
+		ifeq (SINGLESIM,$(patsubst %A,SINGLESIM,$(SC_HD_CFG)))
+			ifeq (TRUE,${FACTORY})
+			FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}/SingleSIM/FACTORY
+			else
+			FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}/SingleSIM
+			endif
+		else
+			ifeq (TRUE,${FACTORY})
+			FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}/NonSingleSIM/FACTORY
+			else
+			FOTA_PARAM_SRC_PATH := ${PREBUILD_DIR}/FOTA_PARAM/${ASR_MODEL}/NonSingleSIM
+			endif
+		endif
+	endif
 endif
 endif
 
@@ -204,44 +179,74 @@ endif
 endif
 endif
 ##########################################
-#     GPS ASR5311 PATH
+#     GPS PATH
 ########################################
-GPS_PRESET ?= ASR5311
+ifneq (,$(findstring _UC6228_,_${GPS_FIRM}_))
+GPS_OUT_NAME1 := gps_bootloader.bin
+GPS_OUT_NAME2 := gps_firmware.bin
 
+ifneq (,$(findstring _DOMESTIC_,_$(MODULE_TARGET_TYPE)_))
+	GPS_PRESET := domestic
+else
+	GPS_PRESET := foreign
+endif
+
+GPS_SRC_PATH := ${PREBUILD_DIR}/GPS/UC6228/${GPS_PRESET}
+else ifneq (,$(findstring _ASR5311_,_${GPS_FIRM}_))
 GPS_OUT_NAME := jacana_fw.bin
-GPS_SRC_PATH := ${PREBUILD_DIR}/GPS/${GPS_PRESET}
-
-
+ifneq (,$(findstring _1607_,_${SC_MODULE_BASE}_))
+GPS_SRC_PATH := ${PREBUILD_DIR}/GPS/ASR1607_GNSS
+else
+GPS_SRC_PATH := ${PREBUILD_DIR}/GPS/ASR5311_GNSS
+endif
+endif
 ##########################################
 #     DSP PATH
 ########################################
 DSP_SRC_NAME := dsp.bin
 ifneq (,$(findstring _1602_,_${SC_MODULE_BASE}_))
 ifeq (4M,$(patsubst %V,4M,$(SC_HD_CFG)))
-DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}/wifiscan
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_WiFiScan_Reduce_SuLog_Buffer
+## special
+ifneq (,$(findstring _A7682S_LNXV_1602_V801_OPENSDK_,_${SC_MODULE_FULL}_))
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog
+endif
+
 else
 ifneq (,$(findstring _WIFISCAN_,_${SC_USR_OPT}_))
-DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}/wifiscan
-else ifneq (,$(findstring _CSSMS_,_${SC_USR_OPT}_))
-DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}/cssms
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_WiFiScan_Reduce_SuLog_Buffer
+else ifneq (,$(findstring _CSSMS_,_${SC_USR_OPT}_)$(findstring _A7670G_MNMY_1602_UB_V101_,_${SC_MODULE_BASE}_)$(findstring _A7670NA_MNMY_1602_UB_V101_,_$(SC_MODULE_BASE)_)$(findstring _A7670NA_LNMY_1602_UB_V101_,_$(SC_MODULE_BASE)_)$(findstring _A7670G_LNMY_1602_UB_V101_,_${SC_MODULE_BASE}_))
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog_Buffer
 else
-DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}/normal
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog_Buffer
 endif
 endif
 else ifneq (,$(findstring _1606_,_${SC_MODULE_BASE}_))
-DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog
+ifeq (2M,$(patsubst %Y,2M,$(SC_HD_CFG)))
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog_Buffer
+endif
 ifeq (4M,$(patsubst %V,4M,$(SC_HD_CFG)))
 ifneq (,$(findstring _VOLTE_,_${SC_USR_OPT}_))
-DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}/VoLTE
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog_Buffer
 endif
 endif
-else
-ifneq (,$(findstring _A7670G_LABE_1603_V202_,_${SC_MODULE_BASE}_)$(findstring _A7672G_LABE_1603_V202_,_${SC_MODULE_BASE}_))
-DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}/Global
-else
+ifneq (,$(findstring _A7677S_LANV_1606_V702_OPENSDK_,_${SC_MODULE_BASE}_))
+ifneq (,$(findstring _WALNUT_,_${SC_USR_OPT}_))
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog_Buffer
+endif
+endif
+else ifneq (,$(findstring _1603_,_${SC_MODULE_BASE}_))
+## 1603
 DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}
+ifeq (SINGLESIM,$(patsubst %A,SINGLESIM,$(SC_HD_CFG)))
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/${NET_MODEL}/SingleSIM
 endif
+
+else ifneq (,$(findstring _1607_,_${SC_MODULE_BASE}_))
+DSP_SRC_PATH := ${PREBUILD_DIR}/DSP/${ASR_MODEL}/DSP_Reduce_SuLog_Buffer
 endif
+
 define dsp_usr_opt_process
 ifeq ($(1),$(notdir $(wildcard ${DSP_SRC_PATH}/$(1))))
 DSP_SRC_PATH := ${DSP_SRC_PATH}/$(1)
@@ -276,6 +281,11 @@ endif
 ########################################
 BOOT33_SRC_NAME := boot33.bin
 BOOT33_SRC_PATH := ${PREBUILD_DIR}/boot33/${ASR_MODEL}
+ifneq (,$(findstring _1603_,_${SC_MODULE_BASE}_))
+ifeq (SINGLESIM,$(patsubst %A,SINGLESIM,$(SC_HD_CFG)))
+BOOT33_SRC_PATH := ${PREBUILD_DIR}/boot33/${ASR_MODEL}/SingleSIM
+endif
+endif
 
 define boot33_usr_opt_process
 ifeq ($(1),$(notdir $(wildcard ${BOOT33_SRC_PATH}/$(1))))
@@ -300,30 +310,75 @@ endif
 ########################################
 UPDATER_SRC_NAME := updater.bin
 
+#1606
 ifneq (,$(findstring _1606_,_${SC_MODULE_BASE}_))
-	ifneq (,$(findstring A7680C,${SC_MODULE}))
-		ifneq (,$(findstring _V506,_$(SC_HD_OPT)_)$(findstring _V503,_$(SC_HD_OPT)_)$(findstring _V603,_$(SC_HD_OPT)_)$(findstring _V602_,_$(SC_HD_OPT)_))
-			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART4
+#1606 DS
+	ifneq (,$(findstring _DS_,_${SC_MODULE_BASE}_))
+		ifneq (,$(findstring A7680C,${SC_MODULE}))
+			ifneq (,$(findstring _V506,_$(SC_HD_OPT)_)$(findstring _V503,_$(SC_HD_OPT)_)$(findstring _V603,_$(SC_HD_OPT)_)$(findstring _V602_,_$(SC_HD_OPT)_))
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART4
+			else
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART2
+			endif
+		else ifneq (,$(findstring A7670C,${SC_MODULE}))
+			ifneq (,$(findstring _V701,_$(SC_HD_OPT)_)$(findstring _V702,_$(SC_HD_OPT)_)$(findstring _V703,_$(SC_HD_OPT)_))
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART4
+			else
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART2
+			endif
+		else ifneq (,$(findstring A7677S,${SC_MODULE}))
+			ifneq (,$(findstring _V702,_$(SC_HD_OPT)_)$(findstring _V703,_$(SC_HD_OPT)_))
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART4
+			else
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART2
+			endif
 		else
 			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART2
 		endif
-	else ifneq (,$(findstring A7670C,${SC_MODULE}))
-		ifneq (,$(findstring _V701,_$(SC_HD_OPT)_)$(findstring _V702,_$(SC_HD_OPT)_)$(findstring _V703,_$(SC_HD_OPT)_))
-			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART4
-		else
-			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART2
-		endif
-	else ifneq (,$(findstring A7677S,${SC_MODULE}))
-		ifneq (,$(findstring _V702,_$(SC_HD_OPT)_)$(findstring _V703,_$(SC_HD_OPT)_))
-			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART4
-		else
-			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART2
-		endif
+#1606 SINGLESIM
 	else
-		UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/UART2
+		ifneq (,$(findstring A7680C,${SC_MODULE}))
+			ifneq (,$(findstring _V506,_$(SC_HD_OPT)_)$(findstring _V503,_$(SC_HD_OPT)_)$(findstring _V603,_$(SC_HD_OPT)_)$(findstring _V602_,_$(SC_HD_OPT)_))
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/UART4
+			else
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/UART2
+			endif
+		else ifneq (,$(findstring A7670C,${SC_MODULE}))
+			ifneq (,$(findstring _V701,_$(SC_HD_OPT)_)$(findstring _V702,_$(SC_HD_OPT)_)$(findstring _V703,_$(SC_HD_OPT)_))
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/UART4
+			else
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/UART2
+			endif
+		else ifneq (,$(findstring A7677S,${SC_MODULE}))
+			ifneq (,$(findstring _V702,_$(SC_HD_OPT)_)$(findstring _V703,_$(SC_HD_OPT)_))
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/UART4
+			else
+				UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/UART2
+			endif
+		else
+			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/UART2
+		endif
 	endif
+#1603
+else ifneq (,$(findstring _1603_,_${SC_MODULE_BASE}_))
+#1603C
+	ifeq (TRUE,$(patsubst %A,TRUE,$(SC_HD_CFG)))
+		ifneq (,$(findstring _EXTWDG_,_$(SC_USR_OPT)_))
+			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT/ext_wdg
+		else
+			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT
+		endif
+#1603S
+	else
+		ifneq (,$(findstring _EXTWDG_,_$(SC_USR_OPT)_))
+			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/ext_wdg
+		else
+			UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}
+		endif
+	endif
+#1602&1607
 else
-	UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}
+	UPDATER_SRC_PATH := ${PREBUILD_DIR}/updater/${ASR_MODEL}/NOUPDT
 endif
 
 define updater_usr_opt_process
@@ -409,8 +464,10 @@ source: ${ABOOT_IMAGES_OUT_DIR}/${USERSPACE_SRC_NAME}
 ${ABOOT_IMAGES_OUT_DIR}/${USERSPACE_SRC_NAME}: ${ABOOT_OUT_DIR} ${ABOOT_IMAGES_OUT_DIR}/${FOTA_PARAM_OUT_NAME}
 endif
 
-ifneq (,$(findstring A7680C_M,${SC_MODULE_BASE})$(findstring M5780C,${SC_MODULE_BASE})$(findstring A7673,${SC_MODULE_BASE})$(findstring A7672E_FASE_1603_V201,${SC_MODULE_BASE})$(findstring A7663,${SC_MODULE_BASE})$(findstring A7666,${SC_MODULE_BASE})$(findstring A7670U_MAMS_1606_V201,${SC_MODULE_BASE})$(findstring A7670NA_MAMS_1606_V201,${SC_MODULE_BASE})$(findstring A7670G_MAMS_1606_V201,${SC_MODULE_BASE})$(findstring A7670E_MAMS_1606_V201,${SC_MODULE_BASE})$(findstring A7670SA_MAMS_1606_V201,${SC_MODULE_BASE})$(findstring A7670G_MNMY_1602_UB_V101,${SC_MODULE_BASE})$(findstring A7672SA_FASE_1603_V201,${SC_MODULE_BASE}))
-source: ${ABOOT_IMAGES_OUT_DIR}/${GPS_OUT_NAME} 
+ifneq (,$(findstring _ASR5311_,_${GPS_FIRM}_))
+source: ${ABOOT_IMAGES_OUT_DIR}/${GPS_OUT_NAME}
+else ifneq (,$(findstring _UC6228_,_${GPS_FIRM}_))
+source: ${ABOOT_IMAGES_OUT_DIR}/${GPS_OUT_NAME1}
 endif
 
 ifneq (,$(SC_HD_CFG))
@@ -444,10 +501,26 @@ else
 	${COPY} ${COPYARG} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${ABOOT_SRC_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
 endif
 else
+ifneq (${PREBOOT_CUST_NAME},n)
+	${MKDIR} ${MKDIRARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${PREBOOT_CUST_NAME})
+	${COPY} ${COPYARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_CUST_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${PREBOOT_CUST_NAME}/)
+	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_NAME}/${PREBOOT_BIN}) $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${PREBOOT_BIN})
+	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_CUST_NAME}/${PREBOOT_BIN}) $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_NAME}/${PREBOOT_BIN})
+	-${RMDIR} ${RMDIRARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_CUST_NAME})
+endif
+
 	${MKDIR} ${MKDIRARG} $(subst ${BAD_SLASH},${GOOD_SLASH},$@/${ABOOT_CONFIG_SRC_NAME})
 	${COPY} ${COPYARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_CONFIG_SRC_PATH}/${ABOOT_CONFIG_SRC_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$@/${ABOOT_CONFIG_SRC_NAME}/)
 	${MKDIR} ${MKDIRARG} $(subst ${BAD_SLASH},${GOOD_SLASH},$@/${ABOOT_IMAGES_SRC_NAME})
 	${COPY} ${COPYARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$@/${ABOOT_IMAGES_SRC_NAME}/)
+
+ifneq (${PREBOOT_CUST_NAME},n)
+	${MKDIR} ${MKDIRARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_CUST_NAME})
+	${COPY} ${COPYARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${PREBOOT_CUST_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_CUST_NAME}/)
+	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${PREBOOT_BIN}) $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${ABOOT_IMAGES_SRC_NAME}/${PREBOOT_NAME}/${PREBOOT_BIN})
+	-${RMDIR} ${RMDIRARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${PREBOOT_CUST_NAME})
+	-${RM} ${RMARG} $(subst ${BAD_SLASH},${GOOD_SLASH},${ABOOT_IMAGES_SRC_PATH}/${PREBOOT_BIN})
+endif
 endif
 
 ifneq (,$(findstring OPENSDK,${SC_MODULE_BASE}))
@@ -482,17 +555,24 @@ ${ABOOT_IMAGES_OUT_DIR}/${NVM_OUT_NAME}:${NVM_SRC_PATH} ${ABOOT_OUT_DIR}
 ${ABOOT_IMAGES_OUT_DIR}/${DSP_SRC_NAME}:${DSP_SRC_PATH}
 	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${DSP_SRC_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
 
-
+ifneq (,$(findstring _UC6228_,_${GPS_FIRM}_))
+${ABOOT_IMAGES_OUT_DIR}/${GPS_OUT_NAME1}:${GPS_SRC_PATH}
+	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${GPS_OUT_NAME1}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
+	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${GPS_OUT_NAME2}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
+else
 ${ABOOT_IMAGES_OUT_DIR}/${GPS_OUT_NAME}:${GPS_SRC_PATH}
 	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${GPS_OUT_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
+endif
 
 
 ${ABOOT_IMAGES_OUT_DIR}/${BOOT33_SRC_NAME}:${BOOT33_SRC_PATH}
 	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${BOOT33_SRC_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
 
 
+
 ${ABOOT_IMAGES_OUT_DIR}/${UPDATER_SRC_NAME}:${UPDATER_SRC_PATH}
 	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${UPDATER_SRC_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
+
 
 
 ${ABOOT_IMAGES_OUT_DIR}/${BT_SRC_NAME1}:${BT_SRC_PATH}
@@ -500,8 +580,10 @@ ${ABOOT_IMAGES_OUT_DIR}/${BT_SRC_NAME1}:${BT_SRC_PATH}
 	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${BT_SRC_NAME2}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
 
 
+
 ${ABOOT_IMAGES_OUT_DIR}/${LOGO_SRC_NAME}:${LOGO_SRC_PATH}
 	${COPY_FILE} ${COPYARG_FILE} $(subst ${BAD_SLASH},${GOOD_SLASH},$</${LOGO_SRC_NAME}) $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@))
+
 
 
 ${ABOOT_IMAGES_OUT_DIR}/${RF_SRC_NAME}:${RF_SRC_PATH}

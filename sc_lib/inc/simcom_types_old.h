@@ -15,6 +15,6 @@ struct dirent
 
 
 // 临时定义
-#define SC_MODULE_GPIO_MAX 100
+// #define SC_MODULE_GPIO_MAX 100
 
 #endif /* __SIMCOM_TYPES_OLD_H__ */

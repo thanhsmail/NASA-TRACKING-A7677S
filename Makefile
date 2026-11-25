@@ -95,11 +95,6 @@ info-all: info_pre info_modules_custom info_end
 
 info_end:
 	@echo -
-	@echo -  config option list:
-	@echo -      menuconfig            [do menuconfig for app]
-	@echo -      guiconfig             [do guiconfig for app]
-	@echo -      clean_config          [clean the userconfig]
-	@echo -
 	@echo -  clean option list:
 	@echo -      clean                 [clean all modules.]
 ifneq (,$(SIMCOM_RELEASE_SDK))
@@ -205,7 +200,7 @@ endif
 ifneq (,${PREBUILD_DIR_CACHE})
 	echo PREBUILD_DIR ?= ${PREBUILD_DIR}>> ${CACHE_FILE}
 endif
-	echo $(strip J ?= ${J})>> ${CACHE_FILE}
+	echo J ?= ${J} >> ${CACHE_FILE}
 
 else #  ifeq (,$(SIMCOM_RELEASE_SDK))
 upgrade_base:
@@ -241,12 +236,22 @@ ${CMAKE_DIR}:
 endif
 
 ifneq (,${CMAKE_DIR})
-${CMAKE_DIR}:
-	@echo "CMAKE_DIR exists"
+${CMAKE_DIR}:${TOOL_DIR}/${PLATFORM}/${CMAKE_PACKAGE_NAME}
+ifeq (win32,${PLATFORM})
+	$(word 1,$(subst :, ,$@)): && cd $(dir $@) && $(GZIP) $(GZIPARG) $<
+	$(word 1,$(subst :, ,$@)): && cd $@ && $(MKDIR) $(MKDIRARG) fuck_windows && $(RMDIR) $(RMDIRARG) fuck_windows
+else
+	cd $(dir $@) && $(GZIP) $(GZIPARG) $<
+endif
 endif
 
-${CROSS_TOOL_DIR}:
-	@echo "CROSS_TOOL_DIR exists"
+${CROSS_TOOL_DIR}:${TOOL_DIR}/${PLATFORM}/${GCC_ARM_TOOLCHAIN_PACKAGE}
+ifeq (win32,${PLATFORM})
+	$(word 1,$(subst :, ,$@)): && cd $(dir $@) && $(GZIP) $(GZIPARG) $<
+	$(word 1,$(subst :, ,$@)): && cd $@ && $(MKDIR) $(MKDIRARG) fuck_windows && $(RMDIR) $(RMDIRARG) fuck_windows
+else
+	cd $(dir $@) && $(GZIP) $(GZIPARG) $<
+endif
 # tools process end
 
 ################################
@@ -254,7 +259,7 @@ ${CROSS_TOOL_DIR}:
 ################################
 ifeq (,$(SIMCOM_RELEASE_SDK))
 ${APP_DIR}:
-	$(word 1,$(subst :, ,$@)): && cd $(subst $(BAD_SLASH),$(GOOD_SLASH),$(dir $@)) && git clone "ssh://${GIT_ID}@10.238.1.10:29418/OpenCpu" -b userspace_1.1 userspace
+	$(word 1,$(subst :, ,$@)): && cd $(subst $(BAD_SLASH),$(GOOD_SLASH),$(dir $@)) && git clone "ssh://${GIT_ID}@10.238.1.10:29418/OpenCpu" -b userspace_1.0 userspace
 endif
 
 $(APP_DIR)/config/ToolChain.cmake:$(APP_DIR)
@@ -287,38 +292,10 @@ endif
 
 clean_app:
 	-$(RMDIR) $(RMDIRARG) $(subst $(BAD_SLASH),$(GOOD_SLASH),$(APP_DIR)/$(OUT))
-
-clean_config:
-	-${RM} ${RMARG} $(subst $(BAD_SLASH),$(GOOD_SLASH),$(APP_DIR)/config/.config)
-	-${RM} ${RMARG} $(subst $(BAD_SLASH),$(GOOD_SLASH),$(APP_DIR)/config/config.h)
 # clean option define end
 
-## just released SDK with a .config file can skip
-$(APP_DIR)/config/.config:$(APP_DIR)/config/Kconfig
-ifeq (YES_.config_,${SIMCOM_RELEASE_SDK}_$(notdir $(wildcard $(APP_DIR)/config/.config))_$(patsubst %.exe,%,$(notdir $(shell ${WHERE} genconfig))))
-	@echo genconfig cmd not found. ... skip ...
-else
-ifeq (win32,${PLATFORM})
-	$(word 1,$(subst :, ,$<)): && cd $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@)) && genconfig --config-out .config
-else
-	cd $(subst ${BAD_SLASH},${GOOD_SLASH},$(dir $@)) && genconfig --config-out .config
-endif
-	-${RM} ${RMARG} $(subst $(BAD_SLASH),$(GOOD_SLASH),$(APP_DIR)/config/config.h)
-endif
 
-menuconfig: ${APP_DIR}/config/Kconfig
-ifeq (win32,${PLATFORM})
-	$(word 1,$(subst :, ,$<)): && cd $(subst $(BAD_SLASH),$(GOOD_SLASH),$(dir $<)) && menuconfig
-else
-	cd $(subst $(BAD_SLASH),$(GOOD_SLASH),$(dir $<)) && menuconfig
-endif
 
-guiconfig: ${APP_DIR}/config/Kconfig
-ifeq (win32,${PLATFORM})
-	$(word 1,$(subst :, ,$<)): && cd $(subst $(BAD_SLASH),$(GOOD_SLASH),$(dir $<)) && guiconfig
-else
-	cd $(subst $(BAD_SLASH),$(GOOD_SLASH),$(dir $<)) && guiconfig
-endif
 
 ################################
 # target create
@@ -349,7 +326,7 @@ endif
 
 
 
-.PHONY: $(1)$(2)$(3)$(4) $(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/burn.zip
+.PHONY: $(1)$(2)$(3)$(4) $(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(1)$(2)$(3)$(4).zip
 
 ifeq (,$(SIMCOM_RELEASE_SDK))
 $(1)$(2)$(3)$(4):upgrade_tools
@@ -358,25 +335,25 @@ $(1)$(2)$(3)$(4):upgrade_tools
 	@echo ---------------------------
 endif
 
-install_$(1)$(2)$(3)$(4):$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/burn.zip
+install_$(1)$(2)$(3)$(4):$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(1)$(2)$(3)$(4).zip
 ## create the package used to burn
-$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/burn.zip:$(TARGET_IMAGE_MAKEFILE) ${PREBUILD_DIR} upgrade_prebuild
+$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(1)$(2)$(3)$(4).zip:$(TARGET_IMAGE_MAKEFILE) ${PREBUILD_DIR} upgrade_prebuild
 	@echo --------------------------------
 	@echo ----- create aboot package -----
 	@echo --------------------------------
 	-${RM} ${RMARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$@)
-	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(dir $$@)aboot)
-	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(dir $$@)aboot_factory)
+	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(subst .zip,_aboot,$$@))
+	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(subst .zip,_aboot_factory,$$@))
 	$(MAKE) -C $$(dir $$<) -f $$(notdir $$<) ROOT_DIR=${ROOT_DIR} KERNEL_DIR=$(KERNEL_DIR) APP_DIR=${APP_DIR} TOOL_DIR=$(TOOL_DIR) PREBUILD_DIR=${PREBUILD_DIR} SC_MODULE=$(1) SC_HD_CFG=${2} SC_HD_OPT=$(3) SC_USR_OPT=$(4) SC_MODULE_BASE=$(1)$(2)$(3) SC_MODULE_FULL=$(1)$(2)$(3)$(4) OUT=${OUT} APP_NAME=$(APP_NAME) SIMCOM_RELEASE_SDK=${SIMCOM_RELEASE_SDK}
 	$(MAKE) -C $$(dir $$<) -f $$(notdir $$<) ROOT_DIR=${ROOT_DIR} KERNEL_DIR=$(KERNEL_DIR) APP_DIR=${APP_DIR} TOOL_DIR=$(TOOL_DIR) PREBUILD_DIR=${PREBUILD_DIR} SC_MODULE=$(1) SC_HD_CFG=${2} SC_HD_OPT=$(3) SC_USR_OPT=$(4) SC_MODULE_BASE=$(1)$(2)$(3) SC_MODULE_FULL=$(1)$(2)$(3)$(4) OUT=${OUT} APP_NAME=$(APP_NAME) SIMCOM_RELEASE_SDK=${SIMCOM_RELEASE_SDK} ASR_PLAT=160X FACTORY=TRUE
 ifneq (,$(SIMCOM_RELEASE_SDK))
 else ifneq (,$(findstring _OPENSDK_,_$(3)_))
-	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/aboot/)
-	-${MKDIR} ${MKDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/aboot/)
-	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/aboot_factory/)
-	-${MKDIR} ${MKDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/aboot_factory/)
-	${COPY} ${COPYARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(dir $$@)aboot) $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/aboot/)
-	${COPY} ${COPYARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(dir $$@)aboot_factory) $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/aboot_factory/)
+	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/$$(subst .zip,_aboot,$$(notdir $$@))/)
+	-${MKDIR} ${MKDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/$$(subst .zip,_aboot,$$(notdir $$@))/)
+	-${RMDIR} ${RMDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/$$(subst .zip,_aboot_factory,$$(notdir $$@))/)
+	-${MKDIR} ${MKDIRARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/$$(subst .zip,_aboot_factory,$$(notdir $$@))/)
+	${COPY} ${COPYARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(subst .zip,_aboot,$$@)) $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/$$(subst .zip,_aboot,$$(notdir $$@))/)
+	${COPY} ${COPYARG} $$(subst $${BAD_SLASH},$${GOOD_SLASH},$$(subst .zip,_aboot_factory,$$@)) $$(subst $${BAD_SLASH},$${GOOD_SLASH},${KERNEL_DIR}/$(1)$(2)$(3)$(4)/$$(subst .zip,_aboot_factory,$$(notdir $$@))/)
 endif
 
 $(1)$(2)$(3)$(4)_remake:
@@ -388,7 +365,7 @@ $(1)$(2)$(3)$(4)_remake:
 ################################
 ifneq (,$(findstring _OPENSDK_,_$(3)_)$(SIMCOM_RELEASE_SDK))
 
-$(1)$(2)$(3)$(4):create_cache $(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/burn.zip
+$(1)$(2)$(3)$(4):create_cache $(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(1)$(2)$(3)$(4).zip
 
 ifeq (,$(SIMCOM_RELEASE_SDK))
 $(1)$(2)$(3)$(4)_app:
@@ -410,7 +387,7 @@ $(1)$(2)$(3)$(4)_force:
 	@$(MAKE) $(1)$(2)$(3)$(4)
 endif
 
-$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/burn.zip:$(APP_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(APP_NAME).bin $(KERNEL_DIR)/$(1)$(2)$(3)$(4)/cp.bin
+$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(1)$(2)$(3)$(4).zip:$(APP_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(APP_NAME).bin $(KERNEL_DIR)/$(1)$(2)$(3)$(4)/cp.bin
 
 ## create bin from elf
 $(APP_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(APP_NAME).bin: $(APP_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(APP_NAME).elf
@@ -437,35 +414,27 @@ else
 	$(BUILD) -C $$(dir $$<)
 endif
 
-ifeq (,$(SIMCOM_RELEASE_SDK))
 $(APP_DIR)/config/$(1)$(2)$(3)$(4)_linkscript.ld:$(KERNEL_DIR)/$(1)$(2)$(3)$(4)/${KERNEL_LINK_DEFINE}
 	@echo ----------------------------------------
 	@echo ----- create userspace link script -----
 	@echo ----------------------------------------
 	-${RM} ${RMARG} $$(subst ${BAD_SLASH},${GOOD_SLASH},$$@)
 	python ${TOOL_DIR}/script/userspace_linkscript_generator.py $$< $$@
-endif
 
-# $(KERNEL_DIR)/$(1)$(2)$(3)$(4)/${KERNEL_LINK_DEFINE}:$(KERNEL_DIR)/$(1)$(2)$(3)$(4)/KernelDefinitions.cmake
+$(KERNEL_DIR)/$(1)$(2)$(3)$(4)/${KERNEL_LINK_DEFINE}:$(KERNEL_DIR)/$(1)$(2)$(3)$(4)/KernelDefinitions.cmake
 
 ##  do cmake create makefile for make or ninja
-$(APP_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(MAKEFILENAME): $(APP_DIR) $(CMAKE_DIR) ${CROSS_TOOL_DIR} $(APP_DIR)/config/ToolChain.cmake $(APP_DIR)/config/Config_APP.cmake $(KERNEL_DIR)/$(1)$(2)$(3)$(4)/KernelDefinitions.cmake $(APP_DIR)/config/.config ${MAKEFILE_DEPEND}
+$(APP_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(MAKEFILENAME): $(APP_DIR) $(CMAKE_DIR) ${CROSS_TOOL_DIR} $(APP_DIR)/config/ToolChain.cmake $(APP_DIR)/config/Config_APP.cmake $(KERNEL_DIR)/$(1)$(2)$(3)$(4)/KernelDefinitions.cmake ${MAKEFILE_DEPEND}
 	-$(RMDIR) $(RMDIRARG) $$(subst $(BAD_SLASH),$(GOOD_SLASH),$$(dir $$@))
 	-$(MKDIR) $(MKDIRARG) $$(subst $(BAD_SLASH),$(GOOD_SLASH),$$(dir $$@))
-	@echo ----------------------------------------
-	@echo ----- build old userspace framework -----
-	@echo ----------------------------------------
-	${MAKE} -C ${APP_DIR} -f ${APP_DIR}/config/buildCusLib.mak SCMODULE=$(1)$(2)$(3)$(4) TOOL_DIR=${TOOL_DIR} ROOT_DIR=${APP_DIR} TOP_DIR=${APP_DIR} APP_DIR=${APP_DIR} KERNEL_DIR=${KERNEL_DIR} -j1
 ifneq (,$(SIMCOM_RELEASE_SDK))
 	$$(CMAKE) -B$$(dir $$@) -DSCMODULE="$(1)" $(SIMCOM_SDK_MACRO) \
 		-DKERNEL_DIR="$(KERNEL_DIR)" \
-		-DAPP_DIR=${APP_DIR} \
 		$(patsubst %,-D%=ON,$(subst _, ,$(1))) \
 		-D$(1)=ON \
 		-DGCC_ARM_TOOLCHAIN_DIR="$(GCC_ARM_TOOLCHAIN_DIR)" \
 		-DCMAKE_TOOLCHAIN_FILE="$(APP_DIR)/config/ToolChain.cmake" \
 		-DAPP_NAME="$(APP_NAME)" \
-		$$(shell $(subst $(BAD_SLASH),$(GOOD_SLASH),$(BUILDCONFIG)) $(APP_DIR)/config/.config) \
 		-G $(BUILD_TYPE) \
 		$(APP_DIR)
 else
@@ -475,13 +444,11 @@ ifeq (win32,${PLATFORM})
 		-DKERNEL_DIR="$(KERNEL_DIR)" \
 		-DTOOL_DIR="${TOOL_DIR}" \
 		-DROOT_DIR="${ROOT_DIR}" \
-		-DAPP_DIR=${APP_DIR} \
 		$(patsubst %,-D%=ON,$(subst _, ,$(1)$(2)$(3)$(4))) \
 		-D$(1)$(2)$(3)$(4)=ON \
 		-DGCC_ARM_TOOLCHAIN_DIR="$(GCC_ARM_TOOLCHAIN_DIR)" \
 		-DCMAKE_TOOLCHAIN_FILE="$(APP_DIR)/config/ToolChain.cmake" \
 		-DAPP_NAME="$(APP_NAME)" \
-		$$(shell $(subst $(BAD_SLASH),$(GOOD_SLASH),$(BUILDCONFIG)) $(APP_DIR)/config/.config) \
 		-G $(BUILD_TYPE) \
 		$(APP_DIR)
 else
@@ -490,13 +457,11 @@ else
 		-DKERNEL_DIR="$(KERNEL_DIR)" \
 		-DTOOL_DIR="${TOOL_DIR}" \
 		-DROOT_DIR="${ROOT_DIR}" \
-		-DAPP_DIR=${APP_DIR} \
 		$(patsubst %,-D%=ON,$(subst _, ,$(1)$(2)$(3)$(4))) \
 		-D$(1)$(2)$(3)$(4)=ON \
 		-DGCC_ARM_TOOLCHAIN_DIR="$(GCC_ARM_TOOLCHAIN_DIR)" \
 		-DCMAKE_TOOLCHAIN_FILE="$(APP_DIR)/config/ToolChain.cmake" \
 		-DAPP_NAME="$(APP_NAME)" \
-		$$(shell $(subst $(BAD_SLASH),$(GOOD_SLASH),$(BUILDCONFIG)) $(APP_DIR)/config/.config) \
 		-G $(BUILD_TYPE) \
 		$(APP_DIR)
 endif
@@ -517,9 +482,7 @@ else
 $(KERNEL_DIR)/$(1)$(2)$(3)$(4)/KernelDefinitions.cmake:$(KERNEL_DIR)/$(1)$(2)$(3)$(4)/cp.bin
 	-$(RM) $(RMARG) $$(subst ${BAD_SLASH},${GOOD_SLASH},$$@)
 	python ${TOOL_DIR}/script/extract_macro_from_buildlog.py $(ROOT_DIR)/tavor/Arbel/build/buildlog.txt yes $$(patsubst %.cmake,%,$$@)
-
-$(KERNEL_DIR)/$(1)$(2)$(3)$(4)/${KERNEL_LINK_DEFINE}:$(KERNEL_DIR)/$(1)$(2)$(3)$(4)/cp.bin
-	echo KERNEL_LINK_FILE := $$(word 1,$$(subst :, ,$$@)):$$(shell python $${TOOL_DIR}/script/getInfo.py GET_KERNEL_LINKSCRIPT_FILE $$(ROOT_DIR)/tavor/Arbel/build/buildlog.txt)> $$@
+	echo KERNEL_LINK_FILE := $$(word 1,$$(subst :, ,$$@)):$$(shell python $${TOOL_DIR}/script/getInfo.py GET_KERNEL_LINKSCRIPT_FILE $$(ROOT_DIR)/tavor/Arbel/build/buildlog.txt)> $$(dir $$@)${KERNEL_LINK_DEFINE}
 
 ## copy the necessary cp target file form cp build folder to folder userspace needed
 $(KERNEL_DIR)/$(1)$(2)$(3)$(4)/cp.bin: tavor/Arbel/bin/$(1)$(2)$(3)$(4)_cp.bin
@@ -555,12 +518,9 @@ $(ROOT_DIR)/simcom/open_api_ql/$(1)$(2)$(3)$(4)/src/$(API_MAP_FILE_NAME).c:$(API
 else
 $(ROOT_DIR)/simcom/open_api/$(1)$(2)$(3)$(4)/src/$(API_MAP_FILE_NAME).c:$(API_MAP_MAKEFILE) $(API_MAP_INIT_SCRIPT)
 endif
-	@echo ------------------------------------------
-	@echo     create [$(1)$(2)$(3)$(4)] api map
-	@echo ------------------------------------------
 	-$(RMDIR) $(RMDIRARG) $$(subst $(BAD_SLASH),$(GOOD_SLASH),$$(dir $$(dir $$@)))
 	$(MKDIR) $(MKDIRARG) $$(subst $(BAD_SLASH),$(GOOD_SLASH),$$(dir $$(dir $$@)))
-	$(MAKE) -C $$(dir $$<) -f $$(notdir $$<) API_MAP_FILE_NAME=$(API_MAP_FILE_NAME) ROOT_DIR=$(ROOT_DIR) TOOL_DIR=$(TOOL_DIR) APP_DIR=${APP_DIR} SC_MODULE=$(1) SC_HD_CFG=$(patsubst _%,%,$(2)) SC_HD_OPT=$(patsubst _%,%,$(3)) SC_USR_OPT=$(patsubst _%,%,$(4)) SC_MODULE_FULL=$(1)$(2)$(3)$(4)
+	$(MAKE) -C $$(dir $$<) -f $$(notdir $$<) API_MAP_FILE_NAME=$(API_MAP_FILE_NAME) ROOT_DIR=$(ROOT_DIR) TOOL_DIR=$(TOOL_DIR) APP_DIR=${APP_DIR} SC_MODULE=$(1) SC_HD_CFG=$(2) SC_HD_OPT=$(3) SC_USR_OPT=$(4) SC_MODULE_FULL=$(1)$(2)$(3)$(4)
 
 
 ################################
@@ -599,10 +559,10 @@ $(1)$(2)$(3)$(4)_kernel:
 $(1)$(2)$(3)$(4)_force:
 	@$(MAKE) $(1)$(2)$(3)$(4)_kernel
 
-$(1)$(2)$(3)$(4):$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/burn.zip
+$(1)$(2)$(3)$(4):$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(1)$(2)$(3)$(4).zip
 
 ifeq (,$(SIMCOM_RELEASE_SDK))
-$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/burn.zip:tavor/Arbel/bin/$(1)$(2)$(3)$(4)_cp.bin
+$(ROOT_DIR)/$(OUT)/$(1)$(2)$(3)$(4)/$(1)$(2)$(3)$(4).zip:tavor/Arbel/bin/$(1)$(2)$(3)$(4)_cp.bin
 endif
 
 endif  ## ifneq (,$(findstring _OPENSDK_,_$(3)_))
@@ -613,20 +573,11 @@ tavor/Arbel/bin/$(1)$(2)$(3)$(4)_cp.bin:
 	@echo -----  build kernel   -----
 	@echo ---------------------------
 ## Backup RD to generate work path
-ifeq ($(wildcard $(PREBUILD_DIR)/RD/$(1)$(2)$(3)$(4)),)
 ifeq (path.txt,$(notdir $(wildcard $(PREBUILD_DIR)/RD/$(1)$(2)$(3)/path.txt)))
 	${COPY_FILE} ${COPYARG_FILE} $$(subst ${BAD_SLASH},${GOOD_SLASH},${PREBUILD_DIR}/$$(shell ${CAT} $$(subst ${BAD_SLASH},${GOOD_SLASH},${PREBUILD_DIR}/RD/$(1)$(2)$(3)/path.txt))/*) $$(subst ${BAD_SLASH},${GOOD_SLASH},$(ROOT_DIR)/tavor/Arbel/build/ReliableData/)
 else
 	${COPY_FILE} ${COPYARG_FILE} $$(subst ${BAD_SLASH},${GOOD_SLASH},${PREBUILD_DIR}/RD/$(1)$(2)$(3)/*) $$(subst ${BAD_SLASH},${GOOD_SLASH},$(ROOT_DIR)/tavor/Arbel/build/ReliableData/)
 endif
-else
-ifeq (path.txt,$(notdir $(wildcard $(PREBUILD_DIR)/RD/$(1)$(2)$(3)$(4)/path.txt)))
-	${COPY_FILE} ${COPYARG_FILE} $$(subst ${BAD_SLASH},${GOOD_SLASH},${PREBUILD_DIR}/$$(shell ${CAT} $$(subst ${BAD_SLASH},${GOOD_SLASH},${PREBUILD_DIR}/RD/$(1)$(2)$(3)$(4)/path.txt))/*) $$(subst ${BAD_SLASH},${GOOD_SLASH},$(ROOT_DIR)/tavor/Arbel/build/ReliableData/)
-else
-	${COPY_FILE} ${COPYARG_FILE} $$(subst ${BAD_SLASH},${GOOD_SLASH},${PREBUILD_DIR}/RD/$(1)$(2)$(3)$(4)/*) $$(subst ${BAD_SLASH},${GOOD_SLASH},$(ROOT_DIR)/tavor/Arbel/build/ReliableData/)
-endif
-endif
-
 ifeq (,${HOLD})
 ifeq (,$(wildcard $(ROOT_DIR)/tavor/Arbel/build/sc_kernel_build_$(1)$(2)$(3)$(4)))
 	$(MAKE) cleanAll
@@ -653,7 +604,7 @@ else
 	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_craneL_single_sim.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
 endif
 else ifneq (,$(findstring _VOLTE_,_$(4)_))
-	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_craneL_single_sim_volte.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
+	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_craneL_single_sim_volte_agps.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
 else
 	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_craneL_single_sim_sms.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
 endif
@@ -677,28 +628,16 @@ endif
 endif
 else ifeq (TRUE,$(patsubst %V,TRUE,$(2)))
 ifneq (,$(findstring _TTS_,_$(4)_))
-ifneq (,$(findstring _CSSMS_,_$(4)_))
-	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_4mflash_craneLR_single_sim_sms.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
-else
-	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_4mflash_craneLR_single_sim.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
-endif
-else
-ifneq (,$(findstring _UCVSIM_LINGDU_,$(4)_))
 	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_4mflash_craneLR_single_sim.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
 else
 	cd tavor/Arbel/build && module_lteonly_buildcust_4mram_4mflash_craneLR_single_sim_sms.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
-endif
 endif
 endif
 else ifneq (,$(findstring _1603_,_$(3)_))
 ifneq (,$(findstring _LTEONLY_,_$(3)_))
 	cd tavor/Arbel/build && module_lteonly_buildcust.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
 else
-ifneq (,$(findstring _CSD_,_$(4)_))
-	cd tavor/Arbel/build && module_ltegsm_csd_buildcust.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
-else
 	cd tavor/Arbel/build && module_ltegsm_buildcust.bat _$(1) _$(patsubst _%,%,$(2)) _$(patsubst _%,%,$(3)) _$(patsubst _%,%,$(4)) _$(1)$(2)$(3)$(4) ${J}
-endif
 endif
 endif
 endif
@@ -816,7 +755,6 @@ install_set:
 		-DGCC_ARM_TOOLCHAIN_DIR="$(GCC_ARM_TOOLCHAIN_DIR)" \
 		-DCMAKE_TOOLCHAIN_FILE="$(APP_DIR)/config/ToolChain.cmake" \
 		-DAPP_NAME="$(APP_NAME)" \
-		$(shell $(subst $(BAD_SLASH),$(GOOD_SLASH),$(BUILDCONFIG)) $(APP_DIR)/config/.config) \
 		-G $(BUILD_TYPE) \
 		$(APP_DIR)
 	$(BUILD) -C ${ROOT_DIR}/${RELEASE}/build install
