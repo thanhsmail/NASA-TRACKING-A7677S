@@ -10,6 +10,7 @@ Tài liệu mô tả chi tiết cấu trúc firmware giám sát hành trình ch�
 | Phần cứng | `v1.0` | `NASA_HW_CODE` |
 | Server mặc định | `103.57.209.16:2590` | `NASA_SERVER_HOST_DEFAULT`, `NASA_SERVER_PORT_DEFAULT` |
 | Biến thể build | `A7677S_MANV_1606_V702_OPENSDK` | `.\GNUmake.exe A7677S_MANV_1606_V702_OPENSDK` (chạy trong cmd/PowerShell) |
+| SDK | SIMCom OpenSDK gói 11/2024; kernel / `sc_lib` MANV bản 07/2024 (không đổi trong gói mới) | Mục 18, [README.md](README.md) mục 15 |
 
 ---
 
@@ -77,6 +78,11 @@ NASA-TRACKING-A7677S/
 │   ├── board_pins.h        Pad GPIO, kênh SPI / I2C / ADC của board RV26
 │   └── SDK_API_LIST.md     Hàm / kiểu SDK đang dùng, để đối chiếu khi nâng SDK
 │
+├── kernel/, sc_lib/        SDK: kernel + thư viện cho từng biến thể module (dùng A7677S_MANV_1606_V702_OPENSDK)
+├── config/, tools/         SDK: cấu hình build, link script, toolchain, công cụ đóng gói
+├── CMakeLists.txt, Makefile, makeDepend.mak   SDK, sửa đúng các chỗ ghi ở README mục 15
+├── sc_demo/, sc_lib_v2/, examples/, ...       SDK: demo / mẫu, không build vào firmware
+│
 └── out/A7677S_MANV_1606_V702_OPENSDK/   Kết quả build: customer_app.bin (FOTA), burn.zip (nạp cáp); không commit
 ```
 
@@ -88,17 +94,19 @@ NASA-TRACKING-A7677S/
 
 | Bước | Hàm | Việc làm |
 |---|---|---|
-| 1 | `ApiMapInit()` | Nạp bảng hàm SDK |
+| 1 | `ApiMapInit()` | Nạp bảng hàm SDK ([port_entry.c](port/simcom_a7677s/port_entry.c)) |
 | 2 | `HAL_OS_TaskSleep(5 s)` | Chờ modem ổn định (`APP_STARTUP_DELAY_SEC`) |
 | 3 | `EN25_Init()` | Dò flash rời trên các kênh SPI, đọc mã chip |
 | 4 | `CFG_Init()` | Nạp cấu hình: flash sector 0 → sector 1 → file `C:/rv26.cfg` → mặc định |
-| 5 | `GPS_Init()` | Tạo mutex dữ liệu GPS |
-| 6 | `SMS_Init()` | Cấu hình modem SMS |
-| 7 | `HAL_NET_Init()`, `HAL_NET_NitzEnable()` | Khởi tạo mạng, bật nhận giờ từ nhà mạng (NITZ) |
-| 8 | `HAL_GNSS_SetMode(CFG_GetGnssMode())`, `HAL_GNSS_SetStaticHold(100)` | Ghi nhớ hệ vệ tinh (lệnh 3) và ngưỡng giữ tĩnh để áp dụng khi bật GNSS |
-| 9 | `HAL_GNSS_UrcListenerStart()` | Tạo `gnss_task`: bật GNSS, khởi động nóng, đặt chế độ, gửi `$CFGDYN`, bật URC 1 giây |
-| 10 | `INDICATION_TaskStart()` | Tạo `gpio_status` |
-| 11 | Tạo `nasa_reporter`, `SmsRecvTask` | Hai task nghiệp vụ chính |
+| 5 | `LIS3DSH_Init()` + `LIS3DSH_SelfTest()` | Khởi tạo cảm biến gia tốc và self-test; `na,43,off` đã lưu thì `LIS3DSH_PowerDown()`; không có cảm biến thì bỏ qua |
+| 6 | `GPS_Init()` | Tạo mutex dữ liệu GPS, đọc vị trí / km đã lưu, đăng ký `GPS_OnUrcString()` làm callback (`HAL_GNSS_SetLineCallback()`) |
+| 7 | `SMS_Init()` | Cấu hình modem SMS |
+| 8 | `HAL_NET_Init()`, `HAL_NET_NitzEnable()` | Khởi tạo mạng, bật nhận giờ từ nhà mạng (NITZ) |
+| 9 | `HAL_GNSS_SetMode(CFG_GetGnssMode())`, `HAL_GNSS_SetStaticHold(100)`, `HAL_GNSS_SetNoUrcRestartSec(60)` | Ghi nhớ hệ vệ tinh (lệnh 3), ngưỡng giữ tĩnh, thời gian im lặng trước khi bật lại GNSS |
+| 10 | `HAL_GNSS_UrcListenerStart()` | Tạo `gnss_task`: bật GNSS, khởi động nóng, đặt chế độ, gửi `$CFGDYN`, bật URC 1 giây |
+| 11 | `INDICATION_TaskStart()` | Tạo `gpio_status` |
+| 12 | `COM_TaskStart()` | Tạo `com_cmd` (cấu hình qua cổng COM ảo USB, khi `COM_CFG_ENABLE`) |
+| 13 | Tạo `nasa_reporter`, `SmsRecvTask` | Hai task nghiệp vụ chính |
 
 ---
 
@@ -110,9 +118,12 @@ NASA-TRACKING-A7677S/
 | `nasa_reporter` | 15 | 10 KB | [app_main.c](app/app_main.c) | Lặp liên tục, nghỉ 1 giây mỗi vòng TRACKING (ngủ sâu: 8 giây, chỉ đọc ACC / cảm biến) | `NASA_RunStep()`: chế độ ngủ, kết nối, đăng nhập, gửi bản tin, phát bù, quy tắc |
 | `SmsRecvTask` | 18 | 8 KB | [app_main.c](app/app_main.c) | Chờ URC SMS (timeout 1 giây, ngủ: 60 giây) | Đọc SMS → thực thi lệnh → xóa SMS; gọi `SIM_Poll()` (không gọi khi ngủ) |
 | `gpio_status` | 20 | 4 KB | [app_indication.c](app/app_indication.c) | 0,5 giây (100 tick, 200 tick/giây); ngủ: chờ hàng đợi tối đa 60 giây | Lọc ACC, LED, DOUT, kiểm tra watchdog phần mềm, nuôi watchdog phần cứng; ngắt ACC đánh thức |
+| `com_cmd` | 18 | 8 KB | [app_com.c](app/app_com.c) | Chờ dữ liệu từ cổng COM ảo USB | Gom dòng `na,...` / `sa,...` → `CMD_Execute()`; dòng `AT...` chuyển cho module |
 | `fota_task` | 20 | 10 KB | [app_fota.c](app/app_fota.c) | Chỉ tạo khi có lệnh 33 | Tải và nạp firmware |
 | `agps_task` | 25 | 4 KB | [port_gnss.c](port/simcom_a7677s/port_gnss.c) | Chỉ tạo khi có yêu cầu AGPS đầu tiên | Gọi `sAPI_GnssAgpsSeviceOpen()` |
-| `ntp_sync` | 130 | — | [app_utils.c](app/app_utils.c) | Chỉ tạo khi RTC chưa hợp lệ | Hiện **chưa đồng bộ thật** (chỉ in log) |
+| `lbs_task` | 25 | 4 KB | [port_gnss.c](port/simcom_a7677s/port_gnss.c) | Chỉ tạo khi có yêu cầu LBS đầu tiên (mất GPS) | Gọi `sAPI_LocGet()` lấy vị trí theo trạm |
+| `usb_log` | 100 | 3 KB | [port_log.c](port/simcom_a7677s/port_log.c) | Chỉ tạo ở lần `debug,1` đầu tiên | Chép log ra cổng COM USB |
+| `ntp_sync` | 130 | 3 KB | [app_utils.c](app/app_utils.c) | Chỉ tạo khi RTC chưa hợp lệ | Hiện **chưa đồng bộ thật** (chỉ in log) |
 
 Quy ước dùng chung:
 
@@ -122,10 +133,12 @@ Quy ước dùng chung:
 
 ```mermaid
 graph TD
-    Main["userSpace_Main"] --> GNSS["gnss_task (10)"]
+    Main["APP_Main"] --> GNSS["gnss_task (10)"]
     Main --> NASA["nasa_reporter (15)"]
     Main --> SMS["SmsRecvTask (18)"]
     Main --> GPIO["gpio_status (20)"]
+    Main --> COM["com_cmd (18)"]
+    COM -->|CMD_Execute| CMD
     GNSS -->|GPS_OnUrcString| GPSDATA[("Dữ liệu GPS + mutex")]
     NASA -->|GPS_Snapshot| GPSDATA
     GPIO -->|NASA_SetAcc / GPS_SetAccOn| NASA
@@ -560,3 +573,25 @@ Chưa kiểm trên thiết bị: dòng tiêu thụ khi ngủ (phải rút USB kh
 | Khóa cấu hình tắt cứng | Bất kỳ số nào cũng gửi được lệnh đổi server, FOTA, xóa dữ liệu, lệnh 37 |
 | Bản tin 5 / 6 khi mất mạng bị bỏ | Server thiếu sự kiện lái xe / đỗ trong điểm mù |
 | Nơi lưu backup chỉ chọn lúc khởi động | Flash hỏng khi đang chạy thì dữ liệu mất (LED nguồn tắt) |
+
+---
+
+## 18. SDK và build
+
+| Mục | Giá trị |
+|---|---|
+| Gói SDK | SIMCom OpenSDK 11/2024 (thư mục gốc, `Makefile`, `config/`, `tools/` theo gói này) |
+| Kernel / thư viện dùng | `kernel/A7677S_MANV_1606_V702_OPENSDK`, `sc_lib/A7677S_MANV_1606_V702_OPENSDK` (bản 07/2024, gói 11/2024 không đổi) |
+| Toolchain | `arm-none-eabi-gcc` 9.2.1 trong `tools/win32/cross_tool/`, cmake + ninja của SDK |
+| Kết quả | `out/A7677S_MANV_1606_V702_OPENSDK/customer_app.bin` (FOTA ứng dụng), `burn.zip` (nạp cáp, có `system.img` để làm FOTA hệ thống) |
+
+Cách nối code dự án vào build của SDK:
+
+- `CMakeLists.txt` của SDK `INCLUDE` [app/app_sources.cmake](app/app_sources.cmake) thay cho `SET(app_src main.c)` mẫu; thư viện mẫu `user_source` bị bỏ. `app_sources.cmake` liệt kê nguồn `app/` + `port/simcom_a7677s/`, thêm include path (`app/`, gốc, `hal/`, port) và cờ `-DUSE_LWIP_ERRNO`.
+- [port_sdk.h](port/simcom_a7677s/port_sdk.h) include tường minh từng header SDK (`simcom_api.h` của gói 11/2024 đã bỏ phần lớn include).
+- [port_entry.c](port/simcom_a7677s/port_entry.c) đặt bảng `userSpaceEntry` (section `.userSpaceRegTable`, stack 10 KB, ưu tiên 30) để kernel tìm và chạy `userSpace_Main()`.
+- 84 hàm `sAPI_*` đang dùng và các kiểu / hằng đi kèm: [SDK_API_LIST.md](port/simcom_a7677s/SDK_API_LIST.md).
+
+Gói 11/2024 có thêm biến thể `A7677S_MANV_1606_V702_OPENSDK_ENORLFSV2` (kernel bật `SC_DRIVER_NORFLASH`, `EXT_FLASH_LFSV2_ENABLE`, `EXT_FS_MOUNT_STARTUP`: tự gắn flash NOR rời làm LittleFS v2). Board RV26 dùng chính chip flash rời đó qua `drv_en25qh64a.c` cho cấu hình (mục 13) và bộ đệm điểm mù (mục 10), nên **không dùng** biến thể này. Chuyển sang thì phải đưa cấu hình và bộ đệm điểm mù thành file trên LittleFS của kernel.
+
+Quy trình nâng SDK, các chỗ sửa trên file SDK và những lỗi đã gặp (link script bị xóa, `simcom_api.h` rút gọn): [README.md](README.md) mục 15.
