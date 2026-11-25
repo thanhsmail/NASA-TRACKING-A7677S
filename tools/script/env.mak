@@ -67,7 +67,13 @@ else ifeq ($(shell uname),Linux)
 	GOOD_BREAKER := $(strip :)
 	WHERE := which
 
-	BUILDCONFIG := python ${TOOL_DIR}/script/buildConfig.py
+	ifneq (,$(shell which python3 2>/dev/null))
+		BUILDCONFIG := python3 ${TOOL_DIR}/script/buildConfig.py
+	else ifneq (,$(shell which python 2>/dev/null))
+		BUILDCONFIG := python ${TOOL_DIR}/script/buildConfig.py
+	else
+		$(error python not found, please install python and try again!)
+	endif
 else
   $(error The os "$(shell uname)" is not supported)
 endif

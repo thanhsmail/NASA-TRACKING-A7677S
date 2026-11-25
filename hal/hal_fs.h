@@ -5,7 +5,7 @@
  * app_cfg.c va app_backup.c chi goi HAL_FS_*. Implementation dung
  * sAPI_fopen / sAPI_fread / sAPI_fwrite / sAPI_fclose / sAPI_fseek
  * cua SIMCom OpenSDK. Khi doi sang chip co FATFS hoac SPIFFS thi
- * chi can viet lai ham trong hal_impl_<chip>.c.
+ * chi can viet lai ham trong port/<chip>/port_fs_fota.c.
  */
 #ifndef HAL_FS_H
 #define HAL_FS_H

@@ -2,7 +2,7 @@
  * @file    hal_spi.h
  * @brief   HAL - SPI Bus Abstraction (dung cho Flash EN25QH64A / W25Q64)
  *
- * drv_en25qh64a.c chi goi HAL_SPI_*. Implementation: hal_impl_simcom.c
+ * drv_en25qh64a.c chi goi HAL_SPI_*. Implementation: port/<chip>/port_periph.c
  * dung sAPI_SpiWriteBytesEx / sAPI_SpiReadBytesEx.
  */
 #ifndef HAL_SPI_H

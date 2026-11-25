@@ -209,7 +209,7 @@ endif()
 # ########################
 # other libs
 # ########################
-if(HAS_FS AND (CONFIG_HAS_ZLIB OR DEFINED WALNUT) AND NOT DEFINED TBDTU)
+if(HAS_FS AND (CONFIG_HAS_ZLIB OR DEFINED WALNUT OR DEFINED AKA) AND NOT DEFINED TBDTU)
     option(HAS_ZLIB "ZLIB support" ON)
 endif()
 
@@ -241,15 +241,30 @@ elseif(DEFINED LYTBOX)
 elseif(DEFINED TOPFLY)
     option(PROJECT_TOPFLY "custom project dingfei API" ON)
 
-    if(CONFIG_HAS_DEMO AND ((CONFIG_SIMCOM_PROTOCOL_V1 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo) OR (CONFIG_SIMCOM_PROTOCOL_V2 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo_v2)))
+    if(CONFIG_HAS_DEMO AND ((CONFIG_SIMCOM_PROTOCOL_V1 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo/V1) OR (CONFIG_SIMCOM_PROTOCOL_V2 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo/V2)))
         option(HAS_DEMO "build simcom demo" ON)
     endif()
 else()
-    if(CONFIG_HAS_DEMO AND((CONFIG_SIMCOM_PROTOCOL_V1 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo) OR(CONFIG_SIMCOM_PROTOCOL_V2 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo_v2)))
+    if(CONFIG_HAS_DEMO AND((CONFIG_SIMCOM_PROTOCOL_V1 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo/V1) OR(CONFIG_SIMCOM_PROTOCOL_V2 AND EXISTS ${CMAKE_SOURCE_DIR}/sc_demo/V2)))
         option(HAS_DEMO "build simcom demo" ON)
     endif()
 endif()
 
+
+if((DEFINED YSZNBG) AND (DEFINED BSKL))
+    option(PROJECT_YSZNBG_BSKL "custom project yingshi bashikele zhinengbinggui" ON)
+endif()
+
+
+
 if(CONFIG_SIMCOM_DEBUG)
     option(SIMCOM_DEBUG "build debug version" ON)
+endif()
+
+if(CONFIG_SIMCOM_PROTOCOL_V1)
+    option(SIMCOM_PROTOCOL_V1 "simcom protocol v1" ON)
+    option(SIMCOM_PROTOCOL_V2 "simcom protocol v2" OFF)
+elseif(CONFIG_SIMCOM_PROTOCOL_V2)
+    option(SIMCOM_PROTOCOL_V1 "simcom protocol v1" OFF)
+    option(SIMCOM_PROTOCOL_V2 "simcom protocol v2" ON)
 endif()

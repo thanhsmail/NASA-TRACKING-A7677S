@@ -3,9 +3,7 @@
 
 typedef enum
 {
-#ifdef FEATURE_SIMCOM_NORI
-    SC_MODULE_GPIO_00 = 31,  /*  pin4, pad name: RI  */
-#endif
+    SC_MODULE_GPIO_00 = 31,  /*  pin4, pad name: GPIO_00/RI  */
     SC_MODULE_GPIO_01 = 32,  /*  pin5, pad name: GPIO_01 */
     SC_MODULE_GPIO_02 = 9,   /*  pin6, pad name: GPIO_02/PWM4  */
     SC_MODULE_GPIO_03 = 54,  /*  pin7, pad name: GPIO_03 */

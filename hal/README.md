@@ -1,6 +1,6 @@
 # HAL (Hardware Abstraction Layer) Architecture & Portability Guide
 
-Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tách biệt 100% mã nguồn ứng dụng (`app_*.c`, `sc_application.c`, `drv_en25qh64a.c`) khỏi SDK của nhà sản xuất phần cứng (SIMCom OpenSDK).
+Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tách biệt 100% mã nguồn ứng dụng (thư mục `app/`: `app_main.c`, `app_*.c`, `drv_*.c`) khỏi SDK của nhà sản xuất phần cứng (SIMCom OpenSDK).
 
 ---
 
@@ -10,7 +10,7 @@ Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tác
 +-------------------------------------------------------------------+
 |                     APPLICATION LAYER (Logic)                     |
 |                                                                   |
-|   sc_application.c | app_nasa.c | app_gps.c | app_cfg.c | ...      |
+|   app_main.c | app_nasa.c | app_gps.c | app_cfg.c | ...            |
 |   drv_en25qh64a.c  | app_network.c | app_sms.c | app_backup.c     |
 +-------------------------------------------------------------------+
                                   |
@@ -28,7 +28,8 @@ Hệ thống **HAL Abstraction Layer** giúp ứng dụng **NASA Tracking** tác
                | (Giao diện chuẩn / Non-SDK)         |
                v                                     v
 +-----------------------------+     +-------------------------------+
-|  hal/impl/hal_impl_simcom.c |     |  hal/impl/hal_impl_quectel.c  |
+| port/simcom_a7677s/         |     | port/quectel_xxx/             |
+|   port_*.c, board_pins.h    |     |   port_*.c, board_pins.h      |
 |  (SIMCom A7677S SDK Calls)  |     |  (Quectel OpenCPU Calls)      |
 +-----------------------------+     +-------------------------------+
 ```
@@ -59,16 +60,19 @@ Khi chuyển từ **SIMCom A7677S** sang bất kỳ dòng Chip / Modem khác (v�
 
 ### ⚠️ QUY TẮC VÀNG:
 1. **KHÔNG** chỉnh sửa bất kỳ file `hal/*.h` nào (trừ khi bổ sung API mới cho toàn bộ dự án).
-2. **KHÔNG** chỉnh sửa bất kỳ file ứng dụng `app_*.c` hay `sc_application.c` nào.
+2. **KHÔNG** chỉnh sửa bất kỳ file ứng dụng nào trong `app/`.
+3. Code trong `port/` **KHÔNG** gọi hàm hay include header của `app/` (ngoại lệ duy nhất: `port_entry.c` gọi `APP_Main()`). Dữ liệu đi lên app qua callback mà app đăng ký, ví dụ `HAL_GNSS_SetLineCallback()`.
 
 ### 📝 BƯỚC 1: Tạo File Implement Cho Chip Mới
-Tạo file mới trong folder `hal/impl/`, ví dụ:
+Tạo thư mục port mới cạnh `port/simcom_a7677s/`, ví dụ:
 ```bash
-hal/impl/hal_impl_quectel.c
+port/quectel_ec600s/port_entry.c, port_os.c, port_net.c, ... , board_pins.h
 ```
 
 ### 📝 BƯỚC 2: Triển Khai Các Hàm Trong Contract
-Trong file `hal_impl_<chip_moi>.c`, `#include` các header của Chip mới (ví dụ: `ql_api_*.h`) và implement lại toàn bộ các hàm thuộc contract `hal/*.h`:
+Thư mục port mới cũng phải có điểm vào theo cách của SDK mới (xem mẫu `port/simcom_a7677s/port_entry.c`): khởi tạo SDK xong thì gọi `APP_Main()` (khai báo trong `app/app_main.h`).
+
+Trong các file `port_*.c` của chip mới (chia nhóm như `port/simcom_a7677s/`), `#include` các header của Chip mới (ví dụ: `ql_api_*.h`) và implement lại toàn bộ các hàm thuộc contract `hal/*.h`:
 
 ```c
 #include "ql_api_osi.h"   /* SDK Quectel */
@@ -89,23 +93,15 @@ int HAL_OS_TaskCreate(HalTaskRef_t *ref, void *stack, uint32_t stackSize,
 ```
 
 ### 📝 BƯỚC 3: Cập Nhật Build System
-Trong `CMakeLists.txt` hoặc `Makefile`, thay thế file `hal_impl_simcom.c` bằng file triển khai mới:
+Danh sách nguồn nằm trong `app/app_sources.cmake` (CMakeLists.txt gốc của SDK chỉ `INCLUDE` file này). Đổi thư mục port tại đó:
 
 ```cmake
-# CMakeLists.txt
-SET(app_src
-    sc_application.c
-    drv_en25qh64a.c
-    app_nasa.c
-    app_network.c
-    app_gps.c
-    app_sms.c
-    app_cfg.c
-    app_backup.c
-    app_utils.c
-    # Doi sang file impl cua chip moi tai day:
-    hal/impl/hal_impl_quectel.c
-)
+# app/app_sources.cmake
+SET(NASA_PORT_DIR ${NASA_ROOT_DIR}/port/quectel_ec600s)
+...
+    ${NASA_PORT_DIR}/port_entry.c
+    ${NASA_PORT_DIR}/port_os.c
+    ...
 ```
 
 ---
@@ -116,5 +112,5 @@ SET(app_src
   - Chỉ quan tâm đến logic nghiệp vụ (`app_nasa.c`, `app_gps.c`...) và gọi hàm `HAL_*`.
   - Có thể lập trình logic ngay cả khi chưa có bo mạch thật bằng cách stub/mock các hàm `HAL_*`.
 - **Lập trình viên Phần cứng (Driver / Hardware Developer):**
-  - Chỉ làm việc trong thư mục `hal/impl/`.
+  - Chỉ làm việc trong thư mục `port/<chip>/`.
   - Cấu hình chân GPIO, tinh chỉnh SPI clock, tối ưu PDP/Socket theo khuyến cáo của hãng sản xuất chip mà không làm ảnh hưởng đến mã nguồn ứng dụng.

@@ -4,24 +4,24 @@ Firmware giám sát hành trình chạy trên module 4G SIMCom **A7677S** (ASR16
 Thiết bị đọc GNSS, gửi vị trí lên Server theo giao thức `!NASA`, nhận lệnh cấu hình qua SMS hoặc Server, lưu bù dữ liệu khi mất mạng, tự cập nhật firmware từ xa (FOTA), ngủ tiết kiệm ắc quy khi xe đỗ và dùng cảm biến gia tốc LIS3DSH để phát hiện xe bị rung / dời lúc đang ngủ.
 
 - Tên thiết bị: `RV4G` (`NASA_DEVICE_NAME`, xuất hiện ở đầu câu trả lời lệnh `sa,29`)
-- Phiên bản firmware: `v1.11.261123` (`NASA_FW_CODE` trong [app_config.h](app_config.h))
+- Phiên bản firmware: `v1.11.261123` (`NASA_FW_CODE` trong [app_config.h](app/app_config.h))
 - Server mặc định: `103.57.209.16:2590`
 
 Tài liệu chi tiết hơn: [NASA_Tracking_Analysis.md](NASA_Tracking_Analysis.md) (phân tích logic) và [hal/README.md](hal/README.md) (lớp HAL).
 
 ## 1. Phân lớp
 
-Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần cứng đi qua lớp HAL, nên phần quy tắc nghiệp vụ chạy được unit test trên PC.
+Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần cứng đi qua lớp HAL, nên khi nâng hoặc đổi SDK chỉ phải sửa phần cài đặt HAL trong `port/`.
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│ ỨNG DỤNG   sc_application.c, app_*.c, drv_en25qh64a.c,       │
-│            drv_lis3dsh.c                                     │
+│ ỨNG DỤNG   app/: app_main.c, app_*.c, drv_*.c                │
 ├──────────────────────────────────────────────────────────────┤
 │ HAL        hal/hal_*.h  (os, net, gnss, gpio, adc, spi, i2c, │
 │            fs, sms, fota, log)                               │
 ├──────────────────────────────────────────────────────────────┤
-│ CÀI ĐẶT    hal/impl/hal_impl_simcom.c  → gọi sAPI_* của SDK  │
+│ CÀI ĐẶT    port/simcom_a7677s/: port_entry.c (điểm vào SDK), │
+│            port_*.c → gọi sAPI_* của SDK, board_pins.h       │
 ├──────────────────────────────────────────────────────────────┤
 │ KERNEL     SIMCom OpenSDK (kernel/, sc_lib/)                 │
 └──────────────────────────────────────────────────────────────┘
@@ -31,28 +31,29 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 
 | File | Vai trò |
 |---|---|
-| [sc_application.c](sc_application.c) | Điểm vào `userSpace_Main()`: khởi tạo và tạo các task |
-| [app_nasa.c](app_nasa.c) | Máy trạng thái kết nối và báo cáo, đóng gói bản tin `!NASA`, watchdog, chế độ ngủ (`SleepPoll`, mục 11) |
-| [app_network.c](app_network.c) | PDP, socket tới Server, nhận dòng lệnh từ Server |
-| [app_gps.c](app_gps.c) | Phân tích dữ liệu GNSS, snapshot vị trí, odometer |
-| [app_park_rules.c](app_park_rules.c) | Quy tắc dừng đỗ (bản tin 6), C thuần |
-| [app_lxlt_rules.c](app_lxlt_rules.c) | Quy tắc thời gian lái xe liên tục / trong ngày (bản tin 5), C thuần |
-| [app_cmd.c](app_cmd.c) | Phân tích và thực thi lệnh `na,<mã>,...` / `sa,<mã>` |
-| [app_sms.c](app_sms.c) | Cấu hình modem SMS, tách nội dung SMS rồi chuyển cho `app_cmd` |
-| [app_com.c](app_com.c) | Nhận lệnh gõ trên cổng COM ảo USB rồi chuyển cho `app_cmd` (mục 7) |
-| [app_cfg.c](app_cfg.c) | Cấu hình thiết bị, lưu vào file `C:/rv26.cfg` |
-| [app_backup.c](app_backup.c) | Bộ đệm điểm mù: hàng đợi vị trí chưa gửi được, lưu trên flash rời (xem mục 9) |
-| [app_fota.c](app_fota.c) | Cập nhật firmware từ URL (lệnh 33) |
-| [app_sim.c](app_sim.c) | Phát hiện rút / cắm / đổi SIM bằng cách hỏi định kỳ (module không báo URC) |
-| [app_indication.c](app_indication.c) | LED, lọc nhiễu ACC, ngõ ra DOUT, giám sát watchdog |
-| [app_utils.c](app_utils.c) | Tiện ích thời gian, đồng bộ NTP |
-| [drv_en25qh64a.c](drv_en25qh64a.c) | Driver flash SPI rời 8 MB (W25Q64JV / EN25QH64A), tự dò kênh SPI lúc khởi động |
-| [drv_lis3dsh.c](drv_lis3dsh.c) | Driver cảm biến gia tốc LIS3DSH qua I2C: đọc X/Y/Z, self-test, nạp state machine phát hiện chuyển động (mục 12) |
-| [app_config.h](app_config.h) | Toàn bộ hằng số: chu kỳ, ngưỡng, chân GPIO, phiên bản |
+| [app_main.c](app/app_main.c) | `APP_Main()`: khởi tạo và tạo các task |
+| [port_entry.c](port/simcom_a7677s/port_entry.c) | Điểm vào của SDK: bảng `userSpaceEntry`, `userSpace_Main()` gọi `ApiMapInit()` rồi `APP_Main()` |
+| [app_nasa.c](app/app_nasa.c) | Máy trạng thái kết nối và báo cáo, đóng gói bản tin `!NASA`, watchdog, chế độ ngủ (`SleepPoll`, mục 11) |
+| [app_network.c](app/app_network.c) | PDP, socket tới Server, nhận dòng lệnh từ Server |
+| [app_gps.c](app/app_gps.c) | Phân tích dữ liệu GNSS, snapshot vị trí, odometer |
+| [app_park_rules.c](app/app_park_rules.c) | Quy tắc dừng đỗ (bản tin 6), C thuần |
+| [app_lxlt_rules.c](app/app_lxlt_rules.c) | Quy tắc thời gian lái xe liên tục / trong ngày (bản tin 5), C thuần |
+| [app_cmd.c](app/app_cmd.c) | Phân tích và thực thi lệnh `na,<mã>,...` / `sa,<mã>` |
+| [app_sms.c](app/app_sms.c) | Cấu hình modem SMS, tách nội dung SMS rồi chuyển cho `app_cmd` |
+| [app_com.c](app/app_com.c) | Nhận lệnh gõ trên cổng COM ảo USB rồi chuyển cho `app_cmd` (mục 7) |
+| [app_cfg.c](app/app_cfg.c) | Cấu hình thiết bị, lưu vào file `C:/rv26.cfg` |
+| [app_backup.c](app/app_backup.c) | Bộ đệm điểm mù: hàng đợi vị trí chưa gửi được, lưu trên flash rời (xem mục 9) |
+| [app_fota.c](app/app_fota.c) | Cập nhật firmware từ URL (lệnh 33) |
+| [app_sim.c](app/app_sim.c) | Phát hiện rút / cắm / đổi SIM bằng cách hỏi định kỳ (module không báo URC) |
+| [app_indication.c](app/app_indication.c) | LED, lọc nhiễu ACC, ngõ ra DOUT, giám sát watchdog |
+| [app_utils.c](app/app_utils.c) | Tiện ích thời gian, đồng bộ NTP |
+| [drv_en25qh64a.c](app/drv_en25qh64a.c) | Driver flash SPI rời 8 MB (W25Q64JV / EN25QH64A), tự dò kênh SPI lúc khởi động |
+| [drv_lis3dsh.c](app/drv_lis3dsh.c) | Driver cảm biến gia tốc LIS3DSH qua I2C: đọc X/Y/Z, self-test, nạp state machine phát hiện chuyển động (mục 12) |
+| [app_config.h](app/app_config.h) | Toàn bộ hằng số: chu kỳ, ngưỡng, chân GPIO, phiên bản |
 
 ## 3. Khởi động
 
-`userSpace_Main()` chạy một lần rồi kết thúc, theo thứ tự:
+`userSpace_Main()` ([port_entry.c](port/simcom_a7677s/port_entry.c)) gọi `ApiMapInit()` rồi `APP_Main()` ([app_main.c](app/app_main.c)). Toàn bộ chạy một lần rồi kết thúc, theo thứ tự:
 
 1. `ApiMapInit()`, chờ `APP_STARTUP_DELAY_SEC` (5 giây).
 2. `EN25_Init()` → `LIS3DSH_Init()` + self-test (không có cảm biến thì bỏ qua) → `CFG_Init()` → `GPS_Init()` → `SMS_Init()`.
@@ -63,14 +64,14 @@ Code ứng dụng không gọi SDK SIMCom trực tiếp. Mọi truy cập phần
 
 | Task | Ưu tiên | Stack | Tạo ở | Công việc |
 |---|---|---|---|---|
-| `nasa_reporter` | 15 | 10 KB | [sc_application.c](sc_application.c) | Lặp `NASA_RunStep()`: kết nối, đăng nhập, gửi vị trí, nhận lệnh Server |
-| `SmsRecvTask` | 18 | 8 KB | [sc_application.c](sc_application.c) | Chờ SMS mới, đọc, thực thi lệnh, xóa SMS |
-| `usb_log` | 100 | 3 KB | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Chỉ tạo ở lần `debug,1` đầu tiên; ghi log ra cổng COM USB |
-| `com_cmd` | 18 | 8 KB | [app_com.c](app_com.c) | Chờ dữ liệu trên cổng COM ảo USB, ghép thành dòng, thực thi lệnh. Không có dữ liệu thì chờ mãi, không làm module thức |
-| `gpio_status` | 20 | 4 KB | [app_indication.c](app_indication.c) | Chu kỳ 500 ms: lọc ACC, LED, DOUT, nuôi watchdog phần cứng. Khi ngủ chỉ chờ (tối đa 60 giây / lần) |
-| `gnss_task` | 10 | — | [hal_impl_simcom.c](hal/impl/hal_impl_simcom.c) | Nhận dữ liệu GNSS từ SDK, đẩy vào `GPS_OnUrcString()` |
-| `fota_task` | 20 | 10 KB | [app_fota.c](app_fota.c) | Chỉ tạo khi có lệnh 33 lần đầu; tải và nạp firmware |
-| `ntp_sync` | 130 | — | [app_utils.c](app_utils.c) | Chỉ tạo khi đồng hồ RTC chưa hợp lệ |
+| `nasa_reporter` | 15 | 10 KB | [app_main.c](app/app_main.c) | Lặp `NASA_RunStep()`: kết nối, đăng nhập, gửi vị trí, nhận lệnh Server |
+| `SmsRecvTask` | 18 | 8 KB | [app_main.c](app/app_main.c) | Chờ SMS mới, đọc, thực thi lệnh, xóa SMS |
+| `usb_log` | 100 | 3 KB | [port_log.c](port/simcom_a7677s/port_log.c) | Chỉ tạo ở lần `debug,1` đầu tiên; ghi log ra cổng COM USB |
+| `com_cmd` | 18 | 8 KB | [app_com.c](app/app_com.c) | Chờ dữ liệu trên cổng COM ảo USB, ghép thành dòng, thực thi lệnh. Không có dữ liệu thì chờ mãi, không làm module thức |
+| `gpio_status` | 20 | 4 KB | [app_indication.c](app/app_indication.c) | Chu kỳ 500 ms: lọc ACC, LED, DOUT, nuôi watchdog phần cứng. Khi ngủ chỉ chờ (tối đa 60 giây / lần) |
+| `gnss_task` | 10 | — | [port_gnss.c](port/simcom_a7677s/port_gnss.c) | Nhận dữ liệu GNSS từ SDK, đẩy từng dòng vào callback `GPS_OnUrcString()` (do `GPS_Init()` đăng ký qua `HAL_GNSS_SetLineCallback()`) |
+| `fota_task` | 20 | 10 KB | [app_fota.c](app/app_fota.c) | Chỉ tạo khi có lệnh 33 lần đầu; tải và nạp firmware |
+| `ntp_sync` | 130 | — | [app_utils.c](app/app_utils.c) | Chỉ tạo khi đồng hồ RTC chưa hợp lệ |
 
 Chỉ task `nasa_reporter` được ghi vào socket Server. Task khác muốn gửi lên Server (ví dụ kết quả FOTA) phải để lại thông điệp cho task này lấy.
 
@@ -100,11 +101,11 @@ Khi chưa có phiên với Server (sau kích hoạt PDP, sau kết nối, trong 
 
 ### Lọc chạy / dừng, chống nhiễu vận tốc khi ACC bật
 
-Trạng thái chạy / dừng / đỗ lọc trong `FilterMovingStatus()` ([app_gps.c](app_gps.c)) và dùng cho chu kỳ gửi, ACC theo vận tốc (accMode 0 / 2), bản tin 5 (thời gian lái), bản tin 6 (dừng đỗ) và km. Khi xe đứng yên, vị trí gửi đi là **điểm neo** = trung bình các mẫu GPS tốt lúc đứng (bỏ mẫu HDOP > 2,5, mẫu nhảy xa > 25 m và mẫu có vận tốc > ngưỡng).
+Trạng thái chạy / dừng / đỗ lọc trong `FilterMovingStatus()` ([app_gps.c](app/app_gps.c)) và dùng cho chu kỳ gửi, ACC theo vận tốc (accMode 0 / 2), bản tin 5 (thời gian lái), bản tin 6 (dừng đỗ) và km. Khi xe đứng yên, vị trí gửi đi là **điểm neo** = trung bình các mẫu GPS tốt lúc đứng (bỏ mẫu HDOP > 2,5, mẫu nhảy xa > 25 m và mẫu có vận tốc > ngưỡng).
 
 Xe nổ máy đứng yên (đèn đỏ, chờ khách, accMode 0 chưa đủ 10 phút để thành đỗ), GPS ở đô thị có thể báo vận tốc 5–26 km/h trong khi vị trí chỉ lắc quanh chỗ đứng. Trước đây vượt ngưỡng lệnh 10 liên tục 3 giây là đủ báo xe chạy. Nay xe đang dừng / đỗ chỉ chuyển sang **chạy** khi đủ cả:
 
-| Điều kiện | Hằng số ([app_config.h](app_config.h)) | Mặc định |
+| Điều kiện | Hằng số ([app_config.h](app/app_config.h)) | Mặc định |
 |---|---|---|
 | Vận tốc > ngưỡng lệnh 10 liên tục | `MOVING_CONFIRM_SEC` | 3 giây |
 | Mẫu đủ tin: ≥ 5 vệ tinh, HDOP ≤ ngưỡng. Mẫu xấu không tính là vượt ngưỡng (đếm lại từ đầu) nhưng cũng không hủy đếm dừng / đỗ | `MOVING_START_MAX_HDOP` | 4,0 (0 = tắt) |
@@ -135,7 +136,7 @@ Trả lời lệnh từ Server là bản tin `!NASA,13,<msgId>,<ngày giờ>,<n�
 
 ## 7. Lệnh điều khiển
 
-Lệnh đến từ SMS, Server hoặc cổng COM ảo USB đều vào `CMD_Execute()` trong [app_cmd.c](app_cmd.c). Gửi lệnh nào cũng làm thiết bị thức khỏi chế độ ngủ để xử lý và trả lời.
+Lệnh đến từ SMS, Server hoặc cổng COM ảo USB đều vào `CMD_Execute()` trong [app_cmd.c](app/app_cmd.c). Gửi lệnh nào cũng làm thiết bị thức khỏi chế độ ngủ để xử lý và trả lời.
 
 ### Cú pháp
 
@@ -160,7 +161,7 @@ sa,<mã>                                   đọc (GET)
 
 ### Quyền (lệnh 40)
 
-Mặc định `NASA_LOCK_FEATURE_ENABLE 0` trong [app_config.h](app_config.h): mọi nguồn đều được đổi mọi cấu hình. Khi đặt bằng 1 và cấu hình đang khóa (`na,40,close`), các lệnh 1, 17, 18, 33 (và lệnh cũ `update`) chỉ nhận từ Server hoặc từ số chủ xe 1 / 2. Nguồn khác nhận `Ban khong co quyen thuc hien chuc nang nay`. Riêng lệnh 41 thì luôn kiểm tra, kể cả khi tính năng khóa bị tắt: cấu hình đang khóa thì chỉ nhận từ Server, cổng COM USB hoặc số chủ xe 1 / 2.
+Mặc định `NASA_LOCK_FEATURE_ENABLE 0` trong [app_config.h](app/app_config.h): mọi nguồn đều được đổi mọi cấu hình. Khi đặt bằng 1 và cấu hình đang khóa (`na,40,close`), các lệnh 1, 17, 18, 33 (và lệnh cũ `update`) chỉ nhận từ Server hoặc từ số chủ xe 1 / 2. Nguồn khác nhận `Ban khong co quyen thuc hien chuc nang nay`. Riêng lệnh 41 thì luôn kiểm tra, kể cả khi tính năng khóa bị tắt: cấu hình đang khóa thì chỉ nhận từ Server, cổng COM USB hoặc số chủ xe 1 / 2.
 
 Cổng COM USB được coi như Server: không bị khóa cấu hình chặn, vì phải cắm dây trực tiếp vào thiết bị.
 
@@ -177,7 +178,7 @@ sa,10 nguong van toc: 3 km/h
 
 - Firmware in lại ký tự gõ vào (`COM_ECHO 1`) và hiểu phím Backspace. Gửi lệnh từ script thì đặt `COM_ECHO 0` để không nhận lại lệnh. Gửi từ ô "Send" của Hercules thì nhớ thêm CR hoặc LF ở cuối.
 - Dòng không bắt đầu bằng `na,` / `sa,` (ngoài `reset`, `update,<url>` và `debug`) trả lời `ERROR lenh phai bat dau bang na, hoac sa,`. Dòng dài hơn 255 ký tự trả lời `ERROR lenh qua dai`.
-- Khi bật tính năng này, firmware nhận toàn bộ dữ liệu của cổng AT USB. Dòng bắt đầu bằng `AT` được chuyển tiếp cho bộ xử lý AT của module (`sAPI_AtSend`). Nếu lệnh AT không có kết quả trả về, đặt `COM_CFG_ENABLE 0` trong [app_config.h](app_config.h) để trả cổng lại cho module.
+- Khi bật tính năng này, firmware nhận toàn bộ dữ liệu của cổng AT USB. Dòng bắt đầu bằng `AT` được chuyển tiếp cho bộ xử lý AT của module (`sAPI_AtSend`). Nếu lệnh AT không có kết quả trả về, đặt `COM_CFG_ENABLE 0` trong [app_config.h](app/app_config.h) để trả cổng lại cho module.
 - Lúc task khởi động, cổng in `NASA COM ready: ...`. Log có dòng `[USBCOM] register callback rc=0` khi đăng ký được, và `[COM] first rx <n> byte (cb=... len=... read=...)` ở lần đầu nhận dữ liệu.
 - Log của firmware vẫn ra cổng log như cũ, không lẫn vào cổng AT.
 - Cắm USB thì module không ngủ (mục 11), nên lúc nào cũng gõ lệnh được.
@@ -358,7 +359,7 @@ Dữ liệu chưa gửi ở định dạng của firmware cũ (trước bản c�
 
 ## 11. Chế độ ngủ sâu tiết kiệm ắc quy
 
-Code nằm ở `SleepPoll()` / `SleepDeepStep()` trong [app_nasa.c](app_nasa.c), hằng số trong [app_config.h](app_config.h) (nhóm `SLEEP_*`, `MOTION_WAKE_*`).
+Code nằm ở `SleepPoll()` / `SleepDeepStep()` trong [app_nasa.c](app/app_nasa.c), hằng số trong [app_config.h](app/app_config.h) (nhóm `SLEEP_*`, `MOTION_WAKE_*`).
 
 ### Điều kiện vào ngủ
 
@@ -404,7 +405,7 @@ Khi thức: bật sóng (CFUN=1), bật GNSS, đánh thức `gpio_status`, rồi
 
 ### Xe di chuyển khi tắt ACC
 
-Lúc dây ACC báo tắt, bộ lọc chạy / dừng của GPS coi xe đứng yên bất kể vận tốc. `NoAccMovePoll()` trong [app_nasa.c](app_nasa.c) xét riêng trường hợp xe bị đẩy, kéo hoặc chở đi khi tắt máy (chạy mỗi vòng lúc thức, kể cả trong 30 phút chờ trước khi ngủ):
+Lúc dây ACC báo tắt, bộ lọc chạy / dừng của GPS coi xe đứng yên bất kể vận tốc. `NoAccMovePoll()` trong [app_nasa.c](app/app_nasa.c) xét riêng trường hợp xe bị đẩy, kéo hoặc chở đi khi tắt máy (chạy mỗi vòng lúc thức, kể cả trong 30 phút chờ trước khi ngủ):
 
 | Bước | Điều kiện |
 |---|---|
@@ -413,7 +414,7 @@ Lúc dây ACC báo tắt, bộ lọc chạy / dừng của GPS coi xe đứng y�
 | Khi đang bị dời | Gửi `!NASA,2` ngay (bit ACC = 0, vận tốc > 0), chu kỳ gửi như lúc chạy, không ngủ; SMS cảnh báo tới số chủ xe 1, 2 (lệnh 17, 18), cách nhau tối thiểu 30 phút (`NOACC_MOVE_SMS_*`) |
 | Kết thúc | Đứng yên (hoặc mất fix) 300 giây (`NOACC_MOVE_END_SEC`), hoặc ACC bật |
 
-SMS: `CANH BAO <biển số>: xe di chuyen khi tat may, 12km/h, cach cho do 80m https://maps.google.com/maps?q=<lat>,<lon>`. Tắt cả tính năng bằng `NOACC_MOVE_ENABLE 0`, chỉ tắt SMS bằng `NOACC_MOVE_SMS_ENABLE 0` trong [app_config.h](app_config.h). `sa,42` báo `dang thuc (xe di chuyen khi tat ACC)` khi đang trong trạng thái này.
+SMS: `CANH BAO <biển số>: xe di chuyen khi tat may, 12km/h, cach cho do 80m https://maps.google.com/maps?q=<lat>,<lon>`. Tắt cả tính năng bằng `NOACC_MOVE_ENABLE 0`, chỉ tắt SMS bằng `NOACC_MOVE_SMS_ENABLE 0` trong [app_config.h](app/app_config.h). `sa,42` báo `dang thuc (xe di chuyen khi tat ACC)` khi đang trong trạng thái này.
 
 ### Lệnh 42
 
@@ -446,7 +447,7 @@ Khi đo dòng lúc ngủ phải **rút USB**, vì log qua USB giữ module thứ
 
 ## 12. Cảm biến gia tốc LIS3DSH
 
-Driver: [drv_lis3dsh.c](drv_lis3dsh.c), bus qua [hal/hal_i2c.h](hal/hal_i2c.h). Nếu không có cảm biến hoặc khởi tạo lỗi, firmware chạy như cũ, chỉ thiếu tính năng thức khi rung.
+Driver: [drv_lis3dsh.c](app/drv_lis3dsh.c), bus qua [hal/hal_i2c.h](hal/hal_i2c.h). Nếu không có cảm biến hoặc khởi tạo lỗi, firmware chạy như cũ, chỉ thiếu tính năng thức khi rung.
 
 ### Kết nối
 
@@ -497,7 +498,7 @@ Cần kiểm trên board: log `[LIS3DSH] SM2 check ...` và `motion armed DELTA`
 
 ### Xác nhận vào cua (tăng tần suất gửi vị trí)
 
-Khi xe đang thức và chạy từ 3 km/h, `TurnPoll()` trong [app_nasa.c](app_nasa.c) chạy mỗi vòng `nasa_reporter` (khoảng 1 giây):
+Khi xe đang thức và chạy từ 3 km/h, `TurnPoll()` trong [app_nasa.c](app/app_nasa.c) chạy mỗi vòng `nasa_reporter` (khoảng 1 giây):
 
 1. Đọc trung bình các mẫu trong FIFO của cảm biến (khoảng 25 mẫu / 1 giây), để lọc rung xóc mặt đường.
 2. Ước lượng véc-tơ trọng lực bằng lọc thông thấp: nhanh khi xe đứng, rất chậm khi xe chạy (hằng số 60 giây), đóng băng khi đang cua. Nhờ vậy không cần biết cảm biến lắp theo hướng nào.
@@ -509,7 +510,7 @@ Khi xe đang thức và chạy từ 3 km/h, `TurnPoll()` trong [app_nasa.c](app_
 | Cua | ≥ 120 mg (`ACCEL_TURN_MG`) | quay khoảng 6°/s | Chu kỳ chạy × 0,5 (như rule ≥15°) |
 | Cua gấp | ≥ 250 mg (`ACCEL_TURN_SHARP_MG`) | quay khoảng 12°/s | 2 giây (như rule ≥30°) |
 
-Rule theo hướng GPS vẫn giữ nguyên; chu kỳ thực tế là mức ngắn hơn của hai cách. Cảm biến cho tín hiệu ngay khi xe bắt đầu cua, còn hướng GPS phải lệch đủ 15° / 30° so với bản tin trước mới có tác dụng. Tắt tính năng bằng `ACCEL_TURN_ENABLE 0` trong [app_config.h](app_config.h).
+Rule theo hướng GPS vẫn giữ nguyên; chu kỳ thực tế là mức ngắn hơn của hai cách. Cảm biến cho tín hiệu ngay khi xe bắt đầu cua, còn hướng GPS phải lệch đủ 15° / 30° so với bản tin trước mới có tác dụng. Tắt tính năng bằng `ACCEL_TURN_ENABLE 0` trong [app_config.h](app/app_config.h).
 
 FIFO tự tắt khi self-test và khi nạp chương trình phát hiện rung lúc vào ngủ; lần đọc tiếp theo tự bật lại.
 
@@ -573,7 +574,7 @@ Giá trị lưu trong cấu hình (khóa `mwoff`, `mdel`, `mev`, `mwin`).
 
 ### Kiểm tra lúc chạy và bật / tắt (`sa,43`, `na,43,off` / `on`)
 
-Khi thiết bị đang thức, `AccelHealthPoll()` trong [app_nasa.c](app_nasa.c) kiểm tra cảm biến mỗi 30 giây (`ACCEL_HEALTH_SEC`, 0 = tắt):
+Khi thiết bị đang thức, `AccelHealthPoll()` trong [app_nasa.c](app/app_nasa.c) kiểm tra cảm biến mỗi 30 giây (`ACCEL_HEALTH_SEC`, 0 = tắt):
 
 | Kiểm tra | Coi là hỏng khi |
 |---|---|
@@ -622,7 +623,7 @@ Khi hỏng: khởi tạo lại cảm biến, chạy self-test, bật lại đán
 
 Flash rời 8 MB (trên board là W25Q64JV, mã `EF 40 17`) nối bus SPI ở chân 11, 13, 14 của module, qua IC chuyển mức 1,8 V ↔ 3,3 V (TC7MPB9307FT).
 
-- Phía phần mềm là **kênh SPI 0**, mode 0, 812 kHz (`FLASH_SPI_INDEX` trong [app_config.h](app_config.h)). Kênh 1 không đọc được flash.
+- Phía phần mềm là **kênh SPI 0**, mode 0, 812 kHz (`FLASH_SPI_INDEX` trong [app_config.h](app/app_config.h)). Kênh 1 không đọc được flash.
 - Nếu kênh mặc định không trả mã chip hợp lệ, driver thử các kênh còn lại và in kết quả ra log (`[EN25/Flash] Flash Init OK! ... spi=N`).
 
 ## 14. Build và nạp
@@ -638,4 +639,70 @@ Kết quả nằm trong `out/A7677S_MANV_1606_V702_OPENSDK/`:
 - `customer_app.bin`: file dùng cho FOTA ứng dụng.
 - `burn.zip`: gói nạp qua cáp bằng công cụ aboot; nên lưu lại cho từng bản phát hành vì `system.img` bên trong cần để tạo gói FOTA hệ thống.
 
-Unit test cho hai bộ quy tắc (dừng đỗ, lái xe) nằm trong [tests/](tests/), chạy trên PC với HAL giả lập ở `tests/mocks/` (cần gcc cho PC). Test dừng đỗ có cả trường hợp đang ngủ: 6-2 chỉ ra khi được yêu cầu. Bộ đệm điểm mù, chế độ ngủ và LIS3DSH chưa có unit test; được kiểm tra trên board qua log.
+Thư mục `out/` không được commit vào git (xem `.gitignore`). Khi phát hành, chép `customer_app.bin` và `burn.zip` ra nơi lưu trữ riêng, đặt tên theo phiên bản firmware.
+
+Demo của SDK (`sc_demo/`) đã tắt bằng `# CONFIG_HAS_DEMO is not set` trong `config/.config` (mặc định trong `config/Kconfig` cũng là `n`), nên không được build và link vào firmware.
+
+
+## 15. Nâng cấp SDK SIMCom
+
+### Phần của dự án và phần của SDK
+
+| Thư mục / file | Thuộc về | Khi nâng SDK |
+|---|---|---|
+| `app/` | Dự án: nghiệp vụ, driver ngoại vi, danh sách nguồn [app_sources.cmake](app/app_sources.cmake) | Giữ nguyên |
+| `hal/` | Dự án: giao diện HAL | Giữ nguyên |
+| `port/simcom_a7677s/` | Dự án: phần duy nhất gọi SDK (`port_*.c`, [board_pins.h](port/simcom_a7677s/board_pins.h), [SDK_API_LIST.md](port/simcom_a7677s/SDK_API_LIST.md)) | Chỉ sửa khi API SDK đổi |
+| `kernel/`, `sc_lib/`, `sc_lib_v2/`, `sc_demo/`, `sc_demo_v2/`, `examples/`, `public_libs/`, `old_fw_demo/`, `tools/`, `config/`, `CMakeLists.txt`, `Makefile`, `old_fw_Makefile`, `GNUmake.exe` | SDK | Thay bằng bản mới, rồi áp lại các chỗ sửa bên dưới |
+
+Các chỗ dự án sửa trên file SDK (xem bằng `git diff` sau khi chép SDK mới). Hiện áp dụng cho SDK 11/2024 (có biến thể `..._ENORLFSV2`):
+
+1. `CMakeLists.txt`: thay `SET(app_src main.c)` của SDK bằng
+   ```cmake
+   # NASA Tracking: thay cho SET(app_src main.c) của SDK
+   INCLUDE(${CMAKE_SOURCE_DIR}/app/app_sources.cmake)
+   ```
+   và bỏ hai dòng thêm thư viện mẫu `user_source` (`add_subdirectory(./user_source user_source)`, `target_link_libraries(userspace PRIVATE user_source)`).
+2. `makeDepend.mak`: đổi `user_source/CMakeLists.txt` thành `app/app_sources.cmake` (để sửa danh sách nguồn là cmake chạy lại).
+
+SDK cũ (07/2024) thì khác: `CMakeLists.txt` có nhánh `if(CONFIG_SIMCOM_PROTOCOL_V1)` với `SET(app_src sc_application.c)`, và phải tắt demo bằng `# CONFIG_HAS_DEMO is not set` trong `config/.config` + `default n` trong `config/Kconfig`. SDK 11/2024 không còn đưa `sc_demo/` vào build nên không cần sửa hai file đó. Cờ `-DUSE_LWIP_ERRNO` mà `CMakeLists.txt` cũ tự thêm thì nay nằm trong [app_sources.cmake](app/app_sources.cmake).
+
+SDK kèm ứng dụng mẫu ở thư mục gốc (`main.c`, `user_source/`; bản cũ: `sc_application.c`, `sc_main.c`, `simcom_application.c`). Dự án không dùng (điểm vào nằm ở [port_entry.c](port/simcom_a7677s/port_entry.c)), nên xóa đi sau khi chép.
+
+Những điều đã gặp với SDK 11/2024:
+
+- `simcom_api.h` mới chỉ còn include một phần header (bỏ tcpip, simcard, rtc, loc, fota…). [port_sdk.h](port/simcom_a7677s/port_sdk.h) vì thế include tường minh từng header cần dùng; SDK sau có rút gọn tiếp thì thêm include ở đó.
+- `Makefile` mới tự xóa `config/<module>_linkscript.ld` và sinh lại bằng `tools/script/userspace_linkscript_generator.py` khi `kernel/<module>/kernel_link_define.mak` mới hơn file `.ld`, nhưng gói SDK không có script này: build lỗi và file `.ld` bị mất. Khôi phục file `.ld` từ git (`git show HEAD:config/<module>_linkscript.ld > config/<module>_linkscript.ld`) rồi build lại.
+- Kernel `A7677S_MANV_1606_V702_OPENSDK_ENORLFSV2` bật `SC_DRIVER_NORFLASH`, `EXT_FLASH_LFSV2_ENABLE`, `EXT_FS_MOUNT_STARTUP`: khởi động là gắn **flash NOR rời** làm LittleFS v2. Board RV26 đang dùng chính chip flash rời đó (qua [drv_en25qh64a.c](app/drv_en25qh64a.c)) cho cấu hình và bộ đệm điểm mù. Chưa giải quyết xung đột này thì không nạp kernel ENORLFSV2 cho thiết bị.
+
+**Quyết định (25/11/2026):** dự án tiếp tục dùng kernel `A7677S_MANV_1606_V702_OPENSDK` (đã có trong SDK 11/2024, không đổi so với bản trước), chỉ lấy công cụ build mới. Thư mục `..._ENORLFSV2` để nguyên trong `kernel/`, `sc_lib/`, `config/` nhưng không build / không nạp. Muốn chuyển sang ENORLFSV2 thì phải bỏ ghi thẳng flash rời, chuyển cấu hình + bộ đệm điểm mù sang file trên LittleFS của kernel.
+
+### Các bước
+
+1. **Chuẩn bị.** Tạo nhánh mới. Lưu `customer_app.bin`, `burn.zip` và log khởi động của bản đang chạy để so sánh.
+2. **Chép SDK mới** đè lên thư mục gốc, trừ `app/`, `hal/`, `port/`, tài liệu (`*.md`), `.gitignore`, `.gitattributes`. Xóa các file mẫu ở gốc nói trên.
+3. **Áp lại các chỗ sửa.** Kiểm tra `git diff -- CMakeLists.txt makeDepend.mak config/` chỉ còn khác SDK mới ở đúng các chỗ đó (các khác biệt còn lại là thay đổi của chính SDK mới, nên đọc qua).
+4. **Đối chiếu API.** Với từng hàm, kiểu, hằng trong [SDK_API_LIST.md](port/simcom_a7677s/SDK_API_LIST.md), so header cũ và mới:
+   ```bash
+   git diff --stat -- sc_lib/
+   git diff -- sc_lib/A7677S_MANV_1606_V702_OPENSDK/inc/ sc_lib/inc/
+   ```
+   Chú ý: `userSpaceEntry_t` và `ApiMapInit` trong `api_map.h`; tham số và mã lỗi của `sAPI_*`; giá trị `SC_URC_*_MASK`, `SC_GNSS_MODE_*`; định dạng dòng URC `+CGNSSINFO` (do [app_gps.c](app/app_gps.c) tự phân tích). Chỗ nào khác thì sửa trong `port/simcom_a7677s/`, không sửa `app/` hay `hal/`.
+5. **Build** (PowerShell): `.\GNUmake.exe A7677S_MANV_1606_V702_OPENSDK`. Lỗi biên dịch / link chỉ được sửa trong `port/`. Sau khi build, `out/.../lib/` không được có `libsc_demo.a`.
+6. **So kích thước** với bản cũ:
+   ```bash
+   tools/win32/cross_tool/gcc-arm-none-eabi/bin/arm-none-eabi-size.exe out/A7677S_MANV_1606_V702_OPENSDK/customer_app.elf
+   ```
+   Code ứng dụng không đổi nên chênh lệch phải nhỏ; chênh nhiều thì xem lại file map.
+7. **Test trên board**, nạp `burn.zip` qua cáp:
+   - Log khởi động `NASA_TRACKING <phiên bản>`, flash `[EN25/Flash] Flash Init OK`, `[LIS3DSH] self-test PASS`.
+   - Có dòng `[GNSS/URC] +CGNSSINFO...`, vị trí và vận tốc cập nhật; AGPS / LBS khi mất GPS.
+   - Đăng nhập Server, gửi bản tin vị trí, nhận lệnh từ Server; lệnh qua SMS và qua cổng COM USB, `debug,1`.
+   - `sa,42` (điện áp ADC), rút / cắm SIM, ngủ sâu và thức bằng ACC / rung.
+   - FOTA lệnh 33 với `customer_app.bin` mới, chạy trên board đang dùng bản cũ: kernel đổi thì gói FOTA ứng dụng có thể không chạy được trên thiết bị còn kernel cũ; khi đó cần nạp lại `burn.zip` hoặc làm FOTA hệ thống.
+8. **Phát hành.** Tăng `NASA_FW_CODE` trong [app_config.h](app/app_config.h), ghi phiên bản SDK mới vào commit, lưu `customer_app.bin` và `burn.zip` (mục 14).
+
+### Đổi biến thể module hoặc đổi chip
+
+- Biến thể khác cùng họ (LANS, LANV, MANS): build với tên tương ứng (`.\GNUmake.exe A7677S_MANS_1606_V702_OPENSDK`), kiểm tra lại pad trong [board_pins.h](port/simcom_a7677s/board_pins.h) và đường dẫn `sc_lib/<module>/inc` trong bước 4.
+- Chip / SDK hãng khác: tạo `port/<chip>/` mới theo [hal/README.md](hal/README.md) và trỏ `NASA_PORT_DIR` trong [app_sources.cmake](app/app_sources.cmake) sang đó.

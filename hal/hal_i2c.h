@@ -2,7 +2,7 @@
  * @file    hal_i2c.h
  * @brief   HAL - I2C Bus Abstraction (dung cho cam bien gia toc LIS3DSH)
  *
- * drv_lis3dsh.c chi goi HAL_I2C_*. Implementation: hal_impl_simcom.c
+ * drv_lis3dsh.c chi goi HAL_I2C_*. Implementation: port/<chip>/port_periph.c
  * dung sAPI_I2CConfigInit / sAPI_I2CRead / sAPI_I2CWrite.
  */
 #ifndef HAL_I2C_H

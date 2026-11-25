@@ -148,6 +148,11 @@ ifneq (,$(findstring _OPENSDK,$(SC_MODULE_BASE)))
 			FLASH_TARGET_CUSTOM := _ASR5311_APP_140K
 		endif
 	endif
+
+	ifneq (,$(findstring A7670C_LANS_1606_V701_YSZNBG_BSKL,$(SC_MODULE_FULL)))
+		FLASH_TARGET_CUSTOM := _YSZNBGBSKL
+	endif
+
 	ifneq (,$(findstring _JWZD,$(SC_MODULE_FULL)))
 		ifneq (,$(findstring A7670C_FANS_1606_V602_OPENSDK_JWZD,$(SC_MODULE_FULL)))
 			FLASH_TARGET_CUSTOM := _BT_APP_512K

@@ -1,0 +1,5 @@
+# Kết quả build (sinh lại mỗi lần build). customer_app.bin / burn.zip của bản phát hành lưu riêng, không commit.
+/out/
+
+# Sinh ra từ config/userspaceConfig.h.in khi chạy cmake
+/config/userspaceConfig.h

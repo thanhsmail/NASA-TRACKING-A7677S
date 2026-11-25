@@ -12,6 +12,8 @@
 
 #cmakedefine SIMCOM_DEBUG
 #cmakedefine HAS_DEMO
+#cmakedefine SIMCOM_PROTOCOL_V1
+#cmakedefine SIMCOM_PROTOCOL_V2
 
 // driver
 #cmakedefine HAS_DEMO_WTD
@@ -76,5 +78,6 @@
 #cmakedefine PROJECT_TBDTU
 #cmakedefine PROJECT_LYTBOX
 #cmakedefine PROJECT_TOPFLY
+#cmakedefine PROJECT_YSZNBG_BSKL
 
 #endif /* __USERSPACECONFIG.H_H__ */
