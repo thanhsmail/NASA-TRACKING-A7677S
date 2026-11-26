@@ -3,7 +3,7 @@
 Firmware giám sát hành trình chạy trên module 4G SIMCom **A7677S** (ASR1606, OpenSDK V702).
 Thiết bị đọc GNSS, gửi vị trí lên Server theo giao thức `!NASA`, nhận lệnh cấu hình qua SMS hoặc Server, lưu bù dữ liệu khi mất mạng, tự cập nhật firmware từ xa (FOTA), ngủ tiết kiệm ắc quy khi xe đỗ và dùng cảm biến gia tốc LIS3DSH để phát hiện xe bị rung / dời lúc đang ngủ.
 
-- Tên thiết bị: `RV4G` (`NASA_DEVICE_NAME`, xuất hiện ở đầu câu trả lời lệnh `sa,29`)
+- Tên thiết bị: `RV4G` 
 - Phiên bản firmware: `v1.11.261123` (`NASA_FW_CODE` trong [app_config.h](app/app_config.h))
 - Server mặc định: `103.57.209.16:2590`
 
